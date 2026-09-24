@@ -18,7 +18,8 @@ system prompt（多工作区联合开发模式），并联动
 - 自动读取 DSH 全部已注册工作区（宿主 `useWorkspaces` 快照），复选框多选。
 - 每个工作区行展示：复选框、工作区名称、本地绝对路径。
 - 项目组合模板：命名勾选组合（如「infoxmed 后端 + AI-FE 前端」），本地持久化，
-  一键加载 / 删除。
+  一键加载 / 删除；模板存「绝对路径 + 名称」，加载时自动把未注册的路径注册成 DSH
+  工作区再恢复勾选（模板可移植、可重建）。
 - **新建会话** 按钮 / **加载并新建**：勾选后（或加载模板后）直接在 **首个勾选工作区**
   中新建并打开会话，其余工作区作为只读仓库注入。
 - 新建会话时注入多工作区联合开发 prompt（仅新建会话，旧会话不受影响）。
@@ -28,7 +29,7 @@ system prompt（多工作区联合开发模式），并联动
 
 ```
 dsh-workspace-combiner/
-├── package.json            # dsh 字段：bundle.patch + client.inject（slots/locale/sessions）
+├── package.json            # dsh 字段：bundle.patch + client.inject（slots/locale/sessions/workspaces）
 ├── cordis.patch.yml        # 编排行：把插件插入 profile
 ├── tsconfig.json           # typecheck
 ├── tsdown.config.ts        # 双入口构建：host + client
@@ -168,8 +169,9 @@ workspace-combiner:
    子代理/分支会话（带 `parentSession`）不注入。这就是需求里 `session:before-start`
    在 DSH 里的真实事件名（DSH 事件用 `/` 分隔）。
 3. **依赖声明**：`package.json` 的 `dsh.client.inject` 声明客户端服务
-   `slots` / `locale` / `sessions`（`sessions` 提供 `create({ workspaceId })` +
-   `open` 新建会话流程）；`peerDependencies` 声明宿主服务与
+   `slots` / `locale` / `sessions` / `workspaces`（`sessions` 提供
+   `create({ workspaceId })` + `open` 新建会话流程，`workspaces` 提供
+   `create({ path })` 按路径自动注册工作区）；`peerDependencies` 声明宿主服务与
    `@chaoset/sandbox-extra-roots`。需求里的「dshPlugin 字段」即 `package.json` 的
    `dsh` 字段。
 4. **适配 Desktop 与 Web**：host 半面用 `webServer` 路由 + `systemPrompt`，client

@@ -38,7 +38,8 @@
       "inject": [
         "slots",
         "locale",
-        "sessions"
+        "sessions",
+        "workspaces"
       ]
     }
   },

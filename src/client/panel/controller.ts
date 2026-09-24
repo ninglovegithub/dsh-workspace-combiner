@@ -4,8 +4,8 @@
  *   - 工作区列表来自 useWorkspaces（宿主 runtime 提供的标准插槽 props）。
  *   - 勾选/模板经 WorkspaceCombinerApi 持久化到宿主（勾选同时联动沙盒）。
  *
- * 规则（与需求一致）：勾选只对「之后新建的会话」生效；模板只是勾选的命名
- * 快照，一键加载即恢复勾选。
+ * 规则（与需求一致）：勾选只对「之后新建的会话」生效；模板是勾选工作区引用
+ * （含路径）的命名快照，加载时按路径自动注册缺失工作区并恢复勾选。
  * @module dsh-workspace-combiner/client/panel/controller
  */
 
@@ -48,10 +48,12 @@ function toRef(workspace: WorkspaceView): WorkspaceRef {
  * 面板状态 hook。
  * @param useWorkspaces - 宿主注入的标准 hook。
  * @param startSession - ctx.sessions.create + open（DSH 新建会话流程）。
+ * @param createWorkspace - ctx.workspaces.create（按路径自动注册工作区，幂等）。
  */
 export function useWorkspaceCombiner(
   useWorkspaces: SnapshotSelectorHook<WorkspaceSnapshot>,
   startSession: (workspaceId: string) => Promise<void>,
+  createWorkspace: (path: string) => Promise<WorkspaceView>,
 ): WorkspaceCombinerState {
   const workspaces = useWorkspaces(state => state.items)
   const phase = useWorkspaces(state => state.phase)
@@ -118,28 +120,26 @@ export function useWorkspaceCombiner(
     }
     const api = apiRef.current
     if (api === null) return
-    const ids = [...selectedIds]
-    void api.saveTemplate(name, ids)
+    void api.saveTemplate(name, selectionOf(selectedIds))
       .then(saved => {
         setTemplates(prev => [saved, ...prev.filter(t => t.id !== saved.id)])
         setStatus(tt('saved'))
         setTemplateName('')
       })
       .catch(error => setStatus(tt('saveFailed', { error: error instanceof Error ? error.message : String(error) })))
-  }, [templateName, selectedIds])
+  }, [templateName, selectedIds, selectionOf])
 
   // 新建会话：先把勾选持久化到宿主（确保宿主在 session/created 快照时读到
   // 最新选择），再走 ctx.sessions.create + open 打开「首个勾选工作区」的会话。
-  const launchSession = useCallback((ids: ReadonlySet<string>): void => {
-    const firstId = [...ids][0]
-    const primary = workspaces.find(ws => ws.workspaceId === firstId)
-    if (primary === undefined) {
+  const launchWithRefs = useCallback((refs: readonly WorkspaceRef[]): void => {
+    if (refs.length === 0) {
       setStatus(tt('noSelection'))
       return
     }
+    const primaryId = refs[0].id
     const api = apiRef.current
     const launch = (): void => {
-      void startSession(primary.workspaceId)
+      void startSession(primaryId)
         .then(() => setStatus(tt('sessionCreated')))
         .catch(error => setStatus(tt('createFailed', { error: error instanceof Error ? error.message : String(error) })))
     }
@@ -147,25 +147,43 @@ export function useWorkspaceCombiner(
       launch()
       return
     }
-    void api.setSelection(selectionOf(ids))
+    void api.setSelection(refs)
       .then(launch)
       .catch(error => setStatus(tt('saveFailed', { error: error instanceof Error ? error.message : String(error) })))
-  }, [workspaces, selectionOf, startSession])
+  }, [startSession])
 
   const createSession = useCallback((): void => {
-    launchSession(selectedIds)
-  }, [launchSession, selectedIds])
+    launchWithRefs(selectionOf(selectedIds))
+  }, [launchWithRefs, selectionOf, selectedIds])
 
   const loadTemplate = useCallback((template: Template): void => {
-    // 只勾选仍然存在的工作区 id，保持模板定义顺序。
-    const available = workspaces.map(ws => ws.workspaceId)
-    const ids = template.workspaceIds.filter(id => available.includes(id))
-    const next = new Set(ids)
-    setSelectedIds(next)
-    setStatus(tt('loaded'))
-    // 加载模板后自动新建/打开会话（加载即开工，无需再手动点新建）。
-    launchSession(next)
-  }, [workspaces, launchSession])
+    // 按模板里的引用恢复勾选：id 还在则用 id；id 变了但路径已注册则换新 id；
+    // 路径未注册则自动注册工作区（幂等）。恢复后直接新建/打开会话。
+    void (async () => {
+      const byId = new Map(workspaces.map(ws => [ws.workspaceId, ws]))
+      const byPath = new Map(workspaces.map(ws => [ws.path, ws]))
+      const resolved: WorkspaceRef[] = []
+      for (const ref of template.workspaces) {
+        const current = byId.get(ref.id)
+        if (current !== undefined) {
+          resolved.push(toRef(current))
+          continue
+        }
+        const reRegistered = byPath.get(ref.path)
+        if (reRegistered !== undefined) {
+          resolved.push(toRef(reRegistered))
+          continue
+        }
+        const created = await createWorkspace(ref.path)
+        resolved.push(toRef(created))
+      }
+      setSelectedIds(new Set(resolved.map(ref => ref.id)))
+      setStatus(tt('loaded'))
+      launchWithRefs(resolved)
+    })().catch(error => {
+      setStatus(tt('createFailed', { error: error instanceof Error ? error.message : String(error) }))
+    })
+  }, [workspaces, createWorkspace, launchWithRefs])
 
   const deleteTemplate = useCallback((id: string): void => {
     const api = apiRef.current

@@ -32,10 +32,10 @@ export function WorkspaceCombinerIcon({ size, active }: PanelIconProps): ReactEl
 }
 
 /** 面板 body：工作区多选 + 模板管理。 */
-export function WorkspaceCombinerPanel({ useWorkspaces, startSession }: WorkspaceCombinerPanelProps): ReactElement {
+export function WorkspaceCombinerPanel({ useWorkspaces, startSession, createWorkspace }: WorkspaceCombinerPanelProps): ReactElement {
   useEffect(() => { injectPanelStyles() }, [])
 
-  const state = useWorkspaceCombiner(useWorkspaces, startSession)
+  const state = useWorkspaceCombiner(useWorkspaces, startSession, createWorkspace)
   const loading = state.phase !== 'ready'
 
   return (
@@ -99,7 +99,7 @@ export function WorkspaceCombinerPanel({ useWorkspaces, startSession }: Workspac
           {state.templates.map(t => (
             <li key={t.id} className="wcb-template-row">
               <span className="wcb-template-name">{t.name}</span>
-              <span className="wcb-template-count">{t.workspaceIds.length}</span>
+              <span className="wcb-template-count">{t.workspaces.length}</span>
               <button type="button" className="wcb-btn" onClick={() => state.loadTemplate(t)}>
                 {tt('loadTemplate')}
               </button>
