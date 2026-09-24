@@ -28,7 +28,7 @@ system prompt（多工作区联合开发模式），并联动
 
 ```
 dsh-workspace-combiner/
-├── package.json            # dsh 字段：bundle.patch + client.inject（slots/locale/workspaces）
+├── package.json            # dsh 字段：bundle.patch + client.inject（slots/locale/sessions）
 ├── cordis.patch.yml        # 编排行：把插件插入 profile
 ├── tsconfig.json           # typecheck
 ├── tsdown.config.ts        # 双入口构建：host + client
@@ -168,8 +168,8 @@ workspace-combiner:
    子代理/分支会话（带 `parentSession`）不注入。这就是需求里 `session:before-start`
    在 DSH 里的真实事件名（DSH 事件用 `/` 分隔）。
 3. **依赖声明**：`package.json` 的 `dsh.client.inject` 声明客户端服务
-   `slots` / `locale` / `workspaces`（`workspaces` 提供 `startSession`
-   新建会话流程）；`peerDependencies` 声明宿主服务与
+   `slots` / `locale` / `sessions`（`sessions` 提供 `create({ workspaceId })` +
+   `open` 新建会话流程）；`peerDependencies` 声明宿主服务与
    `@chaoset/sandbox-extra-roots`。需求里的「dshPlugin 字段」即 `package.json` 的
    `dsh` 字段。
 4. **适配 Desktop 与 Web**：host 半面用 `webServer` 路由 + `systemPrompt`，client

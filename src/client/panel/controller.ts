@@ -47,11 +47,11 @@ function toRef(workspace: WorkspaceView): WorkspaceRef {
 /**
  * 面板状态 hook。
  * @param useWorkspaces - 宿主注入的标准 hook。
- * @param startSession - ctx.workspaces.startSession（DSH 新建会话流程）。
+ * @param startSession - ctx.sessions.create + open（DSH 新建会话流程）。
  */
 export function useWorkspaceCombiner(
   useWorkspaces: SnapshotSelectorHook<WorkspaceSnapshot>,
-  startSession: (workspaceId?: string) => void,
+  startSession: (workspaceId: string) => Promise<void>,
 ): WorkspaceCombinerState {
   const workspaces = useWorkspaces(state => state.items)
   const phase = useWorkspaces(state => state.phase)
@@ -129,7 +129,7 @@ export function useWorkspaceCombiner(
   }, [templateName, selectedIds])
 
   // 新建会话：先把勾选持久化到宿主（确保宿主在 session/created 快照时读到
-  // 最新选择），再走 ctx.workspaces.startSession 打开「首个勾选工作区」的会话。
+  // 最新选择），再走 ctx.sessions.create + open 打开「首个勾选工作区」的会话。
   const launchSession = useCallback((ids: ReadonlySet<string>): void => {
     const firstId = [...ids][0]
     const primary = workspaces.find(ws => ws.workspaceId === firstId)
@@ -139,12 +139,9 @@ export function useWorkspaceCombiner(
     }
     const api = apiRef.current
     const launch = (): void => {
-      try {
-        startSession(primary.workspaceId)
-        setStatus(tt('sessionCreated'))
-      } catch (error) {
-        setStatus(tt('createFailed', { error: error instanceof Error ? error.message : String(error) }))
-      }
+      void startSession(primary.workspaceId)
+        .then(() => setStatus(tt('sessionCreated')))
+        .catch(error => setStatus(tt('createFailed', { error: error instanceof Error ? error.message : String(error) })))
     }
     if (api === null) {
       launch()
