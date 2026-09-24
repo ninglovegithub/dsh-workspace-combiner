@@ -18,20 +18,23 @@ import { PANEL_ID } from '../invariant.ts'
 /** 本插件拥有的 locale 命名空间。 */
 const NS = 'dsh-workspace-combiner'
 
-/** client fiber 需要的服务（slots 插槽入口、locale 词典、workspaces 新建会话）。 */
-export const inject = ['slots', 'locale', 'workspaces']
+/** client fiber 需要的服务（slots 插槽入口、locale 词典、sessions 新建会话）。 */
+export const inject = ['slots', 'locale', 'sessions']
 
 /**
  * 挂载词典 + 侧边栏图标 + 中心列面板。
- * @param ctx - client 根上下文（slots / locale / workspaces）。
+ * @param ctx - client 根上下文（slots / locale / sessions）。
  */
 export function apply(ctx: ClientCtx): void {
   // 词典注册（幂等；注册 bump revision 让已挂载出口拾取晚到词典）。
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-workspace-combiner: dictionaries')
 
-  // 新建会话动作（ctx.workspaces.startSession）。注册时闭包注入，组件不直接
-  // 依赖 workspaces 服务，保持 props 面向标准插槽契约。
-  const startSession = (workspaceId?: string): void => { ctx.workspaces.startSession(workspaceId) }
+  // 新建会话动作（ctx.sessions.create + open）。注册时闭包注入，组件不直接
+  // 依赖 sessions 服务，保持 props 面向标准插槽契约。
+  const startSession = async (workspaceId: string): Promise<void> => {
+    const sessionId = await ctx.sessions.create({ workspaceId })
+    ctx.sessions.open(sessionId)
+  }
 
   // 侧边栏图标：sidebar.panellist（list 插槽）——id 与 main 的 key 对齐。
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register(
