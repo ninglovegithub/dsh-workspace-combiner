@@ -1,0 +1,14 @@
+# dsh-workspace-combiner bundle patch: 把本插件（双面插件）插入 profile 的
+# cordis 编排表。node 侧（exports "."）跑在 host 进程（选中的工作区持久化 +
+# /api 路由 + system prompt 注入 + 沙盒 extraRoots 联动）；浏览器侧（exports
+# "./client"，由 package.json 的 dsh.client 声明）加载进 web GUI 的侧边栏面板。
+#
+# 安装（本地目录加载，pnpm 语义）：
+#   dsh plugin --profile desktop add file:./dsh-workspace-combiner
+#   dsh plugin --profile web     add file:./dsh-workspace-combiner
+#
+# 说明：本行只按包名注册一个裸插件行；客户端半面由 package.json 的
+# dsh.client 字段自动发现（served at /plugins/<id>/client.js）。
+- insert:
+    - id: workspace-combiner
+      name: 'dsh-workspace-combiner'
