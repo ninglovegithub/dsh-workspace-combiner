@@ -1,40 +1,79 @@
 /**
- * 双面共享的领域类型：host 半面持久化选中的工作区与模板，client 半面把
- * 工作区列表渲染成复选框并多选。此处必须保持「平台无关」——client bundle 也会
- * 编译本文件，禁止任何 node 依赖。
+ * 双面共享的领域类型：host 半面持久化自定义工作空间与模板，client 半面渲染。
+ * 必须「平台无关」——client bundle 也编译本文件，禁止任何 node 依赖。
  * @module dsh-workspace-combiner/core/types
  */
 
-/** 一个被选中的工作区（项目）引用。path 是宿主文件系统的绝对路径。 */
+/** 项目类型标识（由宿主扫描特征文件得出）。 */
+export type ProjectType =
+  | 'java'
+  | 'frontend'
+  | 'frontend-vue'
+  | 'frontend-react'
+  | 'frontend-webpack'
+  | 'frontend-next'
+  | 'python'
+  | 'go'
+  | 'generic'
+  | 'none'
+
+/** 一个被选中的项目（目录）引用。path 是宿主文件系统的绝对路径。 */
 export interface WorkspaceRef {
-  /** DSH 工作区稳定 id（WorkspaceId，来自 useWorkspaces 的 workspaceId）。 */
+  /** 稳定 id（本插件内 = path；兼容历史 DSH workspaceId）。 */
   id: string
-  /** 展示名（来自 workspace 的 title，通常是目录 basename）。 */
+  /** 展示名（通常是目录 basename）。 */
   name: string
-  /** 绝对路径（来自 workspace 的 path，宿主 canonical 路径）。 */
+  /** 绝对路径（项目根目录）。 */
   path: string
+  /** 项目类型标识（自动识别；手动添加/兜底时为 'none'）。 */
+  projectType?: ProjectType
+  /** 识别依据（如 "pom.xml"、"package.json + src/"），hover 提示用。 */
+  evidence?: string
+  /** 是否主项目：运行时仍以数组第 0 项为主项目，此字段仅作持久化标记保持同步。 */
+  isPrimary?: boolean
 }
 
-/** 一个项目组合模板：命名的一组工作区引用，可一键恢复勾选并自动注册缺失工作区。 */
-export interface Template {
-  id: string
+/** 目录项：工作空间里的一条项目目录引用（与 WorkspaceRef 同构，语义别名）。 */
+export type DirectoryItem = WorkspaceRef
+
+/** 一次目录扫描识别出的单个代码项目。 */
+export interface DetectedProject {
+  /** 项目根绝对路径。 */
+  root: string
+  /** 项目名（目录 basename）。 */
   name: string
-  /** 勾选的工作区引用（含 id/name/path，顺序保持勾选顺序；加载时按 path 自动注册）。 */
-  workspaces: WorkspaceRef[]
+  /** 项目类型。 */
+  type: ProjectType
+  /** 识别依据（特征文件名或描述）。 */
+  evidence: string
+}
+
+/** 一个自定义工作空间：独立关联一组项目目录（主从顺序由数组顺序表达）。 */
+export interface Workspace {
+  /** 唯一标识。 */
+  id: string
+  /** 工作空间名称。 */
+  name: string
+  /** 备注。 */
+  remark?: string
+  /** 关联的项目目录列表（含主从、类型、路径）。 */
+  directories: DirectoryItem[]
   createdAt: number
   updatedAt: number
+  /** 最近一次在此工作空间下新建会话的时间。 */
+  lastSessionAt?: number
 }
 
 /** 宿主持久化文件（~/.dsh/dsh-workspace-combiner.json）的磁盘形状。 */
 export interface StoreShape {
-  version: 1
-  /** 当前勾选（对「下一次新建的会话」生效）。 */
-  selection: WorkspaceRef[]
-  /** 已保存的项目组合模板。 */
-  templates: Template[]
+  version: 2
+  /** 当前激活的工作空间 id。 */
+  currentWorkspaceId: string
+  /** 所有自定义工作空间。 */
+  workspaces: Workspace[]
 }
 
-/** 无选择的空存储快照。 */
+/** 无内容的空存储快照（加载器会兜底补一个默认工作空间）。 */
 export function emptyStore(): StoreShape {
-  return { version: 1, selection: [], templates: [] }
+  return { version: 2, currentWorkspaceId: '', workspaces: [] }
 }

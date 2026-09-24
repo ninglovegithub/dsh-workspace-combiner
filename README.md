@@ -1,8 +1,8 @@
 # dsh-workspace-combiner · 工作区组合器
 
 DSH（DeepSeek Harness）桌面端 / Web 端 Cordis 插件。在左侧侧边栏注册一个
-**「工作区组合器」** Tab（与「多根」插件并排），勾选多个工作区（后端仓库 +
-前端仓库），保存/加载项目组合模板；**新建会话**时自动把选中仓库的绝对路径注入
+**「工作区组合器」** Tab（与「多根」插件并排），选择多个项目代码目录（后端仓库 +
+前端仓库），保存/加载项目组合模板；**新建会话**时自动把选中目录的绝对路径注入
 system prompt（多工作区联合开发模式），并联动
 [`@chaoset/sandbox-extra-roots`](https://github.com/winliyou/dsh-plugins) 把选中
 目录加入沙盒 extraRoots 白名单，放开文件读写权限。
@@ -14,14 +14,19 @@ system prompt（多工作区联合开发模式），并联动
 
 ## 功能
 
-- 侧边栏 Tab 面板（`sidebar.panellist` + `main` 插槽），与「多根」等全局面板并排。
-- 自动读取 DSH 全部已注册工作区（宿主 `useWorkspaces` 快照），复选框多选。
-- 每个工作区行展示：复选框、工作区名称、本地绝对路径。
-- 项目组合模板：命名勾选组合（如「infoxmed 后端 + AI-FE 前端」），本地持久化，
-  一键加载 / 删除；模板存「绝对路径 + 名称」，加载时自动把未注册的路径注册成 DSH
-  工作区再恢复勾选（模板可移植、可重建）。
-- **新建会话** 按钮 / **加载并新建**：勾选后（或加载模板后）直接在 **首个勾选工作区**
-  中新建并打开会话，其余工作区作为只读仓库注入。
+- 侧边栏 Tab 面板（`sidebar.panellist` + `main` 插槽），卡片式布局、跟随 DSH 明暗主题。
+- 三种加目录方式：①「从工作区选择」下拉多选（读 DSH 原生工作区列表，直接勾选）；
+  ② 宿主原生目录选择器「选择目录」；③ 手动粘贴绝对路径兜底。
+- 目录列表美化：自动识别项目类型加图标（`pom.xml` → ☕ Java 后端，`package.json` →
+  ⚛ 前端）；长路径灰色、hover 显示全路径；移除按钮 hover 才出现；拖拽排序；
+  首个目录带 ⭐ 主项目标记（会话在此打开、可写）。
+- 目录有效性校验 + 重复检测；实时展示 Git 状态（当前分支 + 未提交文件数）。
+- 检测 `@chaoset/sandbox-extra-roots` 是否安装，缺失时提供「一键安装」。
+- 项目组合模板：命名目录组合，本地持久化；hover 预览项目清单；拆成
+  **加载**（仅恢复目录）/ **加载并新建**（恢复目录 + 开新会话）两个按钮；
+  支持标星置顶 + JSON 导入/导出。
+- **新建会话**：把首个目录 get-or-create 成工作区，并**永远新建一个独立会话**绑定到
+  该工作区（已有工作区也照建）；其余目录只读注入。会话创建成功弹出 toast。
 - 新建会话时注入多工作区联合开发 prompt（仅新建会话，旧会话不受影响）。
 - 联动 `@chaoset/sandbox-extra-roots` 放开选中目录读写白名单（热更新）。
 
@@ -29,7 +34,7 @@ system prompt（多工作区联合开发模式），并联动
 
 ```
 dsh-workspace-combiner/
-├── package.json            # dsh 字段：bundle.patch + client.inject（slots/locale/sessions/workspaces）
+├── package.json            # dsh 字段：bundle.patch + client.inject（slots/locale/sessions/workspaces/remote/remote.directoryPicker）
 ├── cordis.patch.yml        # 编排行：把插件插入 profile
 ├── tsconfig.json           # typecheck
 ├── tsdown.config.ts        # 双入口构建：host + client
@@ -48,7 +53,7 @@ dsh-workspace-combiner/
         ├── api.ts          # client -> host fetch API
         └── panel/
             ├── WorkspaceCombinerPanel.tsx   # 面板 body + 图标
-            ├── controller.ts                # 状态管理（多选/模板）
+            ├── controller.ts                # 状态管理（目录列表/模板）
             └── styles.ts                  # 内联样式（<style> 注入，跟随 DSH 主题变量）
 ```
 
@@ -119,16 +124,19 @@ dsh plugin --profile desktop update dsh-workspace-combiner   # 若走 npm
 ## 使用说明
 
 1. 打开侧边栏，点击 **「工作区组合器」** Tab。
-2. 面板会列出 DSH 全部已注册工作区（复选框 + 名称 + 绝对路径）。
-3. 勾选需要的多个工作区（如后端仓库 + 前端仓库）。
-4. 点击 **新建会话**：本插件先把勾选持久化到宿主，再在 **首个勾选的工作区** 中新建
-   并打开会话（其余工作区作为只读仓库注入）。
-   - 或先输入模板名点 **保存模板**，之后点 **加载并新建** 一键恢复勾选并开新会话。
-   - **清空选择** 取消全部勾选。
-5. 新会话创建后，本插件监听会话创建，把当前勾选的工作区绝对路径注入 system prompt，
-   并把选中目录加入沙盒白名单。
+2. 用三种方式之一添加目录：点 **从工作区选择** 下拉勾选已有工作区；点 **选择目录**
+   打开原生目录选择器；或在输入框粘贴绝对路径后回车。
+3. 列表会自动标出项目类型图标、Git 分支/改动数；首个目录带 ⭐（主项目、可写），
+   其余为只读参考；可拖拽排序、hover 显示移除按钮。
+4. 点 **新建会话**：把首个目录 get-or-create 成工作区并永远新建独立会话，创建成功
+   弹出 toast。
+   - 模板：输入名称点 **保存模板**；hover 模板预览清单；**加载** 仅恢复目录，
+     **加载并新建** 恢复目录并开新会话；支持标星置顶、JSON 导入/导出。
+   - 若顶部提示「沙盒插件缺失」，点 **一键安装** 补齐。
+5. 新会话创建后，本插件监听会话创建，把当前目录绝对路径注入 system prompt，并把
+   选中目录加入沙盒白名单。
 
-> ⚠️ **勾选只对「之后新建的会话」生效**：已经打开的旧会话不会重新加载本次勾选配置
+> ⚠️ **目录只对「之后新建的会话」生效**：已经打开的旧会话不会重新加载本次目录配置
 > （面板顶部有同样提示）。
 
 ### 注入的 prompt（自动追加到 system prompt）
@@ -169,14 +177,19 @@ workspace-combiner:
    子代理/分支会话（带 `parentSession`）不注入。这就是需求里 `session:before-start`
    在 DSH 里的真实事件名（DSH 事件用 `/` 分隔）。
 3. **依赖声明**：`package.json` 的 `dsh.client.inject` 声明客户端服务
-   `slots` / `locale` / `sessions` / `workspaces`（`sessions` 提供
-   `create({ workspaceId })` + `open` 新建会话流程，`workspaces` 提供
-   `create({ path })` 按路径自动注册工作区）；`peerDependencies` 声明宿主服务与
-   `@chaoset/sandbox-extra-roots`。需求里的「dshPlugin 字段」即 `package.json` 的
-   `dsh` 字段。
+   `slots` / `locale` / `sessions` / `workspaces` / `remote` /
+   `remote.directoryPicker`（`workspaces.create({ path })` 对首个目录
+   get-or-create 工作区，`sessions.create({ workspaceId })` + `open` 永远新建
+   独立会话，`remote.directoryPicker.pick` 打开宿主原生目录选择器）；
+   `peerDependencies` 声明宿主服务与 `@chaoset/sandbox-extra-roots`。需求里的
+   「dshPlugin 字段」即 `package.json` 的 `dsh` 字段。
 4. **适配 Desktop 与 Web**：host 半面用 `webServer` 路由 + `systemPrompt`，client
    半面用 `slots`（`platform: "web"`），两端通用；`dsh.host: "0.1.5-rc.2"` 标注
    适配的宿主版本。
+5. **辅助探测路由**（loopback-only）：`probe`（读 `pom.xml`/`package.json` 判项目
+   类型）、`validate`（校验目录存在）、`git-status`（分支 + 未提交数）、
+   `sandbox-status`/`sandbox-install`（检测/一键安装沙盒插件）。git 通过
+   `child_process.execFile` 无 shell 调用，目录路径作为参数直传（规避注入）。
 
 ---
 

@@ -14,11 +14,14 @@ import type { WorkspaceRef } from './core/types.ts'
 export function renderMultiWorkspacePrompt(workspaces: readonly WorkspaceRef[]): string {
   if (workspaces.length === 0) return ''
   const list = workspaces
-    .map((ws, index) => `${index + 1}.【${ws.name}】绝对路径：${ws.path}`)
+    .map((ws, index) => {
+      const role = index === 0 ? '【主项目 · 工作区锚点（文档/非代码文件保存区）】' : '【代码项目】'
+      return `${index + 1}.${ws.name}${role}绝对路径：${ws.path}`
+    })
     .join('\n')
   return [
     '# 多工作区联合开发模式生效',
-    `当前会话加载【${workspaces.length}】个独立Git仓库：`,
+    `当前会话加载【${workspaces.length}】个项目目录：`,
     list,
     '',
     '开发强制规则：',

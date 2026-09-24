@@ -2,9 +2,9 @@
  * dsh-workspace-combiner — host 半面。
  *
  * 职责：
- *   1. 挂载持久化存储（~/.dsh/dsh-workspace-combiner.json）：当前勾选 + 模板。
+ *   1. 挂载持久化存储（~/.dsh/dsh-workspace-combiner.json）：当前工作空间。
  *   2. 注册 /api/dsh-workspace-combiner 路由族（loopback-only），供 client 半面
- *      读写勾选与模板。
+ *      读写工作空间。
  *   3. 注册全局 system prompt 分节，其 text 是「按会话动态」的函数——只对
  *      新建会话注入多工作区联合开发模式；旧会话、子代理会话返回空串。
  *   4. 监听 session/created（用户所说的 session:before-start 语义）：把此刻
@@ -71,8 +71,10 @@ export function apply(ctx: Context, config: Config = {}): void {
   if (config.enabled === false) return
 
   const store = new WorkspaceCombinerStore()
-  // 会话 id -> 该会话创建时快照下来的勾选。只有新建的顶层会话会写入。
+  // 会话 id -> 该会话创建时快照下来的当前工作空间目录。只有新建的顶层会话会写入。
   const selectionBySession = new Map<string, readonly WorkspaceRef[]>()
+  // 会话 id -> 归属的自定义工作空间 id（新建会话时的当前工作空间）。
+  const sessionWorkspaceBySession = new Map<string, string>()
 
   // 1) system prompt 分节（全局注册，按会话动态渲染）。
   if (config.announceToAgent ?? true) {
@@ -92,14 +94,18 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.on('session/created', (session: SessionLike) => {
     // 只对顶层新建会话生效：子代理/分支会话带 parentSession，不注入。
     if (session.header?.parentSession !== undefined) return
-    // 快照此刻的勾选，绑定到该会话 id（异步读取，首个模型请求前必已完成）。
-    void store.getSelection().then(items => {
-      if (items.length > 0) selectionBySession.set(session.id, items)
+    // 快照此刻的当前工作空间目录 + 归属工作空间（异步读取，首个模型请求前必已完成）。
+    void store.getCurrentWorkspace().then(ws => {
+      if (ws === undefined) return
+      if (ws.directories.length > 0) selectionBySession.set(session.id, ws.directories)
+      sessionWorkspaceBySession.set(session.id, ws.id)
+      void store.touchWorkspaceSession(ws.id)
     })
   }, { global: true })
 
   ctx.on('session/disposed', (session: SessionLike) => {
     selectionBySession.delete(session.id)
+    sessionWorkspaceBySession.delete(session.id)
   }, { global: true })
 
   // 3) 路由族（client -> host：读写勾选与模板；勾选变化时联动沙盒）。

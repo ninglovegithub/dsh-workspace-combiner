@@ -1,214 +1,221 @@
 /**
- * 面板状态管理：把「工作区列表 + 多选 + 模板」收敛成一个小而清晰的 hook。
- * 数据流：
- *   - 工作区列表来自 useWorkspaces（宿主 runtime 提供的标准插槽 props）。
- *   - 勾选/模板经 WorkspaceCombinerApi 持久化到宿主（勾选同时联动沙盒）。
- *
- * 规则（与需求一致）：勾选只对「之后新建的会话」生效；模板是勾选工作区引用
- * （含路径）的命名快照，加载时按路径自动注册缺失工作区并恢复勾选。
+ * 面板状态管理：自定义工作空间（增删改切）+ 每个工作空间独立绑定的项目目录
+ * （添加/删除/排序）。
  * @module dsh-workspace-combiner/client/panel/controller
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { WorkspaceCombinerApi } from '../api.ts'
-import type { Template, WorkspaceRef } from '../../core/types.ts'
-import type { SnapshotSelectorHook, WorkspaceSnapshot, WorkspaceView } from '../types.ts'
+import type { Workspace, WorkspaceRef } from '../../core/types.ts'
 import { tt } from '../locales.ts'
+import { checkWorkspaceNameDuplicate, sanitizeWorkspaceName } from './naming.ts'
 
-/** 面板挂载时的一次性加载与后续操作都走这个对象。 */
-export interface WorkspaceCombinerState {
-  /** 工作区列表（空 = 加载中或无工作区）。 */
-  workspaces: readonly WorkspaceView[]
-  /** 加载阶段（'ready' 表示列表可用）。 */
-  phase: string
-  /** 已勾选的工作区 id 集合。 */
-  selectedIds: ReadonlySet<string>
-  /** 已保存模板。 */
-  templates: readonly Template[]
-  /** 一行状态提示（成功/失败）。 */
-  status: string
-  /** 模板名输入框受控值。 */
-  templateName: string
-  setTemplateName(name: string): void
-  toggle(id: string): void
-  saveTemplate(): void
-  loadTemplate(template: Template): void
-  deleteTemplate(id: string): void
-  clearSelection(): void
-  /** 用当前勾选新建/打开一个会话（首个勾选工作区作为会话 cwd）。 */
-  createSession(): void
+/** 一条 toast。 */
+export interface Toast {
+  text: string
+  kind: 'ok' | 'error'
 }
 
-/** 工作区 id -> 可注入宿主的 WorkspaceRef。 */
-function toRef(workspace: WorkspaceView): WorkspaceRef {
-  return { id: workspace.workspaceId, name: workspace.title, path: workspace.path }
+/** 面板状态（收敛成一个对象，避免散落 useState 到 UI）。 */
+export interface WorkspaceCombinerState {
+  workspaces: readonly Workspace[]
+  currentWorkspaceId: string
+  /** 当前工作空间的目录列表（派生自 workspaces）。 */
+  dirs: readonly WorkspaceRef[]
+  toast: Toast | null
+  manualPath: string
+  setManualPath(path: string): void
+  switchWorkspace(id: string): void
+  createWorkspace(name: string, basePath: string, directories: readonly WorkspaceRef[]): void
+  renameWorkspace(id: string, name: string): void
+  deleteWorkspace(id: string): void
+  pickAndAddDirectory(): void
+  addDirectory(path: string): void
+  removeDirectory(path: string): void
+  moveDirectory(fromIndex: number, toIndex: number): void
+  createSession(): void
+  dismissToast(): void
+}
+
+/** 目录 basename（跨平台分隔符）。 */
+function basename(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, '')
+  const seg = trimmed.split(/[\\/]/).pop()
+  return seg === undefined || seg === '' ? trimmed : seg
+}
+
+/** 错误文本提取。 */
+function errText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /**
  * 面板状态 hook。
- * @param useWorkspaces - 宿主注入的标准 hook。
- * @param startSession - ctx.sessions.create + open（DSH 新建会话流程）。
- * @param createWorkspace - ctx.workspaces.create（按路径自动注册工作区，幂等）。
  */
 export function useWorkspaceCombiner(
-  useWorkspaces: SnapshotSelectorHook<WorkspaceSnapshot>,
-  startSession: (workspaceId: string) => Promise<void>,
-  createWorkspace: (path: string) => Promise<WorkspaceView>,
+  startSession: (mainDirPath: string, title?: string) => Promise<string>,
+  pickDirectory: () => Promise<string | null>,
+  registerDshWorkspace: (path: string) => Promise<void>,
 ): WorkspaceCombinerState {
-  const workspaces = useWorkspaces(state => state.items)
-  const phase = useWorkspaces(state => state.phase)
-
-  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set())
-  const [templates, setTemplates] = useState<readonly Template[]>([])
-  const [status, setStatus] = useState('')
-  const [templateName, setTemplateName] = useState('')
-
   const apiRef = useRef<WorkspaceCombinerApi | null>(null)
   if (apiRef.current === null) apiRef.current = new WorkspaceCombinerApi()
 
-  // 由 id 集合 + 当前工作区列表推导选中引用（保持勾选顺序）。
-  const selectionOf = useCallback((ids: ReadonlySet<string>): WorkspaceRef[] => {
-    return workspaces.filter(ws => ids.has(ws.workspaceId)).map(toRef)
-  }, [workspaces])
+  const [workspaces, setWorkspaces] = useState<readonly Workspace[]>([])
+  const [currentWorkspaceId, setCurrentWorkspaceId] = useState('')
+  const [toast, setToast] = useState<Toast | null>(null)
+  const [manualPath, setManualPath] = useState('')
+  const currentWsIdRef = useRef('')
+  currentWsIdRef.current = currentWorkspaceId
 
-  // 把勾选同步到宿主（持久化 + 沙盒联动），失败仅提示、不打断本地状态。
-  const pushSelection = useCallback((ids: ReadonlySet<string>): void => {
-    const api = apiRef.current
-    if (api === null) return
-    void api.setSelection(selectionOf(ids)).catch(error => {
-      setStatus(tt('saveFailed', { error: error instanceof Error ? error.message : String(error) }))
-    })
-  }, [selectionOf])
+  const showToast = useCallback((text: string, kind: 'ok' | 'error' = 'ok'): void => {
+    setToast({ text, kind })
+  }, [])
+  const dismissToast = useCallback((): void => setToast(null), [])
 
-  // 挂载时水合勾选与模板。
+  // 水合。
   useEffect(() => {
     const api = apiRef.current
     if (api === null) return
-    void api.getSelection()
-      .then(selection => setSelectedIds(new Set(selection.map(ref => ref.id))))
-      .catch(error => setStatus(tt('loadFailed', { error: error instanceof Error ? error.message : String(error) })))
-    void api.getTemplates()
-      .then(items => setTemplates(items))
-      .catch(error => setStatus(tt('loadFailed', { error: error instanceof Error ? error.message : String(error) })))
-  }, [])
+    void api.getState()
+      .then(state => {
+        setWorkspaces(state.workspaces)
+        setCurrentWorkspaceId(state.currentWorkspaceId)
+      })
+      .catch(error => showToast(tt('loadFailed', { error: errText(error) }), 'error'))
+  }, [showToast])
 
-  const toggle = useCallback((id: string): void => {
-    setSelectedIds(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      pushSelection(next)
-      return next
-    })
-  }, [pushSelection])
+  // 当前工作空间目录（派生）。
+  const dirs = useMemo<readonly WorkspaceRef[]>(
+    () => workspaces.find(w => w.id === currentWorkspaceId)?.directories ?? [],
+    [workspaces, currentWorkspaceId],
+  )
 
-  const clearSelection = useCallback((): void => {
-    setSelectedIds(new Set())
-    pushSelection(new Set())
-    setStatus(tt('cleared'))
-  }, [pushSelection])
-
-  const saveTemplate = useCallback((): void => {
-    const name = templateName.trim()
-    if (name === '') {
-      setStatus(tt('nameRequired'))
-      return
+  // 覆盖当前工作空间目录并持久化 + 联动 DSH 工作区 + 沙盒。
+  const applyDirs = useCallback((next: readonly WorkspaceRef[]): void => {
+    const id = currentWsIdRef.current
+    setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, directories: [...next], updatedAt: Date.now() } : w))
+    const api = apiRef.current
+    if (api !== null) {
+      void api.setWorkspaceDirectories(id, next).catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
     }
-    if (selectedIds.size === 0) {
-      setStatus(tt('noSelection'))
-      return
-    }
+    if (next[0]?.path !== undefined && next[0].path !== '') void registerDshWorkspace(next[0].path)
+  }, [showToast, registerDshWorkspace])
+
+  const switchWorkspace = useCallback((id: string): void => {
     const api = apiRef.current
     if (api === null) return
-    void api.saveTemplate(name, selectionOf(selectedIds))
-      .then(saved => {
-        setTemplates(prev => [saved, ...prev.filter(t => t.id !== saved.id)])
-        setStatus(tt('saved'))
-        setTemplateName('')
-      })
-      .catch(error => setStatus(tt('saveFailed', { error: error instanceof Error ? error.message : String(error) })))
-  }, [templateName, selectedIds, selectionOf])
+    void api.switchWorkspace(id)
+      .then(() => setCurrentWorkspaceId(id))
+      .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+  }, [showToast])
 
-  // 新建会话：先把勾选持久化到宿主（确保宿主在 session/created 快照时读到
-  // 最新选择），再走 ctx.sessions.create + open 打开「首个勾选工作区」的会话。
-  const launchWithRefs = useCallback((refs: readonly WorkspaceRef[]): void => {
-    if (refs.length === 0) {
-      setStatus(tt('noSelection'))
+  // 新建工作空间：宿主在 basePath 下创建同名文件夹作为主目录，其余目录作为代码项目。
+  const createWorkspace = useCallback((name: string, basePath: string, directories: readonly WorkspaceRef[]): void => {
+    const base = sanitizeWorkspaceName(name)
+    if (base === '') {
+      showToast(tt('nameRequired'), 'error')
       return
     }
-    const primaryId = refs[0].id
+    const finalName = checkWorkspaceNameDuplicate(base, undefined, workspaces)
     const api = apiRef.current
-    const launch = (): void => {
-      void startSession(primaryId)
-        .then(() => setStatus(tt('sessionCreated')))
-        .catch(error => setStatus(tt('createFailed', { error: error instanceof Error ? error.message : String(error) })))
-    }
-    if (api === null) {
-      launch()
+    if (api === null) return
+    void api.createWorkspace(finalName, basePath, directories)
+      .then(({ workspace, currentWorkspaceId: curId }) => {
+        setWorkspaces(prev => [...prev, workspace])
+        setCurrentWorkspaceId(curId)
+        if (workspace.directories[0]?.path !== undefined) void registerDshWorkspace(workspace.directories[0].path)
+        showToast(tt('wsCreatedNamed', { name: finalName }))
+      })
+      .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+  }, [workspaces, registerDshWorkspace, showToast])
+
+  const renameWorkspace = useCallback((id: string, name: string): void => {
+    const base = sanitizeWorkspaceName(name)
+    if (base === '') {
+      showToast(tt('nameRequired'), 'error')
       return
     }
-    void api.setSelection(refs)
-      .then(launch)
-      .catch(error => setStatus(tt('saveFailed', { error: error instanceof Error ? error.message : String(error) })))
-  }, [startSession])
+    const finalName = checkWorkspaceNameDuplicate(base, id, workspaces)
+    const api = apiRef.current
+    if (api === null) return
+    void api.renameWorkspace(id, finalName)
+      .then(() => setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, name: finalName } : w)))
+      .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+  }, [workspaces, showToast])
 
+  const deleteWorkspace = useCallback((id: string): void => {
+    const api = apiRef.current
+    if (api === null) return
+    void api.deleteWorkspace(id)
+      .then(({ currentWorkspaceId: nextId }) => {
+        setWorkspaces(prev => prev.filter(w => w.id !== id))
+        setCurrentWorkspaceId(nextId)
+        showToast(tt('wsDeleted'))
+      })
+      .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+  }, [showToast])
+
+  const addDirectory = useCallback((path: string): void => {
+    const trimmed = path.trim()
+    if (trimmed === '') {
+      showToast(tt('pathRequired'), 'error')
+      return
+    }
+    if (dirs.some(d => d.path === trimmed)) {
+      showToast(tt('alreadyAdded'), 'error')
+      return
+    }
+    applyDirs([...dirs, { id: trimmed, name: basename(trimmed), path: trimmed }])
+  }, [dirs, applyDirs, showToast])
+
+  const pickAndAddDirectory = useCallback((): void => {
+    void pickDirectory()
+      .then(path => { if (path !== null && path.trim() !== '') addDirectory(path) })
+      .catch(error => showToast(tt('pickFailed', { error: errText(error) }), 'error'))
+  }, [pickDirectory, addDirectory, showToast])
+
+  const removeDirectory = useCallback((path: string): void => {
+    applyDirs(dirs.filter(d => d.path !== path))
+  }, [dirs, applyDirs])
+
+  const moveDirectory = useCallback((fromIndex: number, toIndex: number): void => {
+    if (fromIndex === toIndex) return
+    const next = [...dirs]
+    const [moved] = next.splice(fromIndex, 1)
+    if (moved === undefined) return
+    next.splice(toIndex, 0, moved)
+    applyDirs(next)
+  }, [dirs, applyDirs])
+
+  // 新建会话：在主目录打开（标题 = 工作空间名，startSession 内去重）。
   const createSession = useCallback((): void => {
-    launchWithRefs(selectionOf(selectedIds))
-  }, [launchWithRefs, selectionOf, selectedIds])
+    const primary = dirs[0]?.path
+    if (primary === undefined || primary === '') {
+      showToast(tt('noPrimary'), 'error')
+      return
+    }
+    const name = workspaces.find(w => w.id === currentWorkspaceId)?.name
+    void startSession(primary, name)
+      .then(sessionId => showToast(tt('sessionCreatedNamed', { name: name ?? sessionId })))
+      .catch(error => showToast(tt('createFailed', { error: errText(error) }), 'error'))
+  }, [dirs, workspaces, currentWorkspaceId, startSession, showToast])
 
-  const loadTemplate = useCallback((template: Template): void => {
-    // 按模板里的引用恢复勾选：id 还在则用 id；id 变了但路径已注册则换新 id；
-    // 路径未注册则自动注册工作区（幂等）。恢复后直接新建/打开会话。
-    void (async () => {
-      const byId = new Map(workspaces.map(ws => [ws.workspaceId, ws]))
-      const byPath = new Map(workspaces.map(ws => [ws.path, ws]))
-      const resolved: WorkspaceRef[] = []
-      for (const ref of template.workspaces) {
-        const current = byId.get(ref.id)
-        if (current !== undefined) {
-          resolved.push(toRef(current))
-          continue
-        }
-        const reRegistered = byPath.get(ref.path)
-        if (reRegistered !== undefined) {
-          resolved.push(toRef(reRegistered))
-          continue
-        }
-        const created = await createWorkspace(ref.path)
-        resolved.push(toRef(created))
-      }
-      setSelectedIds(new Set(resolved.map(ref => ref.id)))
-      setStatus(tt('loaded'))
-      launchWithRefs(resolved)
-    })().catch(error => {
-      setStatus(tt('createFailed', { error: error instanceof Error ? error.message : String(error) }))
-    })
-  }, [workspaces, createWorkspace, launchWithRefs])
-
-  const deleteTemplate = useCallback((id: string): void => {
-    const api = apiRef.current
-    if (api === null) return
-    void api.deleteTemplate(id)
-      .then(() => {
-        setTemplates(prev => prev.filter(t => t.id !== id))
-        setStatus(tt('deleted'))
-      })
-      .catch(error => setStatus(tt('saveFailed', { error: error instanceof Error ? error.message : String(error) })))
-  }, [])
-
-  return useMemo(() => ({
+  return {
     workspaces,
-    phase,
-    selectedIds,
-    templates,
-    status,
-    templateName,
-    setTemplateName,
-    toggle,
-    saveTemplate,
-    loadTemplate,
-    deleteTemplate,
-    clearSelection,
+    currentWorkspaceId,
+    dirs,
+    toast,
+    manualPath,
+    setManualPath,
+    switchWorkspace,
+    createWorkspace,
+    renameWorkspace,
+    deleteWorkspace,
+    pickAndAddDirectory,
+    addDirectory,
+    removeDirectory,
+    moveDirectory,
     createSession,
-  }), [workspaces, phase, selectedIds, templates, status, templateName, toggle, saveTemplate, loadTemplate, deleteTemplate, clearSelection, createSession])
+    dismissToast,
+  }
 }

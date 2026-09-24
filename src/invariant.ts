@@ -24,9 +24,13 @@ export const STORE_FILE = 'dsh-workspace-combiner.json'
 
 /** client -> host 的 HTTP 路由族（与 dsh-multi-root 同约定：loopback-only）。 */
 export const API = {
-  selection: '/api/dsh-workspace-combiner/selection',
-  templates: '/api/dsh-workspace-combiner/templates',
-  templateDelete: '/api/dsh-workspace-combiner/templates/delete',
+  state: '/api/dsh-workspace-combiner/state',
+  workspaceCreate: '/api/dsh-workspace-combiner/workspace-create',
+  workspaceRename: '/api/dsh-workspace-combiner/workspace-rename',
+  workspaceDelete: '/api/dsh-workspace-combiner/workspace-delete',
+  workspaceSwitch: '/api/dsh-workspace-combiner/workspace-switch',
+  workspaceDirectories: '/api/dsh-workspace-combiner/workspace-directories',
+  scan: '/api/dsh-workspace-combiner/scan',
 } as const
 
 /** 请求体上限（1 MiB），超出直接拒绝。 */

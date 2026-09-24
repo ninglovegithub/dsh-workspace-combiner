@@ -1,6 +1,6 @@
 {
   "name": "dsh-workspace-combiner",
-  "description": "DSH 工作区组合器：在左侧侧边栏勾选多个工作区，保存/加载项目组合模板；新建会话时自动把选中仓库的绝对路径注入 system prompt（多工作区联合开发模式），并联动 @chaoset/sandbox-extra-roots 放开选中目录的读写白名单。",
+  "description": "DSH 工作区组合器：在左侧侧边栏管理多个工作空间（每个绑定一个主目录 + 若干只读参考目录）；新建会话时在主目录打开可写会话，并把所有目录的绝对路径注入 system prompt，联动 @chaoset/sandbox-extra-roots 放开目录读写白名单。",
   "version": "0.1.0",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
@@ -39,7 +39,9 @@
         "slots",
         "locale",
         "sessions",
-        "workspaces"
+        "workspaces",
+        "remote",
+        "remote.directoryPicker"
       ]
     }
   },
