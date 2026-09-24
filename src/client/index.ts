@@ -10,7 +10,7 @@
  * @module dsh-workspace-combiner/client
  */
 
-import type { ClientCtx, PanelStandardProps } from './types.ts'
+import type { ClientCtx, PanelStandardProps, WorkspaceView } from './types.ts'
 import { en, zh } from './locales.ts'
 import { WorkspaceCombinerIcon, WorkspaceCombinerPanel } from './panel/WorkspaceCombinerPanel.tsx'
 import { PANEL_ID } from '../invariant.ts'
@@ -18,12 +18,12 @@ import { PANEL_ID } from '../invariant.ts'
 /** 本插件拥有的 locale 命名空间。 */
 const NS = 'dsh-workspace-combiner'
 
-/** client fiber 需要的服务（slots 插槽入口、locale 词典、sessions 新建会话）。 */
-export const inject = ['slots', 'locale', 'sessions']
+/** client fiber 需要的服务（slots 插槽入口、locale 词典、sessions 新建会话、workspaces 自动注册）。 */
+export const inject = ['slots', 'locale', 'sessions', 'workspaces']
 
 /**
  * 挂载词典 + 侧边栏图标 + 中心列面板。
- * @param ctx - client 根上下文（slots / locale / sessions）。
+ * @param ctx - client 根上下文（slots / locale / sessions / workspaces）。
  */
 export function apply(ctx: ClientCtx): void {
   // 词典注册（幂等；注册 bump revision 让已挂载出口拾取晚到词典）。
@@ -36,6 +36,9 @@ export function apply(ctx: ClientCtx): void {
     ctx.sessions.open(sessionId)
   }
 
+  // 自动注册工作区动作（ctx.workspaces.create：按绝对路径注册/解析，幂等）。
+  const createWorkspace = (path: string): Promise<WorkspaceView> => ctx.workspaces.create({ path })
+
   // 侧边栏图标：sidebar.panellist（list 插槽）——id 与 main 的 key 对齐。
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register(
     { name: 'sidebar.panellist', id: PANEL_ID, order: 100, label: () => '工作区组合器' },
@@ -45,6 +48,6 @@ export function apply(ctx: ClientCtx): void {
   // 中心列面板 body：main（keyed 插槽）——选中图标时由布局以 entryKey 渲染。
   ctx.slots.inject('main', () => ctx.slots.register(
     { name: 'main', key: PANEL_ID },
-    (props: PanelStandardProps) => WorkspaceCombinerPanel({ ...props, startSession }),
+    (props: PanelStandardProps) => WorkspaceCombinerPanel({ ...props, startSession, createWorkspace }),
   ))
 }

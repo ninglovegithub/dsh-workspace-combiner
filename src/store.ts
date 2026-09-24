@@ -62,19 +62,19 @@ export class WorkspaceCombinerStore {
   }
 
   /**
-   * 保存模板：按名称 upsert（同名覆盖工作区 id 列表），返回落盘后的模板。
+   * 保存模板：按名称 upsert（同名覆盖工作区引用列表），返回落盘后的模板。
    * @param name - 模板名（如「infoxmed 后端 + AI-FE 前端」）。
-   * @param workspaceIds - 勾选的工作区 id 列表。
+   * @param workspaces - 勾选的工作区引用（含 id/name/path，加载时可自动注册）。
    */
-  async saveTemplate(name: string, workspaceIds: readonly string[]): Promise<Template> {
+  async saveTemplate(name: string, workspaces: readonly WorkspaceRef[]): Promise<Template> {
     await this.ready
     const now = Date.now()
     let saved: Template | undefined
     await this.mutate(() => {
       const existing = this.shape.templates.find(t => t.name === name)
       saved = existing === undefined
-        ? { id: randomUUID(), name, workspaceIds: [...workspaceIds], createdAt: now, updatedAt: now }
-        : { ...existing, workspaceIds: [...workspaceIds], updatedAt: now }
+        ? { id: randomUUID(), name, workspaces: [...workspaces], createdAt: now, updatedAt: now }
+        : { ...existing, workspaces: [...workspaces], updatedAt: now }
       const rest = this.shape.templates.filter(t => t.name !== name)
       this.shape = { ...this.shape, templates: [saved!, ...rest] }
     })
@@ -101,7 +101,8 @@ export class WorkspaceCombinerStore {
         this.shape = {
           version: 1,
           selection: Array.isArray(record.selection) ? record.selection : [],
-          templates: Array.isArray(record.templates) ? record.templates : [],
+          templates: (Array.isArray(record.templates) ? record.templates : [])
+            .filter((t): t is Template => t !== null && typeof t === 'object' && Array.isArray((t as Template).workspaces)),
         }
       }
     } catch {

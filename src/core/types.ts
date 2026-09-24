@@ -15,12 +15,12 @@ export interface WorkspaceRef {
   path: string
 }
 
-/** 一个项目组合模板：命名的一组工作区 id，可一键恢复勾选。 */
+/** 一个项目组合模板：命名的一组工作区引用，可一键恢复勾选并自动注册缺失工作区。 */
 export interface Template {
   id: string
   name: string
-  /** 勾选的工作区 id 列表（顺序保持用户勾选顺序）。 */
-  workspaceIds: string[]
+  /** 勾选的工作区引用（含 id/name/path，顺序保持勾选顺序；加载时按 path 自动注册）。 */
+  workspaces: WorkspaceRef[]
   createdAt: number
   updatedAt: number
 }

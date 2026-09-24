@@ -52,14 +52,16 @@ export interface PanelStandardProps {
  */
 export interface WorkspaceCombinerPanelProps extends PanelStandardProps {
   startSession: (workspaceId: string) => Promise<void>
+  createWorkspace: (path: string) => Promise<WorkspaceView>
 }
 
-/** client 动态上下文（slots / locale / sessions / effect）的极小子集。 */
+/** client 动态上下文（slots / locale / sessions / workspaces / effect）的极小子集。 */
 export interface ClientCtx {
   effect(cb: () => (() => void) | void, label?: string): void
   slots: SlotsService
   locale: LocaleService
   sessions: SessionsService
+  workspaces: WorkspacesService
 }
 
 /**
@@ -70,6 +72,14 @@ export interface ClientCtx {
 export interface SessionsService {
   create(opts: { workspaceId?: string; cwd?: string; sessionId?: string }): Promise<string>
   open(id: string): void
+}
+
+/**
+ * workspaces 服务最小形状（结构镜像 dsh-api-workspace-controller 的
+ * WorkspaceController.create）：按绝对路径注册/解析一个工作区（幂等）。
+ */
+export interface WorkspacesService {
+  create(input: { path: string }): Promise<WorkspaceView>
 }
 
 /** slots 服务的最小形状（register/inject）。 */

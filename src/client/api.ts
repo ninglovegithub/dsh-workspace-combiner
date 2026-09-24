@@ -43,10 +43,10 @@ export class WorkspaceCombinerApi {
   }
 
   /** 保存（按名称 upsert）一个模板。 */
-  async saveTemplate(name: string, workspaceIds: readonly string[]): Promise<Template> {
+  async saveTemplate(name: string, workspaces: readonly WorkspaceRef[]): Promise<Template> {
     const data = await request<{ template: Template }>(API.templates, {
       method: 'POST',
-      body: JSON.stringify({ name, workspaceIds }),
+      body: JSON.stringify({ name, workspaces }),
     })
     return data.template
   }

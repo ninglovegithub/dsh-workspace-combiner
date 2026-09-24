@@ -61,9 +61,8 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   }
 }
 
-/** 把请求体里任意结构校验成 WorkspaceRef[]（不合法项整体拒绝）。 */
-function parseSelection(body: Record<string, unknown>): WorkspaceRef[] | undefined {
-  const raw = body.selection
+/** 把任意结构校验成 WorkspaceRef[]（不合法项整体拒绝）。 */
+function parseWorkspaceRefs(raw: unknown): WorkspaceRef[] | undefined {
   if (!Array.isArray(raw)) return undefined
   const out: WorkspaceRef[] = []
   for (const item of raw) {
@@ -73,13 +72,6 @@ function parseSelection(body: Record<string, unknown>): WorkspaceRef[] | undefin
     out.push({ id: ref.id, name: ref.name, path: ref.path })
   }
   return out
-}
-
-/** 把请求体里的 workspaceIds 校验成 string[]（非字符串数组拒绝）。 */
-function parseIdList(body: Record<string, unknown>): string[] | undefined {
-  const raw = body.workspaceIds
-  if (!Array.isArray(raw)) return undefined
-  return raw.every((id): id is string => typeof id === 'string') ? raw as string[] : undefined
 }
 
 /**
@@ -129,7 +121,7 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore): WebRout
           writeJson(res, 400, { error: 'invalid JSON body' })
           return
         }
-        const selection = parseSelection(body)
+        const selection = parseWorkspaceRefs(body.selection)
         if (selection === undefined) {
           writeJson(res, 400, { error: 'selection must be an array of { id, name, path }' })
           return
@@ -170,13 +162,13 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore): WebRout
           return
         }
         const name = typeof body.name === 'string' ? body.name.trim() : ''
-        const workspaceIds = parseIdList(body)
-        if (name === '' || workspaceIds === undefined) {
-          writeJson(res, 400, { error: 'name and workspaceIds are required' })
+        const workspaces = parseWorkspaceRefs(body.workspaces)
+        if (name === '' || workspaces === undefined) {
+          writeJson(res, 400, { error: 'name and workspaces are required' })
           return
         }
         try {
-          writeJson(res, 201, { template: await store.saveTemplate(name, workspaceIds) })
+          writeJson(res, 201, { template: await store.saveTemplate(name, workspaces) })
         } catch (error) {
           fail(res, error)
         }
