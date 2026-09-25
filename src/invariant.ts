@@ -30,6 +30,11 @@ export const API = {
   workspaceDelete: '/api/dsh-workspace-combiner/workspace-delete',
   workspaceSwitch: '/api/dsh-workspace-combiner/workspace-switch',
   workspaceDirectories: '/api/dsh-workspace-combiner/workspace-directories',
+  workspaceMode: '/api/dsh-workspace-combiner/workspace-mode',
+  workspaceSnapshot: '/api/dsh-workspace-combiner/workspace-snapshot',
+  workspaceLoadMode: '/api/dsh-workspace-combiner/workspace-loadmode',
+  contextStats: '/api/dsh-workspace-combiner/context-stats',
+  fileIndex: '/api/dsh-workspace-combiner/file-index',
   scan: '/api/dsh-workspace-combiner/scan',
 } as const
 

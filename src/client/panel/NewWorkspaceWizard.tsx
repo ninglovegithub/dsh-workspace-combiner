@@ -6,7 +6,7 @@
  */
 
 import { useRef, useState, type ChangeEvent, type ReactElement } from 'react'
-import type { DetectedProject, WorkspaceRef } from '../../core/types.ts'
+import type { DetectedProject, WorkspaceMode, WorkspaceRef } from '../../core/types.ts'
 import { WorkspaceCombinerApi } from '../api.ts'
 import { tt } from '../locales.ts'
 import { TypeBadge } from './typeBadge.tsx'
@@ -14,7 +14,7 @@ import { TypeBadge } from './typeBadge.tsx'
 interface NewWorkspaceWizardProps {
   pickDirectory: () => Promise<string | null>
   onClose: () => void
-  onCreate: (name: string, basePath: string, directories: readonly WorkspaceRef[]) => void
+  onCreate: (name: string, basePath: string, directories: readonly WorkspaceRef[], mode: WorkspaceMode) => void
 }
 
 export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWorkspaceWizardProps): ReactElement {
@@ -28,6 +28,7 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
   const [scanning, setScanning] = useState(false)
   const [projects, setProjects] = useState<readonly DetectedProject[]>([])
   const [checked, setChecked] = useState<Set<string>>(new Set())
+  const [mode, setMode] = useState<WorkspaceMode>('anchor')
 
   const pickBase = (): void => {
     void pickDirectory()
@@ -107,6 +108,14 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
                 <div className="wcb-ws-path">{basePath === '' ? tt('wizardBaseEmpty') : basePath}</div>
               </div>
             </label>
+            <label className="wcb-field">
+              <span>{tt('wsModeLabel')}</span>
+              <select className="wcb-input" value={mode} onChange={(event: ChangeEvent<HTMLSelectElement>) => setMode(event.currentTarget.value as WorkspaceMode)}>
+                <option value="anchor">{tt('wsModeAnchor')}</option>
+                <option value="single">{tt('wsModeSingle')}</option>
+              </select>
+            </label>
+            <div className="wcb-hint">{mode === 'single' ? tt('wsModeSingleHint') : tt('wsModeAnchorHint')}</div>
             <div className="wcb-hint">{tt('wizardBaseHint')}</div>
           </div>
         ) : null}
@@ -153,7 +162,7 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
           {step < 3 ? (
             <button type="button" className="wcb-btn-primary" disabled={step === 1 && basePath === ''} onClick={() => setStep((step + 1) as 1 | 2 | 3)}>{tt('wizardNext')}</button>
           ) : (
-            <button type="button" className="wcb-btn-primary" disabled={basePath === ''} onClick={() => onCreate(finalName, basePath, buildSecondaryRefs())}>{tt('wizardCreate')}</button>
+            <button type="button" className="wcb-btn-primary" disabled={basePath === ''} onClick={() => onCreate(finalName, basePath, buildSecondaryRefs(), mode)}>{tt('wizardCreate')}</button>
           )}
         </div>
       </div>

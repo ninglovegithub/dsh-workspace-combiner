@@ -12,9 +12,11 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { API, MAX_JSON_BODY_BYTES } from './invariant.ts'
 import { scanDirectory } from './host/projectDetector.ts'
+import { FileIndexCache, countNodes } from './host/fileIndex.ts'
+import { computeContextStats } from './host/contextStats.ts'
 import { syncExtraRoots } from './sandbox-sync.ts'
 import { WorkspaceCombinerStore } from './store.ts'
-import type { WorkspaceRef } from './core/types.ts'
+import type { LoadMode, WorkspaceMode, WorkspaceRef } from './core/types.ts'
 
 /** loopback 字面量 + 浏览器同源标记（dsh-ssh 配对路由栅栏）。 */
 function isLoopbackRequest(request: IncomingMessage): boolean {
@@ -78,6 +80,8 @@ function parseWorkspaceRefs(raw: unknown): WorkspaceRef[] | undefined {
       ...(typeof ref.projectType === 'string' ? { projectType: ref.projectType as WorkspaceRef['projectType'] } : {}),
       ...(typeof ref.evidence === 'string' ? { evidence: ref.evidence } : {}),
       ...(typeof ref.isPrimary === 'boolean' ? { isPrimary: ref.isPrimary } : {}),
+      ...(ref.access === 'readwrite' || ref.access === 'readonly' || ref.access === 'disabled' ? { access: ref.access } : {}),
+      ...(typeof ref.group === 'string' && ref.group !== '' ? { group: ref.group } : {}),
     })
   }
   return out
@@ -94,7 +98,7 @@ function sanitizeFolderName(name: string): string {
  * @param ctx - 宿主上下文（用于沙盒联动）。
  * @param store - 持久化存储。
  */
-export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore): WebRoute[] {
+export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileIndexCache: FileIndexCache): WebRoute[] {
   const guard = (req: IncomingMessage, res: ServerResponse, method: string): boolean => {
     if (!isLoopbackRequest(req)) {
       writeJson(res, 403, { error: 'forbidden: loopback-only' })
@@ -112,11 +116,14 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore): WebRout
   }
 
   // 沙盒联动：跟踪本插件上次贡献的路径，当前工作空间目录变化时调和白名单。
+  // 只有「读写」目录进入可写白名单；只读/禁用目录保持不可写（读本就不受限）。
+  const writablePaths = (dirs: readonly WorkspaceRef[]): string[] =>
+    dirs.filter(d => (d.access ?? 'readwrite') === 'readwrite').map(d => d.path)
   let lastSyncedPaths: string[] = []
-  void store.getCurrentWorkspace().then(ws => { lastSyncedPaths = ws?.directories.map(d => d.path) ?? [] })
+  void store.getCurrentWorkspace().then(ws => { lastSyncedPaths = writablePaths(ws?.directories ?? []) })
   const syncCurrent = async (): Promise<void> => {
     const ws = await store.getCurrentWorkspace()
-    const next = ws?.directories.map(d => d.path) ?? []
+    const next = writablePaths(ws?.directories ?? [])
     await syncExtraRoots(ctx, lastSyncedPaths, next)
     lastSyncedPaths = next
   }
@@ -153,6 +160,8 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore): WebRout
           return
         }
         const basePath = typeof body.basePath === 'string' ? body.basePath.trim() : ''
+        const mode: WorkspaceMode = body.mode === 'single' ? 'single' : 'anchor'
+        const loadMode: LoadMode = body.loadMode === 'full' || body.loadMode === 'tree' ? body.loadMode : 'summary'
         const directories = parseWorkspaceRefs(body.directories) ?? []
         if (basePath === '') {
           writeJson(res, 400, { error: 'basePath is required' })
@@ -163,9 +172,9 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore): WebRout
           const folderName = sanitizeFolderName(name)
           const targetPath = join(basePath, folderName)
           await mkdir(targetPath, { recursive: true })
-          const primary: WorkspaceRef = { id: targetPath, name: folderName, path: targetPath, isPrimary: true }
+          const primary: WorkspaceRef = { id: targetPath, name: folderName, path: targetPath, isPrimary: true, access: 'readwrite' }
           const allDirectories: WorkspaceRef[] = [primary, ...directories.filter(d => d.path !== targetPath)]
-          const workspace = await store.createWorkspace(name, undefined, allDirectories)
+          const workspace = await store.createWorkspace(name, undefined, allDirectories, mode, loadMode)
           await syncCurrent()
           writeJson(res, 201, { workspace, currentWorkspaceId: workspace.id })
         } catch (error) {
@@ -273,6 +282,122 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore): WebRout
           await store.setWorkspaceDirectories(id, directories)
           if (id === (await store.getCurrentWorkspaceId())) await syncCurrent()
           writeJson(res, 200, { ok: true })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    // ---------------------------------------------------------- workspace-mode
+    {
+      kind: 'exact',
+      path: API.workspaceMode,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const id = body === undefined ? '' : typeof body.id === 'string' ? body.id : ''
+        const mode: WorkspaceMode | '' = body === undefined ? '' : body.mode === 'single' ? 'single' : body.mode === 'anchor' ? 'anchor' : ''
+        if (id === '' || mode === '') {
+          writeJson(res, 400, { error: 'id and mode are required' })
+          return
+        }
+        try {
+          await store.setWorkspaceMode(id, mode)
+          writeJson(res, 200, { ok: true })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    // ---------------------------------------------------------- workspace-loadmode
+    {
+      kind: 'exact',
+      path: API.workspaceLoadMode,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const id = body === undefined ? '' : typeof body.id === 'string' ? body.id : ''
+        const loadMode: LoadMode | '' = body === undefined ? '' : body.loadMode === 'full' || body.loadMode === 'summary' || body.loadMode === 'tree' ? body.loadMode : ''
+        if (id === '' || loadMode === '') {
+          writeJson(res, 400, { error: 'id and loadMode are required' })
+          return
+        }
+        try {
+          await store.setLoadMode(id, loadMode)
+          writeJson(res, 200, { ok: true })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    // ---------------------------------------------------------- workspace-snapshot
+    {
+      kind: 'exact',
+      path: API.workspaceSnapshot,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const id = body === undefined ? '' : typeof body.id === 'string' ? body.id : ''
+        const action = body === undefined ? '' : typeof body.action === 'string' ? body.action : ''
+        const name = body === undefined ? '' : typeof body.name === 'string' ? body.name.trim() : ''
+        const snapshotId = body === undefined ? '' : typeof body.snapshotId === 'string' ? body.snapshotId : ''
+        if (id === '' || action === '') {
+          writeJson(res, 400, { error: 'id and action are required' })
+          return
+        }
+        try {
+          if (action === 'save') {
+            if (name === '') { writeJson(res, 400, { error: 'name is required' }); return }
+            await store.saveSnapshot(id, name)
+          } else if (action === 'restore') {
+            if (snapshotId === '') { writeJson(res, 400, { error: 'snapshotId is required' }); return }
+            await store.restoreSnapshot(id, snapshotId)
+            if (id === (await store.getCurrentWorkspaceId())) await syncCurrent()
+          } else if (action === 'delete') {
+            if (snapshotId === '') { writeJson(res, 400, { error: 'snapshotId is required' }); return }
+            await store.deleteSnapshot(id, snapshotId)
+          } else {
+            writeJson(res, 400, { error: 'unknown action' })
+            return
+          }
+          writeJson(res, 200, { ok: true })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    // ---------------------------------------------------------- file-index
+    {
+      kind: 'exact',
+      path: API.fileIndex,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const path = body === undefined ? '' : typeof body.path === 'string' ? body.path.trim() : ''
+        if (path === '') {
+          writeJson(res, 400, { error: 'path is required' })
+          return
+        }
+        try {
+          const tree = await fileIndexCache.get(path)
+          const { files, dirs } = countNodes(tree)
+          writeJson(res, 200, { root: path, files, dirs, tree })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    // ---------------------------------------------------------- context-stats
+    {
+      kind: 'exact',
+      path: API.contextStats,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        try {
+          const ws = await store.getCurrentWorkspace()
+          const stats = ws === undefined
+            ? { loadMode: 'summary', directories: [], totalFiles: 0, totalDirs: 0, fileIndexTokens: 0, promptOverheadTokens: 0 }
+            : await computeContextStats(ws.directories, ws.mode ?? 'anchor', ws.loadMode ?? 'summary', fileIndexCache)
+          writeJson(res, 200, stats)
         } catch (error) {
           fail(res, error)
         }

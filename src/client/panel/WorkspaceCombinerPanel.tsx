@@ -7,7 +7,7 @@
 
 import { useEffect, useState, type ChangeEvent, type DragEvent, type ReactElement } from 'react'
 import type { PanelIconProps, WorkspaceCombinerPanelProps } from '../types.ts'
-import type { Workspace } from '../../core/types.ts'
+import type { DirectoryAccess, LoadMode, Workspace, WorkspaceMode } from '../../core/types.ts'
 import { useWorkspaceCombiner } from './controller.ts'
 import { injectPanelStyles } from './styles.ts'
 import { tt } from '../locales.ts'
@@ -92,7 +92,8 @@ export function WorkspaceCombinerPanel({ startSession, pickDirectory, registerDs
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [overIndex, setOverIndex] = useState<number | null>(null)
 
-  const currentWsName = state.workspaces.find(w => w.id === state.currentWorkspaceId)?.name ?? ''
+  const currentWs = state.workspaces.find(w => w.id === state.currentWorkspaceId)
+  const currentWsName = currentWs?.name ?? ''
   const submitManualPath = (): void => {
     const path = state.manualPath.trim()
     if (path !== '') { state.addDirectory(path); state.setManualPath('') }
@@ -135,6 +136,19 @@ export function WorkspaceCombinerPanel({ startSession, pickDirectory, registerDs
       {/* 项目目录列表 */}
       <section className="wcb-card">
         <h3 className="wcb-section">{tt('directories')}</h3>
+        <div className="wcb-mode-row">
+          <span>{tt('wsModeLabel')}</span>
+          <select className="wcb-access-select" value={currentWs?.mode ?? 'anchor'} onChange={(event) => state.setWorkspaceMode(event.currentTarget.value as WorkspaceMode)}>
+            <option value="anchor">{tt('wsModeAnchor')}</option>
+            <option value="single">{tt('wsModeSingle')}</option>
+          </select>
+          <span>{tt('loadModeLabel')}</span>
+          <select className="wcb-access-select" value={currentWs?.loadMode ?? 'summary'} onChange={(event) => state.setLoadMode(event.currentTarget.value as LoadMode)}>
+            <option value="summary">{tt('loadModeSummary')}</option>
+            <option value="tree">{tt('loadModeTree')}</option>
+            <option value="full">{tt('loadModeFull')}</option>
+          </select>
+        </div>
         <div className="wcb-add-row">
           <button type="button" className="wcb-btn" onClick={state.pickAndAddDirectory}>{tt('pickDirectory')}</button>
           <input className="wcb-input" value={state.manualPath} placeholder={tt('manualPathPlaceholder')} onChange={(event: ChangeEvent<HTMLInputElement>) => state.setManualPath(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === 'Enter') submitManualPath() }} />
@@ -147,7 +161,7 @@ export function WorkspaceCombinerPanel({ startSession, pickDirectory, registerDs
             {state.dirs.map((d, i) => (
               <li
                 key={d.path}
-                className={'wcb-dir-row' + (dragIndex === i ? ' wcb-dragging' : '') + (overIndex === i && dragIndex !== null && dragIndex !== i ? ' wcb-over' : '')}
+                className={'wcb-dir-row' + (dragIndex === i ? ' wcb-dragging' : '') + (overIndex === i && dragIndex !== null && dragIndex !== i ? ' wcb-over' : '') + (d.access === 'disabled' ? ' wcb-dir-disabled' : '')}
                 draggable
                 onDragStart={() => setDragIndex(i)}
                 onDragEnd={() => { setDragIndex(null); setOverIndex(null) }}
@@ -163,12 +177,78 @@ export function WorkspaceCombinerPanel({ startSession, pickDirectory, registerDs
                   </div>
                   <div className="wcb-dir-path" title={d.path}>{d.path}</div>
                 </div>
+                {i === 0 ? (
+                  <span className="wcb-access-fixed" title={tt('primaryAccessFixed')}>{tt('accessReadwrite')}</span>
+                ) : (
+                  <>
+                    <select className="wcb-access-select" value={d.group ?? ''} title={tt('groupHint')} onChange={(event) => state.setDirectoryGroup(d.path, event.currentTarget.value)} onDragStart={(event: DragEvent<HTMLSelectElement>) => event.stopPropagation()}>
+                      <option value="">{tt('groupNone')}</option>
+                      <option value={tt('groupDoc')}>{tt('groupDoc')}</option>
+                      <option value={tt('groupBackend')}>{tt('groupBackend')}</option>
+                      <option value={tt('groupFrontend')}>{tt('groupFrontend')}</option>
+                      <option value={tt('groupRef')}>{tt('groupRef')}</option>
+                      <option value={tt('groupOther')}>{tt('groupOther')}</option>
+                    </select>
+                    <select className="wcb-access-select" value={d.access ?? 'readwrite'} title={tt('accessHint')} onChange={(event) => state.setDirectoryAccess(d.path, event.currentTarget.value as DirectoryAccess)} onDragStart={(event: DragEvent<HTMLSelectElement>) => event.stopPropagation()}>
+                      <option value="readwrite">{tt('accessReadwrite')}</option>
+                      <option value="readonly">{tt('accessReadonly')}</option>
+                      <option value="disabled">{tt('accessDisabled')}</option>
+                    </select>
+                  </>
+                )}
                 <button type="button" className="wcb-remove" title={tt('removeDirectory')} onClick={() => state.removeDirectory(d.path)}>✕</button>
               </li>
             ))}
           </ul>
         )}
         <div className="wcb-hint">{tt('primaryHint')}</div>
+        <div className="wcb-snapshot-block">
+          <div className="wcb-snapshot-row">
+            <input className="wcb-input" value={state.snapshotName} placeholder={tt('snapshotNamePlaceholder')} onChange={(event: ChangeEvent<HTMLInputElement>) => state.setSnapshotName(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === 'Enter') state.saveSnapshot() }} />
+            <button type="button" className="wcb-btn" disabled={state.snapshotName.trim() === ''} onClick={state.saveSnapshot}>{tt('snapshotSave')}</button>
+          </div>
+          {state.snapshots.length > 0 ? (
+            <ul className="wcb-snapshot-list">
+              {state.snapshots.map(s => (
+                <li key={s.id} className="wcb-snapshot-item">
+                  <span className="wcb-snapshot-name" title={s.name}>{s.name}</span>
+                  <span className="wcb-snapshot-meta">{tt('snapshotDirCount', { n: s.directories.length })}</span>
+                  <button type="button" className="wcb-btn" onClick={() => state.restoreSnapshot(s.id)}>{tt('snapshotRestore')}</button>
+                  <button type="button" className="wcb-ws-act wcb-ws-act-danger" title={tt('snapshotDelete')} onClick={() => state.deleteSnapshot(s.id)}>✕</button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      </section>
+
+      {/* 上下文监控 */}
+      <section className="wcb-card">
+        <div className="wcb-section-row">
+          <h3 className="wcb-section">{tt('monitorTitle')}</h3>
+          <button type="button" className="wcb-btn" onClick={state.refreshContextStats}>{tt('monitorRefresh')}</button>
+        </div>
+        {state.contextStats === null ? (
+          <div className="wcb-hint">{tt('monitorLoading')}</div>
+        ) : (
+          <div className="wcb-monitor">
+            <div className="wcb-monitor-line">
+              <span className="wcb-monitor-label">{tt('monitorSummary', { dirs: state.contextStats.directories.length, files: state.contextStats.totalFiles, subdirs: state.contextStats.totalDirs })}</span>
+            </div>
+            <div className="wcb-monitor-line">
+              <span className="wcb-monitor-label">{tt('monitorFileIndex')}</span>
+              <span className="wcb-monitor-value">≈ {state.contextStats.fileIndexTokens.toLocaleString()} {tt('monitorTokens')}</span>
+            </div>
+            <div className="wcb-monitor-line">
+              <span className="wcb-monitor-label">{tt('monitorOverhead')}</span>
+              <span className="wcb-monitor-value">≈ {state.contextStats.promptOverheadTokens.toLocaleString()} {tt('monitorTokens')}</span>
+            </div>
+            <div className="wcb-monitor-line wcb-monitor-total">
+              <span className="wcb-monitor-label">{tt('monitorTotal')}</span>
+              <span className="wcb-monitor-value">≈ {(state.contextStats.fileIndexTokens + state.contextStats.promptOverheadTokens).toLocaleString()} {tt('monitorTokens')}</span>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* 底部：新建会话 */}
@@ -187,7 +267,7 @@ export function WorkspaceCombinerPanel({ startSession, pickDirectory, registerDs
         <NewWorkspaceWizard
           pickDirectory={pickDirectory}
           onClose={() => setWizardOpen(false)}
-          onCreate={(name, basePath, directories) => { state.createWorkspace(name, basePath, directories); setWizardOpen(false) }}
+          onCreate={(name, basePath, directories, mode) => { state.createWorkspace(name, basePath, directories, mode); setWizardOpen(false) }}
         />
       ) : null}
       {renameTarget !== null ? (

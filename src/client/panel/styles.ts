@@ -52,6 +52,16 @@ const PANEL_CSS = `
 .wcb-tag{flex:none;border-radius:4px;padding:0 6px;font-size:10px;line-height:15px;color:var(--dsw-alias-label-tertiary,#8a919f);background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.05))}
 .wcb-tag-primary{color:#c06a12;background:color-mix(in srgb,#f7ba2a 16%,transparent)}
 .wcb-dir-path{color:var(--dsw-alias-label-tertiary,#8a919f);font-size:11px;font-family:var(--ds-font-family-code,monospace);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wcb-access-select{flex:none;border:1px solid var(--dsw-alias-border-l1,#d8dce3);background:var(--dsw-alias-bg-layer-3,#fff);color:var(--dsw-alias-label-primary,#1f2329);border-radius:6px;padding:2px 4px;font:inherit;font-size:11px;cursor:pointer}
+.wcb-access-select:focus{outline:none;border-color:var(--dsw-alias-state-accent,#4f8cff)}
+.wcb-access-fixed{flex:none;border-radius:4px;padding:0 6px;font-size:10px;line-height:15px;color:var(--dsw-alias-label-tertiary,#8a919f);background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.05))}
+.wcb-dir-row.wcb-dir-disabled{opacity:.45}
+.wcb-mode-row{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dsw-alias-label-tertiary,#8a919f);margin-bottom:8px}
+.wcb-snapshot-row{display:flex;gap:6px;margin-top:10px}
+.wcb-snapshot-list{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
+.wcb-snapshot-item{display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 6px;border:1px solid var(--dsw-alias-border-l1,#d8dce3);border-radius:6px}
+.wcb-snapshot-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wcb-snapshot-meta{flex:none;color:var(--dsw-alias-label-tertiary,#8a919f);font-size:11px}
 
 .wcb-remove{flex:none;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--dsw-alias-label-tertiary,#8a919f);border-radius:4px;cursor:pointer;font-size:16px;line-height:1;opacity:0;transition:opacity .12s,background .12s}
 .wcb-dir-row:hover .wcb-remove,.wcb-remove:focus-visible{opacity:1}
@@ -128,6 +138,13 @@ const PANEL_CSS = `
 .wcb-scan-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 .wcb-scan-name{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wcb-scan-path{color:var(--dsw-alias-label-tertiary,#8a919f);font-size:11px;font-family:var(--ds-font-family-code,monospace);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* 上下文监控 */
+.wcb-monitor{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.wcb-monitor-line{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:12px;line-height:1.4}
+.wcb-monitor-label{color:var(--dsw-alias-label-tertiary,#8a919f)}
+.wcb-monitor-value{font-variant-numeric:tabular-nums;text-align:right}
+.wcb-monitor-total{border-top:1px solid var(--dsw-alias-border-l2,#e4e7ec);padding-top:6px;font-weight:600}
 `.trim()
 
 /** 注入面板样式（幂等：同 id 已存在则跳过）。 */

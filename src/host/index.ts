@@ -28,7 +28,8 @@ import { PLUGIN_ID, SECTION_NAME, SECTION_ORDER } from '../invariant.ts'
 import { renderMultiWorkspacePrompt } from '../prompt.ts'
 import { makeRoutes } from '../routes.ts'
 import { WorkspaceCombinerStore } from '../store.ts'
-import type { WorkspaceRef } from '../core/types.ts'
+import { FileIndexCache, type FileTreeNode } from './fileIndex.ts'
+import type { LoadMode, WorkspaceMode, WorkspaceRef } from '../core/types.ts'
 
 /** 稳定的 cordis 插件名（编排行 id）。 */
 export const name = PLUGIN_ID
@@ -72,7 +73,8 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   const store = new WorkspaceCombinerStore()
   // 会话 id -> 该会话创建时快照下来的当前工作空间目录。只有新建的顶层会话会写入。
-  const selectionBySession = new Map<string, readonly WorkspaceRef[]>()
+  const fileIndexCache = new FileIndexCache()
+  const selectionBySession = new Map<string, { directories: readonly WorkspaceRef[]; mode: WorkspaceMode; loadMode: LoadMode; fileTrees: { name: string; path: string; tree: FileTreeNode[] }[] }>()
   // 会话 id -> 归属的自定义工作空间 id（新建会话时的当前工作空间）。
   const sessionWorkspaceBySession = new Map<string, string>()
 
@@ -85,7 +87,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         const session = context.agent?.session
         if (session === undefined) return ''
         const selected = selectionBySession.get(session.id)
-        return selected !== undefined ? renderMultiWorkspacePrompt(selected) : ''
+        return selected !== undefined ? renderMultiWorkspacePrompt(selected.directories, selected.mode, selected.loadMode, selected.fileTrees) : ''
       },
     }), 'dsh-workspace-combiner: prompt section')
   }
@@ -95,9 +97,16 @@ export function apply(ctx: Context, config: Config = {}): void {
     // 只对顶层新建会话生效：子代理/分支会话带 parentSession，不注入。
     if (session.header?.parentSession !== undefined) return
     // 快照此刻的当前工作空间目录 + 归属工作空间（异步读取，首个模型请求前必已完成）。
-    void store.getCurrentWorkspace().then(ws => {
+    void store.getCurrentWorkspace().then(async ws => {
       if (ws === undefined) return
-      if (ws.directories.length > 0) selectionBySession.set(session.id, ws.directories)
+      const loadMode = ws.loadMode ?? 'summary'
+      const fileTrees: { name: string; path: string; tree: FileTreeNode[] }[] = []
+      for (const dir of ws.directories) {
+        if ((dir.access ?? 'readwrite') === 'disabled') continue
+        const tree = await fileIndexCache.get(dir.path, { maxDepth: loadMode === 'full' ? 4 : loadMode === 'tree' ? 3 : 1 })
+        fileTrees.push({ name: dir.name, path: dir.path, tree })
+      }
+      selectionBySession.set(session.id, { directories: ws.directories, mode: ws.mode ?? 'anchor', loadMode, fileTrees })
       sessionWorkspaceBySession.set(session.id, ws.id)
       void store.touchWorkspaceSession(ws.id)
     })
@@ -110,7 +119,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   // 3) 路由族（client -> host：读写勾选与模板；勾选变化时联动沙盒）。
   ctx.effect(() => {
-    const disposers = makeRoutes(ctx, store).map(route => ctx.webServer.register(route))
+    const disposers = makeRoutes(ctx, store, fileIndexCache).map(route => ctx.webServer.register(route))
     return () => {
       for (const dispose of disposers) dispose()
     }

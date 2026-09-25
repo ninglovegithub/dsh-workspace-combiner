@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { emptyStore, type StoreShape, type Workspace, type WorkspaceRef } from './core/types.ts'
+import { emptyStore, type LoadMode, type StoreShape, type Workspace, type WorkspaceMode, type WorkspaceRef, type WorkspaceSnapshot } from './core/types.ts'
 import { STORE_FILE } from './invariant.ts'
 
 /** 与 harness 的 DSH_HOME 约定一致：默认 ~/.dsh，可用 $DSH_HOME 覆盖。 */
@@ -38,7 +38,20 @@ function parseRef(raw: unknown): WorkspaceRef | undefined {
     ...(typeof ref.projectType === 'string' ? { projectType: ref.projectType as WorkspaceRef['projectType'] } : {}),
     ...(typeof ref.evidence === 'string' ? { evidence: ref.evidence } : {}),
     ...(typeof ref.isPrimary === 'boolean' ? { isPrimary: ref.isPrimary } : {}),
+    ...(ref.access === 'readwrite' || ref.access === 'readonly' || ref.access === 'disabled' ? { access: ref.access } : {}),
+    ...(typeof ref.group === 'string' && ref.group !== '' ? { group: ref.group } : {}),
   }
+}
+
+/** 校验并规范化一条快照。 */
+function parseSnapshot(raw: unknown): WorkspaceSnapshot | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined
+  const s = raw as Record<string, unknown>
+  if (typeof s.id !== 'string' || typeof s.name !== 'string') return undefined
+  const dirs = Array.isArray(s.directories)
+    ? s.directories.map(parseRef).filter((r): r is WorkspaceRef => r !== undefined)
+    : []
+  return { id: s.id, name: s.name, directories: dirs, createdAt: typeof s.createdAt === 'number' ? s.createdAt : Date.now() }
 }
 
 /** 校验并规范化一个 Workspace。 */
@@ -57,6 +70,9 @@ function parseWorkspace(raw: unknown): Workspace | undefined {
     createdAt: typeof ws.createdAt === 'number' ? ws.createdAt : Date.now(),
     updatedAt: typeof ws.updatedAt === 'number' ? ws.updatedAt : Date.now(),
     ...(typeof ws.lastSessionAt === 'number' ? { lastSessionAt: ws.lastSessionAt } : {}),
+    ...(ws.mode === 'anchor' || ws.mode === 'single' ? { mode: ws.mode } : {}),
+    ...(ws.loadMode === 'full' || ws.loadMode === 'summary' || ws.loadMode === 'tree' ? { loadMode: ws.loadMode } : {}),
+    ...(Array.isArray(ws.snapshots) ? { snapshots: ws.snapshots.map(parseSnapshot).filter((s): s is WorkspaceSnapshot => s !== undefined) } : {}),
   }
 }
 
@@ -106,7 +122,7 @@ export class WorkspaceCombinerStore {
   }
 
   /** 新建工作空间并切换为当前。 */
-  async createWorkspace(name: string, remark?: string, directories: readonly WorkspaceRef[] = []): Promise<Workspace> {
+  async createWorkspace(name: string, remark?: string, directories: readonly WorkspaceRef[] = [], mode: WorkspaceMode = 'anchor', loadMode: LoadMode = 'summary'): Promise<Workspace> {
     await this.ready
     const now = Date.now()
     const ws: Workspace = {
@@ -114,6 +130,8 @@ export class WorkspaceCombinerStore {
       name,
       ...(remark !== undefined && remark !== '' ? { remark } : {}),
       directories: [...directories],
+      mode,
+      loadMode,
       createdAt: now,
       updatedAt: now,
     }
@@ -166,6 +184,71 @@ export class WorkspaceCombinerStore {
       this.shape = {
         ...this.shape,
         workspaces: this.shape.workspaces.map(w => w.id === id ? { ...w, directories: [...directories], updatedAt: Date.now() } : w),
+      }
+    })
+  }
+
+  /** 设置工作空间模式（文档锚点 / 传统单项目）。 */
+  async setWorkspaceMode(id: string, mode: WorkspaceMode): Promise<void> {
+    await this.ready
+    await this.mutate(() => {
+      if (!this.shape.workspaces.some(w => w.id === id)) return
+      this.shape = {
+        ...this.shape,
+        workspaces: this.shape.workspaces.map(w => w.id === id ? { ...w, mode, updatedAt: Date.now() } : w),
+      }
+    })
+  }
+
+  /** 设置文件加载模式（完整 / 摘要 / 目录树）。 */
+  async setLoadMode(id: string, loadMode: LoadMode): Promise<void> {
+    await this.ready
+    await this.mutate(() => {
+      if (!this.shape.workspaces.some(w => w.id === id)) return
+      this.shape = {
+        ...this.shape,
+        workspaces: this.shape.workspaces.map(w => w.id === id ? { ...w, loadMode, updatedAt: Date.now() } : w),
+      }
+    })
+  }
+
+  /** 保存当前目录配置为一个命名快照。 */
+  async saveSnapshot(id: string, name: string): Promise<void> {
+    await this.ready
+    await this.mutate(() => {
+      const ws = this.shape.workspaces.find(w => w.id === id)
+      if (ws === undefined) return
+      const snapshot: WorkspaceSnapshot = { id: randomUUID(), name, directories: [...ws.directories], createdAt: Date.now() }
+      this.shape = {
+        ...this.shape,
+        workspaces: this.shape.workspaces.map(w => w.id === id ? { ...w, snapshots: [...(w.snapshots ?? []), snapshot], updatedAt: Date.now() } : w),
+      }
+    })
+  }
+
+  /** 用快照恢复目录配置。 */
+  async restoreSnapshot(id: string, snapshotId: string): Promise<void> {
+    await this.ready
+    await this.mutate(() => {
+      const ws = this.shape.workspaces.find(w => w.id === id)
+      const snapshot = ws?.snapshots?.find(s => s.id === snapshotId)
+      if (ws === undefined || snapshot === undefined) return
+      this.shape = {
+        ...this.shape,
+        workspaces: this.shape.workspaces.map(w => w.id === id ? { ...w, directories: [...snapshot.directories], updatedAt: Date.now() } : w),
+      }
+    })
+  }
+
+  /** 删除一条快照。 */
+  async deleteSnapshot(id: string, snapshotId: string): Promise<void> {
+    await this.ready
+    await this.mutate(() => {
+      const ws = this.shape.workspaces.find(w => w.id === id)
+      if (ws === undefined) return
+      this.shape = {
+        ...this.shape,
+        workspaces: this.shape.workspaces.map(w => w.id === id ? { ...w, snapshots: (w.snapshots ?? []).filter(s => s.id !== snapshotId), updatedAt: Date.now() } : w),
       }
     })
   }

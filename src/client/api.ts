@@ -5,7 +5,7 @@
  */
 
 import { API } from '../invariant.ts'
-import type { DetectedProject, Workspace, WorkspaceRef } from '../core/types.ts'
+import type { ContextStats, DetectedProject, LoadMode, Workspace, WorkspaceMode, WorkspaceRef } from '../core/types.ts'
 
 /** 统一 JSON 请求/响应。 */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -34,10 +34,10 @@ export class WorkspaceCombinerApi {
   }
 
   /** 新建工作空间：在 basePath 下创建与名称同名的文件夹作为主目录，其余目录作为代码项目；创建后自动切换为当前。 */
-  async createWorkspace(name: string, basePath: string, directories: readonly WorkspaceRef[]): Promise<{ workspace: Workspace; currentWorkspaceId: string }> {
+  async createWorkspace(name: string, basePath: string, directories: readonly WorkspaceRef[], mode: WorkspaceMode = 'anchor', loadMode: LoadMode = 'summary'): Promise<{ workspace: Workspace; currentWorkspaceId: string }> {
     return await request<{ workspace: Workspace; currentWorkspaceId: string }>(API.workspaceCreate, {
       method: 'POST',
-      body: JSON.stringify({ name, basePath, directories }),
+      body: JSON.stringify({ name, basePath, directories, mode, loadMode }),
     })
   }
 
@@ -80,5 +80,34 @@ export class WorkspaceCombinerApi {
       method: 'POST',
       body: JSON.stringify({ id, directories }),
     })
+  }
+
+  /** 设置工作空间模式（文档锚点 / 传统单项目）。 */
+  async setWorkspaceMode(id: string, mode: WorkspaceMode): Promise<void> {
+    await request<{ ok: boolean }>(API.workspaceMode, {
+      method: 'POST',
+      body: JSON.stringify({ id, mode }),
+    })
+  }
+
+  /** 保存/恢复/删除工作空间目录配置快照。 */
+  async workspaceSnapshot(id: string, action: 'save' | 'restore' | 'delete', payload: { name?: string; snapshotId?: string } = {}): Promise<void> {
+    await request<{ ok: boolean }>(API.workspaceSnapshot, {
+      method: 'POST',
+      body: JSON.stringify({ id, action, ...payload }),
+    })
+  }
+
+  /** 设置文件加载模式（完整 / 摘要 / 目录树）。 */
+  async setLoadMode(id: string, loadMode: LoadMode): Promise<void> {
+    await request<{ ok: boolean }>(API.workspaceLoadMode, {
+      method: 'POST',
+      body: JSON.stringify({ id, loadMode }),
+    })
+  }
+
+  /** 获取上下文统计（各目录文件数 + 估算 token）。 */
+  async contextStats(): Promise<ContextStats> {
+    return await request<ContextStats>(API.contextStats, { method: 'GET' })
   }
 }
