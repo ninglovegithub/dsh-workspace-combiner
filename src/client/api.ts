@@ -5,7 +5,8 @@
  */
 
 import { API } from '../invariant.ts'
-import type { ContextStats, DetectedProject, LoadMode, Workspace, WorkspaceMode, WorkspaceRef } from '../core/types.ts'
+import type { ContextStats, DetectedProject, GitStatus, LoadMode, Workspace, WorkspaceMode, WorkspaceRef } from '../core/types.ts'
+import type { FileTreeNode } from '../host/fileIndex.ts'
 
 /** 统一 JSON 请求/响应。 */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -104,6 +105,31 @@ export class WorkspaceCombinerApi {
       method: 'POST',
       body: JSON.stringify({ id, loadMode }),
     })
+  }
+
+  /** 局部更新工作空间级元信息（模式 / 加载模式 / 置顶 / 颜色 / token 预算）。 */
+  async patchWorkspace(id: string, patch: { mode?: WorkspaceMode; loadMode?: LoadMode; pinned?: boolean; color?: string; tokenBudget?: number }): Promise<void> {
+    await request<{ ok: boolean }>(API.workspacePatch, {
+      method: 'POST',
+      body: JSON.stringify({ id, ...patch }),
+    })
+  }
+
+  /** 读取单目录文件索引（面板预览 prompt 用）；目录不存在时抛错。 */
+  async fileIndex(path: string): Promise<{ root: string; files: number; dirs: number; tree: FileTreeNode[] }> {
+    return await request<{ root: string; files: number; dirs: number; tree: FileTreeNode[] }>(API.fileIndex, {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    })
+  }
+
+  /** 读取目录 git 状态（非 git 仓库返回 null）。 */
+  async gitStatus(path: string): Promise<GitStatus | null> {
+    const body = await request<{ status: GitStatus | null }>(API.gitStatus, {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    })
+    return body.status
   }
 
   /** 获取上下文统计（各目录文件数 + 估算 token）。 */

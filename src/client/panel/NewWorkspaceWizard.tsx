@@ -5,7 +5,7 @@
  * @module dsh-workspace-combiner/client/panel/NewWorkspaceWizard
  */
 
-import { useRef, useState, type ChangeEvent, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent, type ReactElement } from 'react'
 import type { DetectedProject, WorkspaceMode, WorkspaceRef } from '../../core/types.ts'
 import { WorkspaceCombinerApi } from '../api.ts'
 import { tt } from '../locales.ts'
@@ -29,6 +29,13 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
   const [projects, setProjects] = useState<readonly DetectedProject[]>([])
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const [mode, setMode] = useState<WorkspaceMode>('anchor')
+
+  // Esc 关闭弹窗。
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   const pickBase = (): void => {
     void pickDirectory()
@@ -80,15 +87,15 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
 
   return (
     <div className="wcb-overlay" onClick={onClose}>
-      <div className="wcb-modal wcb-modal-wide" onClick={(event) => event.stopPropagation()}>
+      <div className="wcb-modal wcb-modal-wide" role="dialog" aria-modal="true" aria-label={tt('wizardTitle')} onClick={(event) => event.stopPropagation()}>
         <div className="wcb-modal-title">{tt('wizardTitle')}</div>
 
-        <div className="wcb-wizard-steps">
+        <div className="wcb-steps">
           {[tt('wizardStep1'), tt('wizardStep2'), tt('wizardStep3')].map((label, i) => {
             const n = i + 1
             return (
-              <div key={label} className={'wcb-wizard-step' + (step === n ? ' wcb-wizard-step-active' : '') + (step > n ? ' wcb-wizard-step-done' : '')}>
-                <span className="wcb-wizard-step-num">{n}</span>
+              <div key={label} className={'wcb-step' + (step === n ? ' wcb-step-active' : '') + (step > n ? ' wcb-step-done' : '')}>
+                <span className="wcb-step-num">{n}</span>
                 <span>{label}</span>
               </div>
             )
@@ -105,16 +112,17 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
               <span>{tt('wizardBaseDir')}</span>
               <div className="wcb-add-row">
                 <button type="button" className="wcb-btn" onClick={pickBase}>{tt('wizardPickFolder')}</button>
-                <div className="wcb-ws-path">{basePath === '' ? tt('wizardBaseEmpty') : basePath}</div>
+                <div className="wcb-pathbox">{basePath === '' ? tt('wizardBaseEmpty') : basePath}</div>
               </div>
             </label>
-            <label className="wcb-field">
-              <span>{tt('wsModeLabel')}</span>
-              <select className="wcb-input" value={mode} onChange={(event: ChangeEvent<HTMLSelectElement>) => setMode(event.currentTarget.value as WorkspaceMode)}>
-                <option value="anchor">{tt('wsModeAnchor')}</option>
-                <option value="single">{tt('wsModeSingle')}</option>
-              </select>
-            </label>
+            <div>
+              <div className="wcb-label">{tt('wsModeLabel')}</div>
+              <div className="wcb-tabs" role="tablist" aria-label={tt('wsModeLabel')}>
+                {([['anchor', tt('wsModeAnchor')], ['single', tt('wsModeSingle')]] as Array<[WorkspaceMode, string]>).map(([value, label]) => (
+                  <button key={value} type="button" role="tab" aria-selected={mode === value} aria-label={label} className={'wcb-tab' + (mode === value ? ' wcb-tab-on' : '')} onClick={() => setMode(value)}>{label}</button>
+                ))}
+              </div>
+            </div>
             <div className="wcb-hint">{mode === 'single' ? tt('wsModeSingleHint') : tt('wsModeAnchorHint')}</div>
             <div className="wcb-hint">{tt('wizardBaseHint')}</div>
           </div>
@@ -124,12 +132,12 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
           <div className="wcb-wizard-body">
             <div className="wcb-add-row">
               <button type="button" className="wcb-btn" disabled={scanning} onClick={pickScan}>{tt('wizardPickFolder')}</button>
-              <div className="wcb-ws-path">{scanPath === '' ? tt('wizardScanFolderEmpty') : scanPath}</div>
+              <div className="wcb-pathbox">{scanPath === '' ? tt('wizardScanFolderEmpty') : scanPath}</div>
             </div>
             {scanning ? <div className="wcb-hint">{tt('wizardScanning')}</div> : null}
             {!scanning && projects.length > 0 ? (
               <>
-                <div className="wcb-modal-toolbar">
+                <div className="wcb-toolbar">
                   <button type="button" className="wcb-btn" onClick={toggleAll}>{allChecked ? tt('wizardClearSelect') : tt('wizardSelectAll')}</button>
                 </div>
                 <ul className="wcb-scan-list">
@@ -157,12 +165,12 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
         ) : null}
 
         <div className="wcb-modal-actions">
-          {step > 1 ? <button type="button" className="wcb-btn" onClick={() => setStep((step - 1) as 1 | 2 | 3)}>{tt('wizardBack')}</button> : null}
-          <button type="button" className="wcb-btn" onClick={onClose}>{tt('cancel')}</button>
+          {step > 1 ? <button type="button" className="wcb-btn-plain" aria-label={tt('wizardBack')} onClick={() => setStep((step - 1) as 1 | 2 | 3)}>{tt('wizardBack')}</button> : null}
+          <button type="button" className="wcb-btn-plain" aria-label={tt('cancel')} onClick={onClose}>{tt('cancel')}</button>
           {step < 3 ? (
-            <button type="button" className="wcb-btn-primary" disabled={step === 1 && basePath === ''} onClick={() => setStep((step + 1) as 1 | 2 | 3)}>{tt('wizardNext')}</button>
+            <button type="button" className="wcb-btn-primary" aria-label={tt('wizardNext')} disabled={step === 1 && basePath === ''} onClick={() => setStep((step + 1) as 1 | 2 | 3)}>{tt('wizardNext')}</button>
           ) : (
-            <button type="button" className="wcb-btn-primary" disabled={basePath === ''} onClick={() => onCreate(finalName, basePath, buildSecondaryRefs(), mode)}>{tt('wizardCreate')}</button>
+            <button type="button" className="wcb-btn-primary" aria-label={tt('wizardCreate')} disabled={basePath === ''} onClick={() => onCreate(finalName, basePath, buildSecondaryRefs(), mode)}>{tt('wizardCreate')}</button>
           )}
         </div>
       </div>

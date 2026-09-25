@@ -8,12 +8,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { API, MAX_JSON_BODY_BYTES } from './invariant.ts'
 import { scanDirectory } from './host/projectDetector.ts'
 import { FileIndexCache, countNodes } from './host/fileIndex.ts'
 import { computeContextStats } from './host/contextStats.ts'
+import { getGitStatus } from './host/gitStatus.ts'
 import { syncExtraRoots } from './sandbox-sync.ts'
 import { WorkspaceCombinerStore } from './store.ts'
 import type { LoadMode, WorkspaceMode, WorkspaceRef } from './core/types.ts'
@@ -82,6 +83,7 @@ function parseWorkspaceRefs(raw: unknown): WorkspaceRef[] | undefined {
       ...(typeof ref.isPrimary === 'boolean' ? { isPrimary: ref.isPrimary } : {}),
       ...(ref.access === 'readwrite' || ref.access === 'readonly' || ref.access === 'disabled' ? { access: ref.access } : {}),
       ...(typeof ref.group === 'string' && ref.group !== '' ? { group: ref.group } : {}),
+      ...(typeof ref.note === 'string' && ref.note !== '' ? { note: ref.note } : {}),
     })
   }
   return out
@@ -308,6 +310,39 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         }
       },
     },
+    // ---------------------------------------------------------- workspace-patch
+    {
+      kind: 'exact',
+      path: API.workspacePatch,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const id = body === undefined ? '' : typeof body.id === 'string' ? body.id : ''
+        if (id === '') {
+          writeJson(res, 400, { error: 'id is required' })
+          return
+        }
+        const mode: WorkspaceMode | '' = body === undefined ? '' : body.mode === 'single' ? 'single' : body.mode === 'anchor' ? 'anchor' : ''
+        const loadMode: LoadMode | '' = body === undefined ? '' : body.loadMode === 'full' || body.loadMode === 'summary' || body.loadMode === 'tree' ? body.loadMode : ''
+        const pinned = body !== undefined && typeof body.pinned === 'boolean' ? body.pinned : undefined
+        const color = body !== undefined && typeof body.color === 'string' && body.color !== '' ? body.color : undefined
+        const tokenBudget = body !== undefined && typeof body.tokenBudget === 'number' && Number.isFinite(body.tokenBudget) && body.tokenBudget > 0 ? body.tokenBudget : undefined
+        try {
+          if (mode !== '') await store.setWorkspaceMode(id, mode)
+          if (loadMode !== '') await store.setLoadMode(id, loadMode)
+          if (pinned !== undefined || color !== undefined || tokenBudget !== undefined) {
+            await store.patchMeta(id, {
+              ...(pinned !== undefined ? { pinned } : {}),
+              ...(color !== undefined ? { color } : {}),
+              ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+            })
+          }
+          writeJson(res, 200, { ok: true })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
     // ---------------------------------------------------------- workspace-loadmode
     {
       kind: 'exact',
@@ -378,9 +413,35 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
           return
         }
         try {
+          // FileIndexCache 对无法 stat 的路径会返回空树。这对 prompt 渲染很宽容，
+          // 但 API 调用方需要区分“空目录”和“目录不存在”，否则 UI 无法标红失效路径。
+          const info = await stat(path)
+          if (!info.isDirectory()) {
+            throw new Error('path is not a directory: ' + path)
+          }
           const tree = await fileIndexCache.get(path)
           const { files, dirs } = countNodes(tree)
           writeJson(res, 200, { root: path, files, dirs, tree })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    // ---------------------------------------------------------- git-status
+    {
+      kind: 'exact',
+      path: API.gitStatus,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const path = body === undefined ? '' : typeof body.path === 'string' ? body.path.trim() : ''
+        if (path === '') {
+          writeJson(res, 400, { error: 'path is required' })
+          return
+        }
+        try {
+          const status = await getGitStatus(path)
+          writeJson(res, 200, { status })
         } catch (error) {
           fail(res, error)
         }

@@ -20,6 +20,8 @@ export interface WorkspaceCombinerPanelProps {
   pickDirectory: () => Promise<string | null>
   /** 把主项目目录注册为 DSH 左侧「工作区」列表项（get-or-create，触发左侧栏即时刷新）。 */
   registerDshWorkspace: (path: string) => Promise<void>
+  /** 当前使用会话数（由 client 入口读取 sessions 快照后注入；缺省 0）。 */
+  sessionCount?: number
 }
 
 /** client 动态上下文的极小子集。 */

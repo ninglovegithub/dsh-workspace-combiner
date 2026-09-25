@@ -31,10 +31,12 @@ export const API = {
   workspaceSwitch: '/api/dsh-workspace-combiner/workspace-switch',
   workspaceDirectories: '/api/dsh-workspace-combiner/workspace-directories',
   workspaceMode: '/api/dsh-workspace-combiner/workspace-mode',
+  workspacePatch: '/api/dsh-workspace-combiner/workspace-patch',
   workspaceSnapshot: '/api/dsh-workspace-combiner/workspace-snapshot',
   workspaceLoadMode: '/api/dsh-workspace-combiner/workspace-loadmode',
   contextStats: '/api/dsh-workspace-combiner/context-stats',
   fileIndex: '/api/dsh-workspace-combiner/file-index',
+  gitStatus: '/api/dsh-workspace-combiner/git-status',
   scan: '/api/dsh-workspace-combiner/scan',
 } as const
 

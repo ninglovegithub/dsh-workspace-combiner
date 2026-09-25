@@ -96,19 +96,27 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.on('session/created', (session: SessionLike) => {
     // 只对顶层新建会话生效：子代理/分支会话带 parentSession，不注入。
     if (session.header?.parentSession !== undefined) return
-    // 快照此刻的当前工作空间目录 + 归属工作空间（异步读取，首个模型请求前必已完成）。
+    // 先绑定目录快照，再异步补充文件树。此前在文件树扫描之后才写入 Map：大型
+    // 仓库扫描期间 system prompt 可能已被组装，导致首轮请求完全没有多工作区上下文。
     void store.getCurrentWorkspace().then(async ws => {
       if (ws === undefined) return
       const loadMode = ws.loadMode ?? 'summary'
+      const mode = ws.mode ?? 'anchor'
+      const directories = ws.directories.map(directory => ({ ...directory }))
+      selectionBySession.set(session.id, { directories, mode, loadMode, fileTrees: [] })
+      sessionWorkspaceBySession.set(session.id, ws.id)
+      void store.touchWorkspaceSession(ws.id)
+
       const fileTrees: { name: string; path: string; tree: FileTreeNode[] }[] = []
-      for (const dir of ws.directories) {
+      for (const dir of directories) {
         if ((dir.access ?? 'readwrite') === 'disabled') continue
         const tree = await fileIndexCache.get(dir.path, { maxDepth: loadMode === 'full' ? 4 : loadMode === 'tree' ? 3 : 1 })
         fileTrees.push({ name: dir.name, path: dir.path, tree })
       }
-      selectionBySession.set(session.id, { directories: ws.directories, mode: ws.mode ?? 'anchor', loadMode, fileTrees })
-      sessionWorkspaceBySession.set(session.id, ws.id)
-      void store.touchWorkspaceSession(ws.id)
+      // 会话可能在扫描期间已被关闭；不要把过期快照重新放回 Map。
+      if (sessionWorkspaceBySession.get(session.id) === ws.id) {
+        selectionBySession.set(session.id, { directories, mode, loadMode, fileTrees })
+      }
     })
   }, { global: true })
 

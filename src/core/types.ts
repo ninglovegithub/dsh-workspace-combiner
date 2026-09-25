@@ -44,6 +44,20 @@ export interface WorkspaceRef {
   access?: DirectoryAccess
   /** 目录分组标签（如 文档/后端/前端/参考；prompt 内按组渲染）。 */
   group?: string
+  /** 目录备注（用户自定义，展示在目录名下方；随目录列表整体持久化）。 */
+  note?: string
+}
+
+/** 一个目录的 git 状态（非 git 仓库时为 null）。 */
+export interface GitStatus {
+  /** 当前分支名（detached HEAD 时为 HEAD）。 */
+  branch: string
+  /** 已修改未暂存文件数。 */
+  dirty: number
+  /** 未跟踪文件数。 */
+  untracked: number
+  /** 领先远程提交数。 */
+  ahead: number
 }
 
 /** 目录项：工作空间里的一条项目目录引用（与 WorkspaceRef 同构，语义别名）。 */
@@ -93,6 +107,12 @@ export interface Workspace {
   loadMode?: LoadMode
   /** 目录配置快照（一键保存/恢复）。 */
   snapshots?: WorkspaceSnapshot[]
+  /** 注入 prompt 的 token 预算上限（面板监控区可配置；缺省 60000）。 */
+  tokenBudget?: number
+  /** 是否置顶（面板工作空间列表排序优先）。 */
+  pinned?: boolean
+  /** 颜色标识（面板工作空间列表色点；6 色循环）。 */
+  color?: string
 }
 
 /** 宿主持久化文件（~/.dsh/dsh-workspace-combiner.json）的磁盘形状。 */

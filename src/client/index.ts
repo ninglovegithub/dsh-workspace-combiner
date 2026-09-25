@@ -96,9 +96,18 @@ export function apply(ctx: ClientCtx): void {
     WorkspaceCombinerIcon,
   ))
 
+  // 当前会话总数（会话占用回显；读取失败时回退 0）。
+  const sessionCount = (): number => {
+    try {
+      return ctx.sessions.list.getSnapshot().ids.length
+    } catch {
+      return 0
+    }
+  }
+
   // 中心列面板 body：main（keyed 插槽）——选中图标时由布局以 entryKey 渲染。
   ctx.slots.inject('main', () => ctx.slots.register(
     { name: 'main', key: PANEL_ID },
-    () => WorkspaceCombinerPanel({ startSession, pickDirectory, registerDshWorkspace }),
+    () => WorkspaceCombinerPanel({ startSession, pickDirectory, registerDshWorkspace, sessionCount: sessionCount() }),
   ))
 }

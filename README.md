@@ -50,7 +50,25 @@ Layers 1-4 ship today; see [Changelog](./CHANGELOG.md).
   tokens as explicitly referenced paths across all workspace roots (`@dir/`, `@file`,
   `@"path with spaces"`), pulling files into scope on demand.
 - **Sandbox sync** — read-write directories are pushed into
-  `sandbox-extra-roots` `extraWritableRoots` (hot reload with a file-write fallback).
+  `sandbox-extra-roots` `extraWritableRoots` (hot reload with a file-write fallback); the bottom
+  legend shows how many directories are actually in the allowlist.
+- **Git status per directory** — each row shows its branch, amber with `*N` when there are
+  uncommitted or untracked changes, grey when clean, plus `↑N` when ahead of the upstream.
+  Directories that are not repositories show nothing.
+- **Directory notes** — attach a free-form note to any directory, edited inline; it travels
+  with the directory configuration.
+- **Project-directory annotations** — the primary row is badged `Docs only` and the others
+  `Code`, so the anchor-vs-source distinction is visible at a glance (hover for an explanation).
+- **Live injected-prompt preview** — expand a read-only block that renders exactly what will be
+  injected for the current configuration, and copy it.
+- **Context budget** — an editable per-workspace token budget with a donut summary, 2x2 stat
+  cards, and a per-directory **column chart**; the panel warns past 80% and past 100%.
+- **Fixed-height panel with local scrolling** — the panel fills the sidebar and only its lists
+  scroll, so the header and the New-session button never leave the screen.
+- **Resizable split** — drag the divider between project directories and the context budget
+  (default 6:4); the ratio is remembered.
+- **Keyboard** — `Cmd/Ctrl+N` new session, `Cmd/Ctrl+K` command palette, `Esc` to close; the
+  palette covers switching workspaces, adding directories, refreshing stats and changing modes.
 
 ---
 
@@ -73,6 +91,7 @@ dsh-workspace-combiner/
     │   ├── index.ts        # host entry: prompt section + session/created + routes
     │   ├── projectDetector.ts # scan a directory for project type
     │   ├── fileIndex.ts    # gitignore-aware bounded file-tree scanner + mtime cache
+    │   ├── gitStatus.ts    # branch / dirty / untracked / ahead per directory
     │   └── contextStats.ts # token estimator + per-directory context stats
     └── client/
         ├── index.ts        # client entry: sidebar icon + main-column panel
@@ -138,14 +157,18 @@ Update after changing source: `pnpm build`, then remove and re-add the plugin.
 ## Usage
 
 1. Open the **Workspace Combiner** tab in the sidebar.
-2. Select an existing workspace or create one via the **New workspace** wizard.
-3. Add directories (native-workspace pick / directory picker / manual path), set each
-   directory's access / group, and set the workspace mode and load mode.
-4. Optionally save a snapshot of the directory configuration.
-5. Click **New session** — the primary directory is opened and a new session is created;
-   the plugin then injects all active directories (with the chosen load mode) into the
-   system prompt and syncs the sandbox writable roots.
-6. Check the **Context monitor** card to see the file counts and estimated token budget.
+2. Pick a workspace from the list, or create one with the **New workspace** wizard
+   (name + base path; the host creates the primary folder and scans for code projects).
+3. Add directories (folder picker or a pasted absolute path) and review each row: the
+   primary row is marked **Docs only**, the rest **Code**, with its Git branch, group and
+   access. Reorder by dragging; select several rows to bulk-edit access, group or delete.
+4. Open **Advanced** for the workspace mode, the file load mode and snapshots, and the
+   **@ command cheat sheet**.
+5. Expand **Injected prompt** to preview exactly what will be sent, and copy it if useful.
+6. Click **New session** — the primary directory is opened, a session is created, the active
+   directories are injected into the system prompt and the sandbox writable roots are synced.
+7. Watch the **Context budget** card: donut, stat cards and the per-directory column chart.
+   Drag the divider above it to trade space with the directory list.
 
 > ⚠️ Directory changes only affect **newly created sessions**; already-open sessions are
 > not re-loaded.
@@ -204,8 +227,8 @@ workspace-combiner:
    access only gates *writes* (via `extraWritableRoots`) and *prompt inclusion*.
 4. **Dependencies** are declared in `package.json` `dsh.client.inject` and
    `peerDependencies` (`@chaoset/sandbox-extra-roots`, DSH host services).
-5. **Aux routes** (loopback-only): `scan`, `file-index`, `context-stats`, plus state /
-   workspace CRUD routes.
+5. **Aux routes** (loopback-only): `scan`, `file-index`, `git-status`, `context-stats`,
+   `workspace-patch`, plus state / workspace CRUD routes.
 
 ---
 

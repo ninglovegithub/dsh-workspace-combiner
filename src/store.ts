@@ -40,7 +40,23 @@ function parseRef(raw: unknown): WorkspaceRef | undefined {
     ...(typeof ref.isPrimary === 'boolean' ? { isPrimary: ref.isPrimary } : {}),
     ...(ref.access === 'readwrite' || ref.access === 'readonly' || ref.access === 'disabled' ? { access: ref.access } : {}),
     ...(typeof ref.group === 'string' && ref.group !== '' ? { group: ref.group } : {}),
+    ...(typeof ref.note === 'string' && ref.note !== '' ? { note: ref.note } : {}),
   }
+}
+
+/**
+ * 目录列表的唯一事实来源是数组顺序：第一项就是主目录。把历史字段也随之
+ * 规范化，避免拖拽重排后 isPrimary / access 仍留在旧主目录上，导致持久化
+ * 数据与实际建会话目录、沙盒白名单相互矛盾。
+ */
+function normalizeDirectories(directories: readonly WorkspaceRef[]): WorkspaceRef[] {
+  return directories.map((directory, index) => {
+    if (index === 0) {
+      return { ...directory, isPrimary: true, access: 'readwrite' }
+    }
+    const { isPrimary: _isPrimary, ...secondary } = directory
+    return secondary
+  })
 }
 
 /** 校验并规范化一条快照。 */
@@ -66,13 +82,16 @@ function parseWorkspace(raw: unknown): Workspace | undefined {
     id: ws.id,
     name: ws.name,
     ...(typeof ws.remark === 'string' && ws.remark !== '' ? { remark: ws.remark } : {}),
-    directories: dirs,
+    directories: normalizeDirectories(dirs),
     createdAt: typeof ws.createdAt === 'number' ? ws.createdAt : Date.now(),
     updatedAt: typeof ws.updatedAt === 'number' ? ws.updatedAt : Date.now(),
     ...(typeof ws.lastSessionAt === 'number' ? { lastSessionAt: ws.lastSessionAt } : {}),
     ...(ws.mode === 'anchor' || ws.mode === 'single' ? { mode: ws.mode } : {}),
     ...(ws.loadMode === 'full' || ws.loadMode === 'summary' || ws.loadMode === 'tree' ? { loadMode: ws.loadMode } : {}),
     ...(Array.isArray(ws.snapshots) ? { snapshots: ws.snapshots.map(parseSnapshot).filter((s): s is WorkspaceSnapshot => s !== undefined) } : {}),
+    ...(typeof ws.tokenBudget === 'number' && Number.isFinite(ws.tokenBudget) && ws.tokenBudget > 0 ? { tokenBudget: Math.round(ws.tokenBudget) } : {}),
+    ...(typeof ws.pinned === 'boolean' ? { pinned: ws.pinned } : {}),
+    ...(typeof ws.color === 'string' && ws.color !== '' ? { color: ws.color } : {}),
   }
 }
 
@@ -129,7 +148,7 @@ export class WorkspaceCombinerStore {
       id: randomUUID(),
       name,
       ...(remark !== undefined && remark !== '' ? { remark } : {}),
-      directories: [...directories],
+      directories: normalizeDirectories(directories),
       mode,
       loadMode,
       createdAt: now,
@@ -183,7 +202,7 @@ export class WorkspaceCombinerStore {
       if (!this.shape.workspaces.some(w => w.id === id)) return
       this.shape = {
         ...this.shape,
-        workspaces: this.shape.workspaces.map(w => w.id === id ? { ...w, directories: [...directories], updatedAt: Date.now() } : w),
+        workspaces: this.shape.workspaces.map(w => w.id === id ? { ...w, directories: normalizeDirectories(directories), updatedAt: Date.now() } : w),
       }
     })
   }
@@ -212,6 +231,26 @@ export class WorkspaceCombinerStore {
     })
   }
 
+  /** 局部更新工作空间级元信息（置顶 / 颜色 / token 预算）；未提供的字段保持原值。 */
+  async patchMeta(id: string, patch: { pinned?: boolean; color?: string; tokenBudget?: number }): Promise<void> {
+    await this.ready
+    await this.mutate(() => {
+      if (!this.shape.workspaces.some(w => w.id === id)) return
+      this.shape = {
+        ...this.shape,
+        workspaces: this.shape.workspaces.map(w => w.id === id
+          ? {
+              ...w,
+              ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
+              ...(patch.color !== undefined ? { color: patch.color } : {}),
+              ...(patch.tokenBudget !== undefined ? { tokenBudget: Math.max(1, Math.round(patch.tokenBudget)) } : {}),
+              updatedAt: Date.now(),
+            }
+          : w),
+      }
+    })
+  }
+
   /** 保存当前目录配置为一个命名快照。 */
   async saveSnapshot(id: string, name: string): Promise<void> {
     await this.ready
@@ -235,7 +274,7 @@ export class WorkspaceCombinerStore {
       if (ws === undefined || snapshot === undefined) return
       this.shape = {
         ...this.shape,
-        workspaces: this.shape.workspaces.map(w => w.id === id ? { ...w, directories: [...snapshot.directories], updatedAt: Date.now() } : w),
+        workspaces: this.shape.workspaces.map(w => w.id === id ? { ...w, directories: normalizeDirectories(snapshot.directories), updatedAt: Date.now() } : w),
       }
     })
   }
@@ -278,7 +317,7 @@ export class WorkspaceCombinerStore {
           const dirs = Array.isArray(record.selection)
             ? record.selection.map(parseRef).filter((r): r is WorkspaceRef => r !== undefined)
             : []
-          const ws = makeDefaultWorkspace(dirs)
+          const ws = makeDefaultWorkspace(normalizeDirectories(dirs))
           this.shape = { version: 2, currentWorkspaceId: ws.id, workspaces: [ws] }
         } else {
           const workspaces = Array.isArray(record.workspaces)
