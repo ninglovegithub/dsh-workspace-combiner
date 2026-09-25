@@ -5,6 +5,25 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-09-25
+
+### Added — `@`-command dynamic scope (layer 4)
+
+A `# @指令 · 动态范围` prompt section teaches the model to resolve `@`-prefixed tokens
+as explicitly referenced paths across the multi-root workspace: `@absolute/path` or
+`@relative/to-a-workspace-root`. A trailing `/` scopes to a directory tree, a bare path
+means "read it first" (never claim inspection before reading), and `@"path with spaces"`
+quotes paths with spaces. Referenced paths take priority; anything outside the injected
+file index is still readable because sandbox reads are unrestricted.
+
+### Research
+
+- 0b (input-box hook): DSH exposes an @file / @session / /command trigger pipeline via
+  ctx.fileReferences and ctx.commandUi. The built-in local @file provider is rooted at
+  the session cwd (single root), so cross-root completion needs a custom provider; the
+  prompt-level @指令 section covers cross-root dynamic scope today.
+- 0c (tokenizer): landed in 0.2.0 (estimateTokens in contextStats.ts).
+
 ## [0.2.0] - 2026-09-25
 
 ### Added — Context-control roadmap (workspace layer)

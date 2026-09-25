@@ -19,9 +19,9 @@ context-control** model:
 2. **Config layer** — `anchor` / `single` workspace mode plus optional group tags.
 3. **Load-mode layer** — `full` / `summary` / `tree` controlling how much file detail is
    injected.
-4. **Command layer** — `@`-command dynamic scope (on the roadmap).
+4. **Command layer** — `@`-command dynamic scope.
 
-Layers 1-3 ship today; see [Changelog](./CHANGELOG.md).
+Layers 1-4 ship today; see [Changelog](./CHANGELOG.md).
 
 ---
 
@@ -46,6 +46,9 @@ Layers 1-3 ship today; see [Changelog](./CHANGELOG.md).
   cache; a per-workspace load mode controls injected detail.
 - **Context monitor** — a panel card with per-directory file counts and an estimated
   token budget, so you can tune the load mode and watch context shrink.
+- **@-command dynamic scope** — a prompt section teaches the model to resolve `@`-prefixed
+  tokens as explicitly referenced paths across all workspace roots (`@dir/`, `@file`,
+  `@"path with spaces"`), pulling files into scope on demand.
 - **Sandbox sync** — read-write directories are pushed into
   `sandbox-extra-roots` `extraWritableRoots` (hot reload with a file-write fallback).
 
@@ -161,6 +164,13 @@ Current session loads【2】project directories:
   12 files / 3 dirs
 【example-backend】/abs/path
   210 files / 42 dirs
+
+# @-command · dynamic scope
+- Tokens prefixed with @ are explicitly referenced paths: @absolute/path or @relative/to-a-workspace-root
+- A trailing slash marks a directory: list its tree when its contents matter
+- Otherwise it is a file: read it first, never claim inspection before reading
+- @"path with spaces" quotes a path containing spaces
+- @-referenced files/dirs take priority; paths outside the file index are still readable (sandbox reads are unrestricted)
 
 Development rules:
 1. Read/write files and view code must use full absolute paths — no relative paths
