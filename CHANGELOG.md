@@ -9,7 +9,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added — `@`-command dynamic scope (layer 4)
 
-A `# @指令 · 动态范围` prompt section teaches the model to resolve `@`-prefixed tokens
+A `# @-command dynamic scope` prompt section teaches the model to resolve `@`-prefixed tokens
 as explicitly referenced paths across the multi-root workspace: `@absolute/path` or
 `@relative/to-a-workspace-root`. A trailing `/` scopes to a directory tree, a bare path
 means "read it first" (never claim inspection before reading), and `@"path with spaces"`
@@ -21,7 +21,7 @@ file index is still readable because sandbox reads are unrestricted.
 - 0b (input-box hook): DSH exposes an @file / @session / /command trigger pipeline via
   ctx.fileReferences and ctx.commandUi. The built-in local @file provider is rooted at
   the session cwd (single root), so cross-root completion needs a custom provider; the
-  prompt-level @指令 section covers cross-root dynamic scope today.
+  prompt-level @-command section covers cross-root dynamic scope today.
 - 0c (tokenizer): landed in 0.2.0 (estimateTokens in contextStats.ts).
 
 ## [0.2.0] - 2026-09-25
@@ -39,7 +39,7 @@ next.
 2. **Workspace mode.** `anchor` (primary = docs/anchor folder) vs `single` (primary =
    core business code), switching the role labels emitted into the system prompt.
 3. **Directory grouping.** Optional group tags (docs / backend / frontend / reference /
-   other) rendered as `【组名】` sub-headers in the prompt.
+   other) rendered as `[group]` sub-headers in the prompt.
 4. **Workspace snapshots.** One-click save / restore / delete of a workspace's directory
    configuration (order + access + group). Restore re-syncs the sandbox writable roots
    immediately.
@@ -55,7 +55,7 @@ next.
 
 ### Changed
 
-- The system prompt now emits the directory list plus an optional `# 文件索引` (file
+- The system prompt now emits the directory list plus an optional `# File index` (file
   index) section, ordered after the directory list and before the hardening rules.
 
 ### Fixed

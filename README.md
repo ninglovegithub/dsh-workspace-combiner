@@ -99,7 +99,7 @@ dsh-workspace-combiner/
                                         ▼
               systemPrompt.section(text fn renders per session)
                                         ▼
-       injects "# 多工作区联合开发模式生效" + directory list + file index
+       injects "# Multi-workspace joint development mode active" + directory list + file index
 ~~~
 
 On directory changes the host also calls `sandbox-extra-roots`
@@ -154,18 +154,18 @@ Update after changing source: `pnpm build`, then remove and re-add the plugin.
 
 ~~~text
 # Multi-workspace joint development mode active
-Current session loads【2】project directories:
-1.example-anchor【Primary · Workspace anchor (docs/non-code area)】absolute path: /abs/path
-【Backend】
-2.example-backend【Code project】absolute path: /abs/path
+Current session loads[2]project directories:
+1.example-anchor[Primary: Workspace anchor (docs/non-code area)]absolute path: /abs/path
+[Backend]
+2.example-backend[Code project]absolute path: /abs/path
 
 # File index (load mode: summary)
-【example-anchor】/abs/path
+[example-anchor]/abs/path
   12 files / 3 dirs
-【example-backend】/abs/path
+[example-backend]/abs/path
   210 files / 42 dirs
 
-# @-command · dynamic scope
+# @-command dynamic scope
 - Tokens prefixed with @ are explicitly referenced paths: @absolute/path or @relative/to-a-workspace-root
 - A trailing slash marks a directory: list its tree when its contents matter
 - Otherwise it is a file: read it first, never claim inspection before reading
