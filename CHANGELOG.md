@@ -5,32 +5,12 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - 2026-09-25
-
-### Added — `@`-command dynamic scope (layer 4)
-
-A `# @-command dynamic scope` prompt section teaches the model to resolve `@`-prefixed tokens
-as explicitly referenced paths across the multi-root workspace: `@absolute/path` or
-`@relative/to-a-workspace-root`. A trailing `/` scopes to a directory tree, a bare path
-means "read it first" (never claim inspection before reading), and `@"path with spaces"`
-quotes paths with spaces. Referenced paths take priority; anything outside the injected
-file index is still readable because sandbox reads are unrestricted.
-
-### Research
-
-- 0b (input-box hook): DSH exposes an @file / @session / /command trigger pipeline via
-  ctx.fileReferences and ctx.commandUi. The built-in local @file provider is rooted at
-  the session cwd (single root), so cross-root completion needs a custom provider; the
-  prompt-level @-command section covers cross-root dynamic scope today.
-- 0c (tokenizer): landed in 0.2.0 (estimateTokens in contextStats.ts).
-
 ## [0.2.0] - 2026-09-25
 
 ### Added — Context-control roadmap (workspace layer)
 
 A four-layer context-control model so that injecting several repositories no longer
-blows up the model context. Layers 1-3 ship in this release; layer 4 (@-commands) is
-next.
+blows up the model context.
 
 1. **Directory tri-state access.** Every code-project directory gets a `readwrite` /
    `readonly` / `disabled` access level. `readonly` keeps the absolute path in the
@@ -52,6 +32,20 @@ next.
 7. **Context-monitor panel.** A `contextStats` endpoint plus a client card showing
    per-directory file counts and an estimated token budget (lightweight CJK-aware
    tokenizer) with a manual refresh.
+8. **@-command dynamic scope.** A `# @-command dynamic scope` prompt section teaches the model to resolve `@`-prefixed tokens
+   as explicitly referenced paths across the multi-root workspace: `@absolute/path` or
+   `@relative/to-a-workspace-root`. A trailing `/` scopes to a directory tree, a bare path
+   means "read it first" (never claim inspection before reading), and `@"path with spaces"`
+   quotes paths with spaces. Referenced paths take priority; anything outside the injected
+   file index is still readable because sandbox reads are unrestricted.
+
+### Research
+
+- 0b (input-box hook): DSH exposes an @file / @session / /command trigger pipeline via
+  ctx.fileReferences and ctx.commandUi. The built-in local @file provider is rooted at
+  the session cwd (single root), so cross-root completion needs a custom provider; the
+  prompt-level @-command section covers cross-root dynamic scope today.
+- 0c (tokenizer): landed in this release (estimateTokens in contextStats.ts).
 
 ### Changed
 
