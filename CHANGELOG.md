@@ -5,6 +5,46 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-26
+
+### Added — 功能/接口索引与上下文优化
+
+- **功能/接口索引（新）** — 宿主确定性抽取 HTTP 端点，并联结服务端注册处与前端调用处的「文件:行号」；覆盖 TS/JS/TSX/JSX/Vue 与 Java/Kotlin/Go/Python/Ruby/C#；端点归一化（花括号参数 / 美元花括号模板 / 冒号参数视为同一端点），并过滤 value/path/url 等通用属性名避免误联。
+- **索引可配置化** — 工作空间级 codeIndexEnabled / codeIndexBudget / codeIndexSummary；面板新增「功能/接口索引」卡片（开关、预算、摘要模式、筛选、点击复制 @功能名）。
+- **@功能名 展开协议** — prompt 的 @指令新增一条：@功能名 指功能索引里的名字，展开即读取该项列出的服务端/前端文件；该规则仅在实际存在索引时注入。
+- **AI 功能摘要（可选）** — codeIndexSummary=llm 时按功能签名生成一句话摘要；后台异步生成（不阻塞会话创建与首轮）、并发去重、失败静默降级。
+- **落盘持久化** — 功能索引与 AI 摘要分别落盘到 ~/.dsh/dsh-workspace-combiner-code-index.json 与 ~/.dsh/dsh-workspace-combiner-feature-summaries.json（原子写 0600、TTL），跨重启复用，避免重复扫描与重复花 token。
+
+### Changed — 上下文与 token 优化
+
+- 摘要计数改为**递归真实总数**（此前只数顶层，体量失真）。
+- 文件索引预算改为**按目录配额 + 余量回填**，避免大目录挤掉后续代码项目。
+- **低信号优先截断** — 测试 / 夹具 / 快照 / 锁文件 / 生成物排最后。
+- tokenBudget **真正生效**（此前仅展示）。
+- 同会话 **渲染结果缓存**，不再每个模型步重拼。
+- 默认忽略目录新增 .pnpm-store / .next / .nuxt / .turbo / .venv / __pycache__ / .gradle。
+
+### Changed — 性能
+
+- 建会话按目录**并行扫描**；文件树同级目录**有界并发**下钻。
+- 新增轻量 **/stat** 路由，目录失效检测不再构建整棵文件树。
+- **loadModeMaxDepth()** 统一深度映射；**/file-index** 接收 loadMode，预览与注入深度一致并复用缓存。
+- FileIndexCache 增加 30s TTL 兜底。
+
+### Changed — 面板 UI
+
+- 上下文预算卡压缩：卡片头单行、总览一行、统计卡「标题 + 数值」同一行、环形图缩小到 44。
+- 逐目录用量由**竖向柱状图**改为**横向可滚动条形图**。
+- 功能索引卡固定高度内滚动；预算卡滚动改用显式类名（修正原 :last-child 失效）。
+
+### Fixed
+
+- 功能索引 summary 模式漏标截断、注释 / 正则源码被误当端点、@功能名 规则在无索引时悬空。
+
+### Docs
+
+- 新增中文 README（README.zh.md），并与英文版互相链接。
+
 ## [0.3.0] - 2026-09-26
 
 ### Changed — client UI redesign (dark IDE aesthetic)

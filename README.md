@@ -1,5 +1,21 @@
 # dsh-workspace-combiner
 
+<p align="center">
+  <img src="./docs/images/hero.png" alt="Workspace Combiner — 全栈前后端，一个会话搞定" width="900">
+</p>
+
+<p align="center">
+  <em>Built for full-stack developers — bundle a frontend repo, a backend repo, and a docs
+  anchor into one AI session. Absolute paths injected, sandbox writable roots auto-synced,
+  API changes edited on both sides in the same conversation.</em>
+</p>
+
+<p align="center">
+  <a href="./README.zh.md">中文</a> · <strong>English</strong>
+</p>
+
+---
+
 A [Cordis](https://github.com/cordiverse/cordis) dual-face plugin for DSH (DeepSeek
 Harness) that turns a set of repositories into a coordinated **multi-workspace joint
 development** context.
@@ -155,6 +171,10 @@ Update after changing source: `pnpm build`, then remove and re-add the plugin.
 ---
 
 ## Usage
+
+<p align="center">
+  <img src="./docs/images/demo.gif" alt="Workspace Combiner demo — 新建工作区 → 勾选前端/后端/文档目录 → 一键新会话 → AI 同时改 frontend request 和 backend handler" width="880">
+</p>
 
 1. Open the **Workspace Combiner** tab in the sidebar.
 2. Pick a workspace from the list, or create one with the **New workspace** wizard

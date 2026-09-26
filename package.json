@@ -26,7 +26,8 @@
     "lib/**/*.d.ts.map",
     "src",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "README.zh.md"
   ],
   "dsh": {
     "host": "0.1.5-rc.2",
