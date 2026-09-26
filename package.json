@@ -1,7 +1,7 @@
 {
   "name": "dsh-workspace-combiner",
   "description": "DSH 工作区组合器：左侧边栏管理多工作空间，每个绑定一个主目录（工作区锚点/文档区）+ 若干代码项目；新建向导自动识别 Java/Vue/React/Python/Go 等项目并支持多选，新建会话在主目录打开，把所有项目绝对路径注入 system prompt，联动 @chaoset/sandbox-extra-roots 放开读写白名单。",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "engines": {
@@ -27,7 +27,8 @@
     "src",
     "cordis.patch.yml",
     "README.md",
-    "README.zh.md"
+    "README.zh.md",
+    "docs/**"
   ],
   "dsh": {
     "host": "0.1.5-rc.2",
