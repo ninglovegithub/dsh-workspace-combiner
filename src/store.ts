@@ -13,6 +13,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { emptyStore, type LoadMode, type StoreShape, type Workspace, type WorkspaceMode, type WorkspaceRef, type WorkspaceSnapshot } from './core/types.ts'
+import { parseWorkspaceRef } from './core/validate.ts'
 import { STORE_FILE } from './invariant.ts'
 
 /** 与 harness 的 DSH_HOME 约定一致：默认 ~/.dsh，可用 $DSH_HOME 覆盖。 */
@@ -24,24 +25,6 @@ export function dshHome(): string {
 /** 默认存储文件路径（测试可注入其它路径）。 */
 export function defaultStoreFile(): string {
   return join(dshHome(), STORE_FILE)
-}
-
-/** 校验并规范化一条 WorkspaceRef（目录项）。 */
-function parseRef(raw: unknown): WorkspaceRef | undefined {
-  if (raw === null || typeof raw !== 'object') return undefined
-  const ref = raw as Record<string, unknown>
-  if (typeof ref.id !== 'string' || typeof ref.name !== 'string' || typeof ref.path !== 'string') return undefined
-  return {
-    id: ref.id,
-    name: ref.name,
-    path: ref.path,
-    ...(typeof ref.projectType === 'string' ? { projectType: ref.projectType as WorkspaceRef['projectType'] } : {}),
-    ...(typeof ref.evidence === 'string' ? { evidence: ref.evidence } : {}),
-    ...(typeof ref.isPrimary === 'boolean' ? { isPrimary: ref.isPrimary } : {}),
-    ...(ref.access === 'readwrite' || ref.access === 'readonly' || ref.access === 'disabled' ? { access: ref.access } : {}),
-    ...(typeof ref.group === 'string' && ref.group !== '' ? { group: ref.group } : {}),
-    ...(typeof ref.note === 'string' && ref.note !== '' ? { note: ref.note } : {}),
-  }
 }
 
 /**
@@ -65,7 +48,7 @@ function parseSnapshot(raw: unknown): WorkspaceSnapshot | undefined {
   const s = raw as Record<string, unknown>
   if (typeof s.id !== 'string' || typeof s.name !== 'string') return undefined
   const dirs = Array.isArray(s.directories)
-    ? s.directories.map(parseRef).filter((r): r is WorkspaceRef => r !== undefined)
+    ? s.directories.map(parseWorkspaceRef).filter((r): r is WorkspaceRef => r !== undefined)
     : []
   return { id: s.id, name: s.name, directories: dirs, createdAt: typeof s.createdAt === 'number' ? s.createdAt : Date.now() }
 }
@@ -76,7 +59,7 @@ function parseWorkspace(raw: unknown): Workspace | undefined {
   const ws = raw as Record<string, unknown>
   if (typeof ws.id !== 'string' || typeof ws.name !== 'string') return undefined
   const dirs = Array.isArray(ws.directories)
-    ? ws.directories.map(parseRef).filter((r): r is WorkspaceRef => r !== undefined)
+    ? ws.directories.map(parseWorkspaceRef).filter((r): r is WorkspaceRef => r !== undefined)
     : []
   return {
     id: ws.id,
@@ -92,6 +75,9 @@ function parseWorkspace(raw: unknown): Workspace | undefined {
     ...(typeof ws.tokenBudget === 'number' && Number.isFinite(ws.tokenBudget) && ws.tokenBudget > 0 ? { tokenBudget: Math.round(ws.tokenBudget) } : {}),
     ...(typeof ws.pinned === 'boolean' ? { pinned: ws.pinned } : {}),
     ...(typeof ws.color === 'string' && ws.color !== '' ? { color: ws.color } : {}),
+    ...(typeof ws.codeIndexEnabled === 'boolean' ? { codeIndexEnabled: ws.codeIndexEnabled } : {}),
+    ...(typeof ws.codeIndexBudget === 'number' && Number.isFinite(ws.codeIndexBudget) && ws.codeIndexBudget > 0 ? { codeIndexBudget: Math.round(ws.codeIndexBudget) } : {}),
+    ...(ws.codeIndexSummary === 'off' || ws.codeIndexSummary === 'llm' ? { codeIndexSummary: ws.codeIndexSummary } : {}),
   }
 }
 
@@ -231,8 +217,8 @@ export class WorkspaceCombinerStore {
     })
   }
 
-  /** 局部更新工作空间级元信息（置顶 / 颜色 / token 预算）；未提供的字段保持原值。 */
-  async patchMeta(id: string, patch: { pinned?: boolean; color?: string; tokenBudget?: number }): Promise<void> {
+  /** 局部更新工作空间级元信息（置顶 / 颜色 / token 预算 / 功能索引配置）；未提供的字段保持原值。 */
+  async patchMeta(id: string, patch: { pinned?: boolean; color?: string; tokenBudget?: number; codeIndexEnabled?: boolean; codeIndexBudget?: number; codeIndexSummary?: 'off' | 'llm' }): Promise<void> {
     await this.ready
     await this.mutate(() => {
       if (!this.shape.workspaces.some(w => w.id === id)) return
@@ -244,6 +230,9 @@ export class WorkspaceCombinerStore {
               ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
               ...(patch.color !== undefined ? { color: patch.color } : {}),
               ...(patch.tokenBudget !== undefined ? { tokenBudget: Math.max(1, Math.round(patch.tokenBudget)) } : {}),
+              ...(patch.codeIndexEnabled !== undefined ? { codeIndexEnabled: patch.codeIndexEnabled } : {}),
+              ...(patch.codeIndexBudget !== undefined ? { codeIndexBudget: Math.max(1, Math.round(patch.codeIndexBudget)) } : {}),
+              ...(patch.codeIndexSummary !== undefined ? { codeIndexSummary: patch.codeIndexSummary } : {}),
               updatedAt: Date.now(),
             }
           : w),
@@ -315,7 +304,7 @@ export class WorkspaceCombinerStore {
         if (record.version === 1 || Array.isArray(record.selection)) {
           // v1 -> v2：旧的全局 selection 迁入一个默认工作空间。
           const dirs = Array.isArray(record.selection)
-            ? record.selection.map(parseRef).filter((r): r is WorkspaceRef => r !== undefined)
+            ? record.selection.map(parseWorkspaceRef).filter((r): r is WorkspaceRef => r !== undefined)
             : []
           const ws = makeDefaultWorkspace(normalizeDirectories(dirs))
           this.shape = { version: 2, currentWorkspaceId: ws.id, workspaces: [ws] }

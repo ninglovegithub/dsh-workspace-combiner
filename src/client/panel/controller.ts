@@ -6,14 +6,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { WorkspaceCombinerApi } from '../api.ts'
-import type { ContextStats, DirectoryAccess, GitStatus, LoadMode, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceSnapshot } from '../../core/types.ts'
-import type { FileTreeNode } from '../../host/fileIndex.ts'
+import type { CodeIndexEntry, ContextStats, DirectoryAccess, GitStatus, LoadMode, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceSnapshot } from '../../core/types.ts'
+import type { FileTreeNode } from '../../core/fileTree.ts'
+import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_TOKEN_BUDGET } from '../../invariant.ts'
 import { renderMultiWorkspacePrompt } from '../../prompt.ts'
 import { tt } from '../locales.ts'
 import { checkWorkspaceNameDuplicate, sanitizeWorkspaceName } from './naming.ts'
 
-/** token 预算默认上限。 */
-export const DEFAULT_TOKEN_BUDGET = 60000
+/** token 预算默认上限（与宿主机注入 prompt 使用同一常量）。 */
+export { DEFAULT_TOKEN_BUDGET }
 
 
 /**
@@ -41,10 +42,16 @@ export interface Toast {
   kind: 'ok' | 'error'
 }
 
-/** 预览用的单目录文件树。 */
+/** 预览用的单目录文件索引条目（计数 + 文件树）。 */
 export interface PreviewFileTree {
   name: string
   path: string
+  /** 递归总文件数（api.fileIndex 返回）。 */
+  files: number
+  /** 递归总子目录数。 */
+  dirs: number
+  /** 计数达到扫描上限（数字为下界）。 */
+  truncated?: boolean
   tree: FileTreeNode[]
 }
 
@@ -81,6 +88,17 @@ export interface WorkspaceCombinerState {
   previewLoading: boolean
   /** 预览：注入 prompt 文本（实时派生）。 */
   previewText: string
+  /** 当前工作空间的功能/接口索引（异步拉取 code-index）。 */
+  codeEntries: readonly CodeIndexEntry[]
+  /** 功能索引是否注入（工作空间级）。 */
+  codeIndexEnabled: boolean
+  /** 功能索引 token 预算。 */
+  codeIndexBudget: number
+  /** 功能摘要模式。 */
+  codeIndexSummary: 'off' | 'llm'
+  setCodeIndexEnabled(enabled: boolean): void
+  setCodeIndexBudget(value: number): void
+  setCodeIndexSummary(mode: 'off' | 'llm'): void
   /** 当前工作空间的会话占用数（props 注入；缺省 0）。 */
   sessionCount: number
   setManualPath(path: string): void
@@ -153,6 +171,7 @@ export function useWorkspaceCombiner(
   const [contextStats, setContextStats] = useState<ContextStats | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewTrees, setPreviewTrees] = useState<readonly PreviewFileTree[]>([])
+  const [codeEntries, setCodeEntries] = useState<readonly CodeIndexEntry[]>([])
   const [previewLoading, setPreviewLoading] = useState(false)
   const [budgetOverride, setBudgetOverride] = useState<number | null>(null)
   const currentWsIdRef = useRef('')
@@ -176,9 +195,6 @@ export function useWorkspaceCombiner(
       .catch(() => setContextStats(null))
   }, [])
 
-  // 工作空间/目录变化后自动刷新上下文统计。
-  useEffect(() => { refreshContextStats() }, [refreshContextStats, workspaces, currentWorkspaceId])
-
   // 水合。
   useEffect(() => {
     const api = apiRef.current
@@ -196,6 +212,9 @@ export function useWorkspaceCombiner(
     () => workspaces.find(w => w.id === currentWorkspaceId)?.directories ?? [],
     [workspaces, currentWorkspaceId],
   )
+  // 副作用读取最新目录用 ref，避免把 dirs 身份纳入依赖（改只读/分组/备注时不触发全量轮询）。
+  const dirsRef = useRef<readonly WorkspaceRef[]>(dirs)
+  dirsRef.current = dirs
   const snapshots = useMemo<readonly WorkspaceSnapshot[]>(
     () => workspaces.find(w => w.id === currentWorkspaceId)?.snapshots ?? [],
     [workspaces, currentWorkspaceId],
@@ -218,6 +237,31 @@ export function useWorkspaceCombiner(
   }, [sortedWorkspaces, search])
 
   const tokenBudget = budgetOverride ?? currentWorkspace?.tokenBudget ?? DEFAULT_TOKEN_BUDGET
+
+  // 上下文统计只受「目录集合 + 访问模式 + 加载模式」影响；改备注/分组/置顶/颜色时不重复扫描。
+  const contextStatsKey = useMemo(
+    () => dirs.map(d => d.path + ':' + (d.access ?? 'readwrite')).join('\n')
+      + '|' + (currentWorkspace?.mode ?? 'anchor')
+      + '|' + (currentWorkspace?.loadMode ?? 'summary'),
+    [dirs, currentWorkspace],
+  )
+  useEffect(() => { refreshContextStats() }, [refreshContextStats, contextStatsKey])
+
+  const codeIndexEnabled = currentWorkspace?.codeIndexEnabled ?? true
+  const codeIndexBudget = currentWorkspace?.codeIndexBudget ?? DEFAULT_CODE_INDEX_BUDGET
+  const codeIndexSummary = currentWorkspace?.codeIndexSummary ?? 'off'
+
+  // 功能/接口索引：目录或配置变化时重新拉取；关闭时清空（不注入也不显示）。
+  useEffect(() => {
+    const api = apiRef.current
+    if (api === null) return
+    if (!codeIndexEnabled) { setCodeEntries([]); return }
+    let cancelled = false
+    void api.codeIndex()
+      .then(list => { if (!cancelled) setCodeEntries(list) })
+      .catch(() => { if (!cancelled) setCodeEntries([]) })
+    return () => { cancelled = true }
+  }, [contextStatsKey, codeIndexEnabled, codeIndexSummary])
 
   // 覆盖当前工作空间目录并持久化 + 联动 DSH 工作区 + 沙盒。
   const applyDirs = useCallback((next: readonly WorkspaceRef[]): void => {
@@ -414,6 +458,20 @@ export function useWorkspaceCombiner(
     void api.patchWorkspace(id, { tokenBudget: next }).catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
   }, [showToast])
 
+  // 功能索引配置（乐观即时生效 + 持久化）。
+  const patchCodeIndex = useCallback((patch: { codeIndexEnabled?: boolean; codeIndexBudget?: number; codeIndexSummary?: 'off' | 'llm' }): void => {
+    const id = currentWsIdRef.current
+    const api = apiRef.current
+    if (api === null || id === '') return
+    setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, ...patch, updatedAt: Date.now() } : w))
+    void api.patchWorkspace(id, patch).catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+  }, [showToast])
+  const setCodeIndexEnabled = useCallback((enabled: boolean): void => { patchCodeIndex({ codeIndexEnabled: enabled }) }, [patchCodeIndex])
+  const setCodeIndexBudget = useCallback((value: number): void => {
+    patchCodeIndex({ codeIndexBudget: Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_CODE_INDEX_BUDGET })
+  }, [patchCodeIndex])
+  const setCodeIndexSummary = useCallback((mode: 'off' | 'llm'): void => { patchCodeIndex({ codeIndexSummary: mode }) }, [patchCodeIndex])
+
   // 保存当前目录配置为快照。
   const saveSnapshot = useCallback((): void => {
     const name = snapshotName.trim()
@@ -475,7 +533,7 @@ export function useWorkspaceCombiner(
   const refreshGitStatuses = useCallback((): void => {
     const api = apiRef.current
     if (api === null) return
-    const paths = dirs.map(d => d.path)
+    const paths = dirsRef.current.map(d => d.path)
     void Promise.all(paths.map(async p => {
       try {
         return await api.gitStatus(p)
@@ -487,46 +545,49 @@ export function useWorkspaceCombiner(
       paths.forEach((p, i) => { next[p] = statuses[i] })
       setGitStatuses(next)
     }).catch(() => {})
-  }, [dirs])
+  }, [])
 
   // 目录变化（含切换工作空间）时重新拉取 git 状态。
   useEffect(() => { refreshGitStatuses() }, [dirsKey, refreshGitStatuses])
 
-  // ---------------- 目录失效检测（复用 file-index 路由） ----------------
+  // ---------------- 目录失效检测（轻量 stat，不构建文件树） ----------------
   useEffect(() => {
     const api = apiRef.current
-    if (api === null || dirs.length === 0) { setMissingDirs(new Set()); return }
+    const paths = dirsRef.current.map(d => d.path)
+    if (api === null || paths.length === 0) { setMissingDirs(new Set()); return }
     let cancelled = false
-    void Promise.all(dirs.map(async d => {
+    void Promise.all(paths.map(async p => {
       try {
-        // 路径存在时 fileIndex 正常返回（即使空目录 files+dirs=0 也不算缺失）；
-        // 路径不存在时 fileIndex 路由抛错，catch 判定为缺失。
-        await api.fileIndex(d.path)
-        return true
+        // stat 只探测存在性；目录不存在/不是目录都算失效。
+        const info = await api.stat(p)
+        return info.exists && info.isDirectory
       } catch {
         return false
       }
     })).then(flags => {
       if (cancelled) return
       const missing = new Set<string>()
-      flags.forEach((ok, i) => { if (!ok) missing.add(dirs[i].path) })
+      flags.forEach((ok, i) => { if (!ok) missing.add(paths[i]) })
       setMissingDirs(missing)
     }).catch(() => {})
     return () => { cancelled = true }
-  }, [dirsKey, dirs])
+  }, [dirsKey])
 
   // ---------------- 注入 prompt 预览（实时派生） ----------------
+  // 预览用当前工作空间的加载模式取树，保证与真正注入的深度一致。
+  const previewLoadMode: LoadMode = currentWorkspace?.loadMode ?? 'summary'
   useEffect(() => {
     const api = apiRef.current
-    if (api === null || !previewOpen || dirs.length === 0) { setPreviewTrees([]); return }
+    const current = dirsRef.current
+    if (api === null || !previewOpen || current.length === 0) { setPreviewTrees([]); return }
     let cancelled = false
     setPreviewLoading(true)
-    void Promise.all(dirs.map(async d => {
+    void Promise.all(current.map(async d => {
       try {
-        const r = await api.fileIndex(d.path)
-        return { name: d.name, path: d.path, tree: r.tree } as PreviewFileTree
+        const r = await api.fileIndex(d.path, previewLoadMode)
+        return { name: d.name, path: d.path, files: r.files, dirs: r.dirs, ...(r.truncated ? { truncated: true } : {}), tree: r.tree } as PreviewFileTree
       } catch {
-        return { name: d.name, path: d.path, tree: [] } as PreviewFileTree
+        return { name: d.name, path: d.path, files: 0, dirs: 0, tree: [] } as PreviewFileTree
       }
     })).then(list => {
       if (cancelled) return
@@ -534,13 +595,13 @@ export function useWorkspaceCombiner(
       setPreviewLoading(false)
     }).catch(() => { if (!cancelled) setPreviewLoading(false) })
     return () => { cancelled = true }
-  }, [previewOpen, dirsKey, dirs])
+  }, [previewOpen, dirsKey, previewLoadMode])
 
   const previewText = useMemo(() => {
     const mode = currentWorkspace?.mode ?? 'anchor'
     const loadMode = currentWorkspace?.loadMode ?? 'summary'
-    return renderMultiWorkspacePrompt(dirs, mode, loadMode, previewTrees)
-  }, [dirs, currentWorkspace, previewTrees])
+    return renderMultiWorkspacePrompt(dirs, mode, loadMode, previewTrees, tokenBudget, codeIndexEnabled ? codeEntries : [], codeIndexBudget)
+  }, [dirs, currentWorkspace, previewTrees, tokenBudget, codeEntries, codeIndexEnabled, codeIndexBudget])
 
   const copyPreview = useCallback((): void => {
     if (previewText === '') return
@@ -583,6 +644,13 @@ export function useWorkspaceCombiner(
     tokenBudget,
     previewOpen,
     previewTrees,
+    codeEntries,
+    codeIndexEnabled,
+    codeIndexBudget,
+    codeIndexSummary,
+    setCodeIndexEnabled,
+    setCodeIndexBudget,
+    setCodeIndexSummary,
     previewLoading,
     previewText,
     sessionCount,

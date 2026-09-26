@@ -7,14 +7,11 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 
-/** 文件树节点。 */
-export interface FileTreeNode {
-  name: string
-  /** 相对根目录的路径（用 '/' 分隔）。 */
-  path: string
-  type: 'file' | 'dir'
-  children?: FileTreeNode[]
-}
+import type { FileTreeNode } from '../core/fileTree.ts'
+
+// 纯类型与渲染/统计工具已下沉到平台无关的 core/fileTree.ts；这里转发以兼容既有导入。
+export { countNodes, renderTree } from '../core/fileTree.ts'
+export type { FileTreeNode } from '../core/fileTree.ts'
 
 /** 扫描选项。 */
 export interface FileIndexOptions {
@@ -24,8 +21,11 @@ export interface FileIndexOptions {
   maxFiles?: number
 }
 
-/** 内置默认忽略（gitignore 之外兜底）。 */
-const DEFAULT_IGNORES = ['.git', 'node_modules', 'dist', 'build', 'coverage', '.DS_Store']
+/** 内置默认忽略（gitignore 之外兜底）：VCS、依赖、构建产物与常见工具缓存。 */
+const DEFAULT_IGNORES = [
+  '.git', 'node_modules', 'dist', 'build', 'coverage', '.DS_Store',
+  '.pnpm-store', '.next', '.nuxt', '.turbo', '.venv', '__pycache__', '.gradle',
+]
 
 /** 需要转义的正则特殊字符。 */
 const REGEX_SPECIALS = new Set(['.', '+', '^', '$', '(', ')', '[', ']', '{', '}', '|', '\\'])
@@ -90,13 +90,31 @@ export function isIgnored(relPath: string, isDir: boolean, patterns: RegExp[]): 
   return false
 }
 
-/** 读取 root/.gitignore（缺失返回空）。 */
-async function loadGitignore(root: string): Promise<RegExp[]> {
+/** 读取 root/.gitignore（缺失返回空）。同时供代码索引复用同一套忽略规则。 */
+export async function loadGitignore(root: string): Promise<RegExp[]> {
   try {
     return parseGitignore(await readFile(join(root, '.gitignore'), 'utf8'))
   } catch {
     return []
   }
+}
+
+/** 同级目录并发度（防止宽目录一次打开过多 fd）。 */
+const DIR_CONCURRENCY = 8
+
+/** 有界并发映射（保序），用于同级目录并行下钻。 */
+async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = next++
+      if (index >= items.length) return
+      results[index] = await fn(items[index])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker))
+  return results
 }
 
 /** 有界递归扫描，构建文件树（过滤 gitignore + 默认忽略）。 */
@@ -116,54 +134,64 @@ export async function buildFileTree(root: string, options: FileIndexOptions = {}
     }
     entries.sort((a, b) => a.name.localeCompare(b.name))
     const nodes: FileTreeNode[] = []
+    const subdirs: { name: string; rel: string }[] = []
     for (const ent of entries) {
       if (fileCount >= maxFiles) break
       const rel = relative(root, join(dir, ent.name)).split(sep).join('/')
       if (isIgnored(rel, ent.isDirectory(), patterns)) continue
-      if (ent.isDirectory()) {
-        const children = await walk(join(dir, ent.name), depth + 1)
-        nodes.push({ name: ent.name, path: rel, type: 'dir', children })
-      } else {
+      if (ent.isDirectory()) subdirs.push({ name: ent.name, rel })
+      else {
         fileCount++
         nodes.push({ name: ent.name, path: rel, type: 'file' })
       }
     }
+    // 同级目录并行下钻（保序），避免深/宽目录串行等待。
+    const children = await mapLimit(subdirs, DIR_CONCURRENCY, async sub => ({ name: sub.name, rel: sub.rel, nodes: await walk(join(dir, sub.name), depth + 1) }))
+    for (const child of children) nodes.push({ name: child.name, path: child.rel, type: 'dir', children: child.nodes })
     return nodes
   }
 
   return await walk(root, 1)
 }
 
-/** 统计文件树中的文件/目录数。 */
-export function countNodes(nodes: readonly FileTreeNode[]): { files: number; dirs: number } {
+/**
+ * 递归计数（不建树）：gitignore + 默认忽略，供摘要与监控显示真实体量。
+ * 与 buildFileTree 不同，这里不受 maxDepth 限制，只受 maxFiles 上限保护。
+ */
+export async function countTree(root: string, options: { maxFiles?: number } = {}): Promise<{ files: number; dirs: number; truncated: boolean }> {
+  const maxFiles = options.maxFiles ?? 20000
+  const patterns = await loadGitignore(root)
   let files = 0
   let dirs = 0
-  const visit = (list: readonly FileTreeNode[]): void => {
-    for (const n of list) {
-      if (n.type === 'file') files++
-      else {
-        dirs++
-        if (n.children !== undefined) visit(n.children)
-      }
+  let truncated = false
+  const walk = async (dir: string): Promise<void> => {
+    if (files >= maxFiles) { truncated = true; return }
+    let entries
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      return
     }
+    const subdirs: string[] = []
+    for (const ent of entries) {
+      if (files >= maxFiles) { truncated = true; return }
+      const rel = relative(root, join(dir, ent.name)).split(sep).join('/')
+      if (isIgnored(rel, ent.isDirectory(), patterns)) continue
+      if (ent.isDirectory()) { dirs++; subdirs.push(join(dir, ent.name)) }
+      else files++
+    }
+    await mapLimit(subdirs, DIR_CONCURRENCY, async sub => { await walk(sub) })
   }
-  visit(nodes)
-  return { files, dirs }
+  await walk(root)
+  return { files, dirs, truncated }
 }
 
-/** 把文件树渲染成缩进文本（目录树加载模式使用）。 */
-export function renderTree(nodes: readonly FileTreeNode[], indent = ''): string {
-  const lines: string[] = []
-  for (const n of nodes) {
-    lines.push(indent + n.name + (n.type === 'dir' ? '/' : ''))
-    if (n.type === 'dir' && n.children !== undefined) lines.push(renderTree(n.children, indent + '  '))
-  }
-  return lines.join('\n')
-}
-
-/** mtime 缓存：根目录 mtime 未变则复用上次索引。 */
+/** mtime + TTL 缓存：根目录 mtime 未变且未过期则复用上次索引。 */
 export class FileIndexCache {
-  private readonly cache = new Map<string, { mtime: number; tree: FileTreeNode[] }>()
+  /** 缓存有效期：深层增删不改根目录 mtime，用 TTL 兜住系统性陈旧。 */
+  private static readonly TTL_MS = 30_000
+  private readonly cache = new Map<string, { mtime: number; at: number; tree: FileTreeNode[] }>()
+  private readonly countCache = new Map<string, { mtime: number; at: number; value: { files: number; dirs: number; truncated: boolean } }>()
 
   async get(root: string, options?: FileIndexOptions): Promise<FileTreeNode[]> {
     const maxDepth = options?.maxDepth ?? 4
@@ -176,13 +204,31 @@ export class FileIndexCache {
       return []
     }
     const hit = this.cache.get(key)
-    if (hit !== undefined && hit.mtime === mtime) return hit.tree
+    if (hit !== undefined && hit.mtime === mtime && Date.now() - hit.at < FileIndexCache.TTL_MS) return hit.tree
     const tree = await buildFileTree(root, { maxDepth, maxFiles })
-    this.cache.set(key, { mtime, tree })
+    this.cache.set(key, { mtime, at: Date.now(), tree })
     return tree
+  }
+
+  /** 递归计数（走独立计数缓存，与文件树缓存互不干扰）。 */
+  async count(root: string, options?: { maxFiles?: number }): Promise<{ files: number; dirs: number; truncated: boolean }> {
+    const maxFiles = options?.maxFiles ?? 20000
+    const key = root + '#count#' + maxFiles
+    let mtime = 0
+    try {
+      mtime = (await stat(root)).mtimeMs
+    } catch {
+      return { files: 0, dirs: 0, truncated: false }
+    }
+    const hit = this.countCache.get(key)
+    if (hit !== undefined && hit.mtime === mtime && Date.now() - hit.at < FileIndexCache.TTL_MS) return hit.value
+    const value = await countTree(root, { maxFiles })
+    this.countCache.set(key, { mtime, at: Date.now(), value })
+    return value
   }
 
   clear(): void {
     this.cache.clear()
+    this.countCache.clear()
   }
 }

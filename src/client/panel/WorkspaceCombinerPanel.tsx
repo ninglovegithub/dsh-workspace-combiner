@@ -222,6 +222,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
   const [cmdkQuery, setCmdkQuery] = useState('')
   const [cmdkIndex, setCmdkIndex] = useState(0)
   const [editingNotePath, setEditingNotePath] = useState<string | null>(null)
+  const [ciQuery, setCiQuery] = useState('')
   // 右栏 项目目录 : 上下文预算 的高度比例（默认 6:4），可拖拽调整并持久化。
   const [splitRatio, setSplitRatio] = useState<number>(() => {
     if (typeof localStorage === 'undefined') return 0.6
@@ -306,6 +307,15 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
     if (q === '') return commands
     return commands.filter(c => c.label.toLowerCase().includes(q))
   }, [commands, cmdkQuery])
+
+  // 功能索引筛选（纯 UI；匹配功能名/端点/落点路径/摘要）。
+  const codeEntriesFiltered = useMemo(() => {
+    const q = ciQuery.trim().toLowerCase()
+    if (q === '') return state.codeEntries
+    return state.codeEntries.filter(entry => (
+      entry.feature + ' ' + entry.endpoint + ' ' + (entry.server?.file ?? '') + ' ' + (entry.client?.file ?? '') + ' ' + (entry.summary ?? '')
+    ).toLowerCase().includes(q))
+  }, [state.codeEntries, ciQuery])
 
   // ---------------- 全局快捷键 ----------------
   useEffect(() => {
@@ -714,7 +724,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
             <span className="wcb-splitter-grip" aria-hidden="true" />
           </div>
           {/* 上下文预算（环形图 + 统计卡片 / 分目录用量柱状图） */}
-          <section className="wcb-card" style={{ flex: (1 - splitRatio) + ' 1 0' }}>
+          <section className="wcb-card wcb-budget-card" style={{ flex: (1 - splitRatio) + ' 1 0' }}>
             <div className="wcb-card-head">
               {tt('budgetTitle')}
               <div className="wcb-head-actions">
@@ -737,11 +747,11 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                 {/* 左：环形图 + 总览 + 2x2统计卡片 */}
                 <div className="wcb-budget-left">
                   <div className="wcb-budget-overview">
-                    <Donut percentage={ratio} size={56} strokeWidth={5} color={ratio > 1 ? '#f85149' : ratio > 0.8 ? '#d4a017' : '#4f8cff'} />
-                    <div>
-                      <div className="wcb-budget-total">{kmTokens(total)}</div>
-                      <div className="wcb-budget-of">/ {kmTokens(budget)} token</div>
-                      {ratio <= 1 ? <div className="wcb-budget-remain">{tt('budgetRemain', { remain: kmTokens(Math.max(0, budget - total)) })}</div> : null}
+                    <Donut percentage={ratio} size={44} strokeWidth={4} color={ratio > 1 ? '#f85149' : ratio > 0.8 ? '#d4a017' : '#4f8cff'} />
+                    <div className="wcb-budget-figures">
+                      <span className="wcb-budget-total">{kmTokens(total)}</span>
+                      <span className="wcb-budget-of">/ {kmTokens(budget)} token</span>
+                      {ratio <= 1 ? <span className="wcb-budget-remain">{tt('budgetRemain', { remain: kmTokens(Math.max(0, budget - total)) })}</span> : null}
                     </div>
                   </div>
                   {ratio > 1 ? <div className="wcb-alert wcb-alert-over">{tt('budgetOver')}</div> : ratio > 0.8 ? <div className="wcb-alert">{tt('budgetWarn')}</div> : null}
@@ -769,23 +779,20 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                   <div className="wcb-dir-usage-title">{tt('dirUsageTitle')}</div>
                   {activeDirs.length === 0 ? <div className="wcb-hint">{tt('monitorLoading')}</div> : null}
                   {activeDirs.length > 0 ? (
-                    <div className="wcb-bars" role="img" aria-label={tt('dirUsageTitle')}>
-                      <div className="wcb-bars-grid" aria-hidden="true">
-                        {[0, 1, 2, 3].map(i => <div className="wcb-bars-gridline" key={i} />)}
-                      </div>
+                    <div className="wcb-bars" role="list" aria-label={tt('dirUsageTitle')}>
                       {activeDirs.map(d => {
                         const idx = state.dirs.findIndex(x => x.path === d.path)
                         const ref = state.dirs.find(x => x.path === d.path)
                         const color = dirColor(idx, ref?.group, ref?.projectType)
                         const pct = maxDirTokens > 0 ? d.tokens / maxDirTokens : 0
-                        const h = d.tokens > 0 ? Math.max(4, Math.round(pct * 100)) : 2
+                        const w = d.tokens > 0 ? Math.max(3, Math.round(pct * 100)) : 1
                         return (
-                          <div className="wcb-bar-col" key={d.path} title={d.name + ' · ' + d.tokens.toLocaleString() + ' ' + tt('monitorTokens')}>
-                            <span className="wcb-bar-val">{kmTokens(d.tokens)}</span>
-                            <div className="wcb-bar-track">
-                              <div className="wcb-bar-fill-v" style={{ height: h + '%', background: color }} />
-                            </div>
+                          <div className="wcb-bar-row" role="listitem" key={d.path} title={d.name + ' · ' + d.tokens.toLocaleString() + ' ' + tt('monitorTokens')}>
                             <span className="wcb-bar-name">{d.name}</span>
+                            <div className="wcb-bar-track-h">
+                              <div className="wcb-bar-fill-h" style={{ width: w + '%', background: color }} />
+                            </div>
+                            <span className="wcb-bar-val">{kmTokens(d.tokens)}</span>
                           </div>
                         )
                       })}
@@ -795,6 +802,55 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
               </div>
             )}
             <div className="wcb-hint" style={{ padding: '6px 12px 9px', borderTop: '1px solid var(--wcb-line)' }}>{tt('warning')}</div>
+          </section>
+
+          {/* 功能/接口索引：端点 ↔ 服务端 ↔ 前端（点击复制 @功能名） */}
+          <section className="wcb-card wcb-codeindex-card">
+            <div className="wcb-card-head">
+              {tt('codeIndexTitle')}
+              <div className="wcb-head-actions">
+                {state.codeIndexEnabled && state.codeEntries.length > 0 ? (
+                  <input className="wcb-search" value={ciQuery} placeholder={tt('codeIndexSearch')} aria-label={tt('codeIndexSearch')} onChange={(event: ChangeEvent<HTMLInputElement>) => setCiQuery(event.currentTarget.value)} />
+                ) : null}
+                <label className="wcb-label" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <input type="checkbox" checked={state.codeIndexEnabled} aria-label={tt('codeIndexToggle')} onChange={(event: ChangeEvent<HTMLInputElement>) => state.setCodeIndexEnabled(event.currentTarget.checked)} />
+                  {tt('codeIndexToggle')}
+                </label>
+                <span className="wcb-label" style={{ margin: 0 }}>{tt('codeIndexBudget')}</span>
+                <input className="wcb-budget-input" type="number" min={1} value={state.codeIndexBudget} disabled={!state.codeIndexEnabled} aria-label={tt('codeIndexBudget')} onChange={(event: ChangeEvent<HTMLInputElement>) => state.setCodeIndexBudget(Number(event.currentTarget.value))} />
+                <span className="wcb-label" style={{ margin: 0 }}>{tt('codeIndexSummaryLabel')}</span>
+                <select className="wcb-input" style={{ width: 'auto' }} value={state.codeIndexSummary} disabled={!state.codeIndexEnabled} aria-label={tt('codeIndexSummaryLabel')} onChange={(event: ChangeEvent<HTMLSelectElement>) => state.setCodeIndexSummary(event.currentTarget.value === 'llm' ? 'llm' : 'off')}>
+                  <option value="off">{tt('codeIndexSummaryOff')}</option>
+                  <option value="llm">{tt('codeIndexSummaryLlm')}</option>
+                </select>
+              </div>
+            </div>
+            <div className="wcb-card-body">
+              {(!state.codeIndexEnabled || state.codeEntries.length === 0 || codeEntriesFiltered.length === 0) ? (
+                <div className="wcb-hint">{tt('codeIndexEmpty')}</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {codeEntriesFiltered.map(entry => (
+                    <div
+                      key={entry.feature + '|' + entry.endpoint}
+                      role="button"
+                      tabIndex={0}
+                      title={tt('codeIndexCopy')}
+                      onClick={() => state.copyText('@' + entry.feature)}
+                      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); state.copyText('@' + entry.feature) } }}
+                      style={{ display: 'flex', gap: 6, alignItems: 'baseline', fontSize: 10, cursor: 'pointer', padding: '2px 5px', borderRadius: 4, background: 'var(--wcb-surface)' }}
+                    >
+                      <span style={{ color: 'var(--wcb-purple)', fontWeight: 600, flex: 'none' }}>{'@' + entry.feature}</span>
+                      <span style={{ color: 'var(--wcb-text2)', flex: 'none', fontFamily: 'var(--ds-font-family-code,monospace)' }}>{entry.endpoint}</span>
+                      {entry.server !== undefined ? <span style={{ color: 'var(--wcb-muted)', flex: 'none' }}>{tt('codeIndexServer') + ' ' + entry.server.file + ':' + entry.server.line}</span> : null}
+                      {entry.client !== undefined ? <span style={{ color: 'var(--wcb-muted)', flex: 'none' }}>{tt('codeIndexClient') + ' ' + entry.client.file + ':' + entry.client.line}</span> : null}
+                      {entry.summary !== undefined && entry.summary !== '' ? <span style={{ color: 'var(--wcb-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.summary}</span> : null}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="wcb-hint" style={{ marginTop: 5 }}>{tt('codeIndexHint')}{state.codeIndexSummary === 'llm' ? ' · ' + tt('codeIndexSummaryHint') : ''}</div>
+            </div>
           </section>
         </div>
       </div>

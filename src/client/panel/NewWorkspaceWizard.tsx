@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState, type ChangeEvent, type ReactElement } from 'react'
 import type { DetectedProject, WorkspaceMode, WorkspaceRef } from '../../core/types.ts'
+import { DEFAULT_WORKSPACE_NAME } from '../../invariant.ts'
 import { WorkspaceCombinerApi } from '../api.ts'
 import { tt } from '../locales.ts'
 import { TypeBadge } from './typeBadge.tsx'
@@ -81,7 +82,7 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
   const allChecked = projects.length > 0 && checked.size === projects.length
   const toggleAll = (): void => setChecked(allChecked ? new Set() : new Set(projects.map(p => p.root)))
 
-  const finalName = name.trim() === '' ? '未命名工作空间' : name.trim()
+  const finalName = name.trim() === '' ? DEFAULT_WORKSPACE_NAME : name.trim()
   const selected = projects.filter(p => checked.has(p.root))
   const buildSecondaryRefs = (): WorkspaceRef[] => selected.map(p => ({ id: p.root, name: p.name, path: p.root, projectType: p.type, evidence: p.evidence }))
 

@@ -42,8 +42,11 @@ async function detectType(dir: string, entries: string[]): Promise<ProjectType> 
   if (names.has('requirements.txt') || names.has('pyproject.toml') || names.has('setup.py')) return 'python'
   if (names.has('package.json')) {
     const deps = await readPackageDeps(dir)
+    // next 基于 react、webpack 常作为 vue/react 的构建依赖，按「更具体优先」判定。
+    if (deps.includes('next')) return 'frontend-next'
     if (deps.includes('vue')) return 'frontend-vue'
     if (deps.includes('react') || deps.includes('react-dom')) return 'frontend-react'
+    if (deps.includes('webpack')) return 'frontend-webpack'
     return 'frontend'
   }
   const codeCount = entries.filter(e => {

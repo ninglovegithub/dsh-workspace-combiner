@@ -3,44 +3,62 @@
  * @module dsh-workspace-combiner/host/contextStats
  */
 
-import type { ContextStats, DirectoryContextStat, LoadMode, WorkspaceMode, WorkspaceRef } from '../core/types.ts'
-import { countNodes, type FileIndexCache } from './fileIndex.ts'
+import { loadModeMaxDepth, type CodeIndexEntry, type ContextStats, type DirectoryContextStat, type LoadMode, type WorkspaceMode, type WorkspaceRef } from '../core/types.ts'
+import { estimateTokens, type FileIndexEntry } from '../core/fileTree.ts'
+import type { FileIndexCache } from './fileIndex.ts'
+import type { CodeIndexCache } from './codeIndex.ts'
 import { renderFileIndex, renderMultiWorkspacePrompt } from '../prompt.ts'
 
-/** 粗略 token 估算：CJK 字符约 1 字符≈1 token，其余约 4 字符≈1 token。 */
-export function estimateTokens(text: string): number {
-  let cjk = 0
-  let other = 0
-  for (const ch of text) {
-    const code = ch.charCodeAt(0)
-    if ((code >= 0x4e00 && code <= 0x9fff) || (code >= 0x3000 && code <= 0x303f) || (code >= 0xff00 && code <= 0xffef)) cjk++
-    else other++
-  }
-  return Math.ceil(cjk + other / 4)
+/** 功能索引在统计中的配置（与宿主注入保持一致）。 */
+export interface CodeIndexStatsConfig {
+  enabled: boolean
+  budget: number
+  /** 已生成的功能摘要（可选，命中签名才有）。 */
+  summaries?: Map<string, string>
 }
 
-/** 计算当前工作区的上下文统计（文件树走 mtime 缓存）。 */
+/**
+ * 计算当前工作区的上下文统计（文件树走 mtime 缓存）。
+ * @param tokenBudget - 与注入 prompt 使用同一预算，保证统计值与实际注入一致。
+ */
 export async function computeContextStats(
   directories: readonly WorkspaceRef[],
   mode: WorkspaceMode,
   loadMode: LoadMode,
   fileIndexCache: FileIndexCache,
+  tokenBudget = 0,
+  codeIndexCache?: CodeIndexCache,
+  codeConfig?: CodeIndexStatsConfig,
 ): Promise<ContextStats> {
-  const stats: DirectoryContextStat[] = []
-  let totalFiles = 0
-  let totalDirs = 0
-  let fileIndexTokens = 0
-  for (const dir of directories) {
-    const access = dir.access ?? 'readwrite'
-    if (access === 'disabled') continue
-    const tree = await fileIndexCache.get(dir.path, { maxDepth: loadMode === 'full' ? 4 : loadMode === 'tree' ? 3 : 1 })
-    const { files, dirs } = countNodes(tree)
-    const tokens = estimateTokens(renderFileIndex([{ name: dir.name, path: dir.path, tree }], loadMode))
-    totalFiles += files
-    totalDirs += dirs
-    fileIndexTokens += tokens
-    stats.push({ name: dir.name, path: dir.path, access, files, dirs, tokens })
+  // 各目录并行统计（顺序由 Promise.all 保持）；计数走递归 countTree，只有 tree/full 才建树。
+  const stats = await Promise.all(directories
+    .filter(dir => (dir.access ?? 'readwrite') !== 'disabled')
+    .map(async (dir): Promise<DirectoryContextStat> => {
+      const access = dir.access ?? 'readwrite'
+      const counts = await fileIndexCache.count(dir.path)
+      const base: FileIndexEntry = { name: dir.name, path: dir.path, files: counts.files, dirs: counts.dirs, ...(counts.truncated ? { truncated: true } : {}) }
+      const entry = loadMode === 'summary' ? base : { ...base, tree: await fileIndexCache.get(dir.path, { maxDepth: loadModeMaxDepth(loadMode) }) }
+      return {
+        name: dir.name,
+        path: dir.path,
+        access,
+        files: counts.files,
+        dirs: counts.dirs,
+        tokens: estimateTokens(renderFileIndex([entry], loadMode, tokenBudget)),
+      }
+    }))
+  const totalFiles = stats.reduce((sum, s) => sum + s.files, 0)
+  const totalDirs = stats.reduce((sum, s) => sum + s.dirs, 0)
+  const fileIndexTokens = stats.reduce((sum, s) => sum + s.tokens, 0)
+  // 功能索引也算进固定开销，面板总额才与实际注入一致；关闭时不计。
+  const codeEntries: CodeIndexEntry[] = []
+  if (codeConfig?.enabled !== false && codeIndexCache !== undefined && directories.length > 0) {
+    const raw = await codeIndexCache.get(directories)
+    const summaries = codeConfig?.summaries
+    for (const entry of raw) {
+      codeEntries.push(summaries !== undefined && summaries.has(entry.feature) ? { ...entry, summary: summaries.get(entry.feature) } : entry)
+    }
   }
-  const promptOverheadTokens = estimateTokens(renderMultiWorkspacePrompt(directories, mode, loadMode, []))
+  const promptOverheadTokens = estimateTokens(renderMultiWorkspacePrompt(directories, mode, loadMode, [], 0, codeEntries, codeConfig?.budget))
   return { loadMode, directories: stats, totalFiles, totalDirs, fileIndexTokens, promptOverheadTokens }
 }

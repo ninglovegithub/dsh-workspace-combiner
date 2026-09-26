@@ -1,3 +1,4 @@
+import { DEFAULT_WORKSPACE_NAME } from '../../invariant.ts'
 import type { Workspace } from '../../core/types.ts'
 
 /** 名称长度上限（超长截断）。 */
@@ -13,7 +14,7 @@ export function sanitizeWorkspaceName(name: string): string {
 
 /** 全局查重：冲突则追加「 (n)」，n 从 2 递增；排除 excludeId 自身。 */
 export function checkWorkspaceNameDuplicate(name: string, excludeId: string | undefined, existing: readonly Workspace[]): string {
-  const base = sanitizeWorkspaceName(name) || '未命名工作空间'
+  const base = sanitizeWorkspaceName(name) || DEFAULT_WORKSPACE_NAME
   const taken = new Set(existing.filter(w => w.id !== excludeId).map(w => w.name))
   if (!taken.has(base)) return base
   let i = 2

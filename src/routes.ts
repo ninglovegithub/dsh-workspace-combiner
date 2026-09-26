@@ -10,14 +10,17 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { mkdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { API, MAX_JSON_BODY_BYTES } from './invariant.ts'
+import { API, DEFAULT_CODE_INDEX_BUDGET, DEFAULT_TOKEN_BUDGET, DEFAULT_WORKSPACE_NAME, MAX_JSON_BODY_BYTES } from './invariant.ts'
 import { scanDirectory } from './host/projectDetector.ts'
-import { FileIndexCache, countNodes } from './host/fileIndex.ts'
+import { FileIndexCache } from './host/fileIndex.ts'
+import { CodeIndexCache } from './host/codeIndex.ts'
+import { codeIndexSignature, type FeatureSummaryCache } from './host/codeIndexSummary.ts'
+import { parseWorkspaceRefs } from './core/validate.ts'
 import { computeContextStats } from './host/contextStats.ts'
 import { getGitStatus } from './host/gitStatus.ts'
 import { syncExtraRoots } from './sandbox-sync.ts'
 import { WorkspaceCombinerStore } from './store.ts'
-import type { LoadMode, WorkspaceMode, WorkspaceRef } from './core/types.ts'
+import { loadModeMaxDepth, type LoadMode, type WorkspaceMode, type WorkspaceRef } from './core/types.ts'
 
 /** loopback 字面量 + 浏览器同源标记（dsh-ssh 配对路由栅栏）。 */
 function isLoopbackRequest(request: IncomingMessage): boolean {
@@ -66,33 +69,10 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   }
 }
 
-/** 把任意结构校验成 WorkspaceRef[]（不合法项整体拒绝）。 */
-function parseWorkspaceRefs(raw: unknown): WorkspaceRef[] | undefined {
-  if (!Array.isArray(raw)) return undefined
-  const out: WorkspaceRef[] = []
-  for (const item of raw) {
-    if (item === null || typeof item !== 'object') return undefined
-    const ref = item as Record<string, unknown>
-    if (typeof ref.id !== 'string' || typeof ref.name !== 'string' || typeof ref.path !== 'string') return undefined
-    out.push({
-      id: ref.id,
-      name: ref.name,
-      path: ref.path,
-      ...(typeof ref.projectType === 'string' ? { projectType: ref.projectType as WorkspaceRef['projectType'] } : {}),
-      ...(typeof ref.evidence === 'string' ? { evidence: ref.evidence } : {}),
-      ...(typeof ref.isPrimary === 'boolean' ? { isPrimary: ref.isPrimary } : {}),
-      ...(ref.access === 'readwrite' || ref.access === 'readonly' || ref.access === 'disabled' ? { access: ref.access } : {}),
-      ...(typeof ref.group === 'string' && ref.group !== '' ? { group: ref.group } : {}),
-      ...(typeof ref.note === 'string' && ref.note !== '' ? { note: ref.note } : {}),
-    })
-  }
-  return out
-}
-
 /** 生成可用的文件系统文件夹名（去路径分隔符 / Windows 非法字符 / 控制字符）。 */
 function sanitizeFolderName(name: string): string {
   const cleaned = name.replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, '').trim()
-  return cleaned === '' ? '未命名工作空间' : cleaned.slice(0, 80)
+  return cleaned === '' ? DEFAULT_WORKSPACE_NAME : cleaned.slice(0, 80)
 }
 
 /**
@@ -100,7 +80,7 @@ function sanitizeFolderName(name: string): string {
  * @param ctx - 宿主上下文（用于沙盒联动）。
  * @param store - 持久化存储。
  */
-export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileIndexCache: FileIndexCache): WebRoute[] {
+export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileIndexCache: FileIndexCache, codeIndexCache: CodeIndexCache, summaryCache: FeatureSummaryCache): WebRoute[] {
   const guard = (req: IncomingMessage, res: ServerResponse, method: string): boolean => {
     if (!isLoopbackRequest(req)) {
       writeJson(res, 403, { error: 'forbidden: loopback-only' })
@@ -327,14 +307,20 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         const pinned = body !== undefined && typeof body.pinned === 'boolean' ? body.pinned : undefined
         const color = body !== undefined && typeof body.color === 'string' && body.color !== '' ? body.color : undefined
         const tokenBudget = body !== undefined && typeof body.tokenBudget === 'number' && Number.isFinite(body.tokenBudget) && body.tokenBudget > 0 ? body.tokenBudget : undefined
+        const codeIndexEnabled = body !== undefined && typeof body.codeIndexEnabled === 'boolean' ? body.codeIndexEnabled : undefined
+        const codeIndexBudget = body !== undefined && typeof body.codeIndexBudget === 'number' && Number.isFinite(body.codeIndexBudget) && body.codeIndexBudget > 0 ? body.codeIndexBudget : undefined
+        const codeIndexSummary = body !== undefined && (body.codeIndexSummary === 'off' || body.codeIndexSummary === 'llm') ? body.codeIndexSummary : undefined
         try {
           if (mode !== '') await store.setWorkspaceMode(id, mode)
           if (loadMode !== '') await store.setLoadMode(id, loadMode)
-          if (pinned !== undefined || color !== undefined || tokenBudget !== undefined) {
+          if (pinned !== undefined || color !== undefined || tokenBudget !== undefined || codeIndexEnabled !== undefined || codeIndexBudget !== undefined || codeIndexSummary !== undefined) {
             await store.patchMeta(id, {
               ...(pinned !== undefined ? { pinned } : {}),
               ...(color !== undefined ? { color } : {}),
               ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+              ...(codeIndexEnabled !== undefined ? { codeIndexEnabled } : {}),
+              ...(codeIndexBudget !== undefined ? { codeIndexBudget } : {}),
+              ...(codeIndexSummary !== undefined ? { codeIndexSummary } : {}),
             })
           }
           writeJson(res, 200, { ok: true })
@@ -400,6 +386,27 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         }
       },
     },
+    // ---------------------------------------------------------- stat
+    {
+      kind: 'exact',
+      path: API.stat,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const path = body === undefined ? '' : typeof body.path === 'string' ? body.path.trim() : ''
+        if (path === '') {
+          writeJson(res, 400, { error: 'path is required' })
+          return
+        }
+        // 轻量存在性探测：目录失效检测用它替代 file-index，避免只为判断存在就构建整棵文件树。
+        try {
+          const info = await stat(path)
+          writeJson(res, 200, { exists: true, isDirectory: info.isDirectory() })
+        } catch {
+          writeJson(res, 200, { exists: false, isDirectory: false })
+        }
+      },
+    },
     // ---------------------------------------------------------- file-index
     {
       kind: 'exact',
@@ -412,6 +419,8 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
           writeJson(res, 400, { error: 'path is required' })
           return
         }
+        // 调用方传 loadMode，保证树深度与注入 prompt 一致，也复用同一份扫描缓存。
+        const loadMode: LoadMode = body !== undefined && (body.loadMode === 'full' || body.loadMode === 'tree' || body.loadMode === 'summary') ? body.loadMode : 'tree'
         try {
           // FileIndexCache 对无法 stat 的路径会返回空树。这对 prompt 渲染很宽容，
           // 但 API 调用方需要区分“空目录”和“目录不存在”，否则 UI 无法标红失效路径。
@@ -419,9 +428,9 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
           if (!info.isDirectory()) {
             throw new Error('path is not a directory: ' + path)
           }
-          const tree = await fileIndexCache.get(path)
-          const { files, dirs } = countNodes(tree)
-          writeJson(res, 200, { root: path, files, dirs, tree })
+          const tree = await fileIndexCache.get(path, { maxDepth: loadModeMaxDepth(loadMode) })
+          const counts = await fileIndexCache.count(path)
+          writeJson(res, 200, { root: path, files: counts.files, dirs: counts.dirs, truncated: counts.truncated, loadMode, tree })
         } catch (error) {
           fail(res, error)
         }
@@ -447,6 +456,27 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         }
       },
     },
+    // ---------------------------------------------------------- code-index
+    {
+      kind: 'exact',
+      path: API.codeIndex,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        try {
+          const ws = await store.getCurrentWorkspace()
+          if (ws === undefined || (ws.codeIndexEnabled ?? true) !== true) {
+            writeJson(res, 200, { entries: [] })
+            return
+          }
+          const raw = await codeIndexCache.get(ws.directories)
+          const summaries = await summaryCache.get(codeIndexSignature(raw))
+          const entries = summaries === undefined ? raw : raw.map(entry => summaries.has(entry.feature) ? { ...entry, summary: summaries.get(entry.feature) } : entry)
+          writeJson(res, 200, { entries })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
     // ---------------------------------------------------------- context-stats
     {
       kind: 'exact',
@@ -455,9 +485,17 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         if (!guard(req, res, 'GET')) return
         try {
           const ws = await store.getCurrentWorkspace()
-          const stats = ws === undefined
-            ? { loadMode: 'summary', directories: [], totalFiles: 0, totalDirs: 0, fileIndexTokens: 0, promptOverheadTokens: 0 }
-            : await computeContextStats(ws.directories, ws.mode ?? 'anchor', ws.loadMode ?? 'summary', fileIndexCache)
+          if (ws === undefined) {
+            writeJson(res, 200, { loadMode: 'summary', directories: [], totalFiles: 0, totalDirs: 0, fileIndexTokens: 0, promptOverheadTokens: 0 })
+            return
+          }
+          const codeIndexEnabled = ws.codeIndexEnabled ?? true
+          const summaries = codeIndexEnabled ? await summaryCache.get(codeIndexSignature(await codeIndexCache.get(ws.directories))) : undefined
+          const stats = await computeContextStats(ws.directories, ws.mode ?? 'anchor', ws.loadMode ?? 'summary', fileIndexCache, ws.tokenBudget ?? DEFAULT_TOKEN_BUDGET, codeIndexCache, {
+            enabled: codeIndexEnabled,
+            budget: ws.codeIndexBudget ?? DEFAULT_CODE_INDEX_BUDGET,
+            ...(summaries === undefined ? {} : { summaries }),
+          })
           writeJson(res, 200, stats)
         } catch (error) {
           fail(res, error)

@@ -19,6 +19,15 @@ export const SECTION_NAME = 'plugin:dsh-workspace-combiner'
  */
 export const SECTION_ORDER = 190
 
+/** 默认工作空间名（新建向导未命名时的兜底；host 建目录 / client 查重共用）。 */
+export const DEFAULT_WORKSPACE_NAME = '未命名工作空间'
+
+/** 注入 prompt 的文件索引 token 预算默认值（工作空间未配置时生效）。 */
+export const DEFAULT_TOKEN_BUDGET = 60000
+
+/** 功能/接口索引的 token 预算默认值（独立于文件索引，避免互相挤占）。 */
+export const DEFAULT_CODE_INDEX_BUDGET = 400
+
 /** 宿主持久化文件名（相对 $DSH_HOME / ~/.dsh）。 */
 export const STORE_FILE = 'dsh-workspace-combiner.json'
 
@@ -38,6 +47,8 @@ export const API = {
   fileIndex: '/api/dsh-workspace-combiner/file-index',
   gitStatus: '/api/dsh-workspace-combiner/git-status',
   scan: '/api/dsh-workspace-combiner/scan',
+  stat: '/api/dsh-workspace-combiner/stat',
+  codeIndex: '/api/dsh-workspace-combiner/code-index',
 } as const
 
 /** 请求体上限（1 MiB），超出直接拒绝。 */

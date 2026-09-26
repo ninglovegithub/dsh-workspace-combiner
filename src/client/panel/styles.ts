@@ -80,7 +80,8 @@ const PANEL_CSS = String.raw`
 .wcb-card-grow{flex:1;min-height:0;display:flex;flex-direction:column;border-bottom:1px solid var(--wcb-line)}
 .wcb-card-head{padding:7px 12px;display:flex;align-items:center;gap:6px;
   font-size:10.5px;font-weight:600;color:var(--wcb-muted);
-  text-transform:uppercase;letter-spacing:.3px;user-select:none;cursor:default;border:none}
+  text-transform:uppercase;letter-spacing:.3px;user-select:none;cursor:default;border:none;
+  white-space:nowrap}
 .wcb-card-head-btn{cursor:pointer}
 .wcb-card-body{padding:7px 12px;display:flex;flex-direction:column;gap:7px}
 .wcb-card-grow .wcb-card-body{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
@@ -384,38 +385,40 @@ const PANEL_CSS = String.raw`
 }
 
 /* ---------- 上下文预算左右布局 ---------- */
-/* 预算区在固定高度内可滚动（避免内容被裁切） */
-.wcb-right-col>.wcb-card:last-child{display:flex;flex-direction:column;overflow:hidden}
-.wcb-right-col>.wcb-card:last-child .wcb-budget-split{flex:1;min-height:0;overflow-y:auto}
-.wcb-budget-split{display:flex;flex-direction:column;gap:8px;padding:7px 12px}
+/* 预算卡在固定高度内可滚动（显式类名，不再依赖 :last-child——后面还有功能索引卡） */
+.wcb-budget-card{display:flex;flex-direction:column;overflow:hidden}
+.wcb-codeindex-card{display:flex;flex-direction:column;overflow:hidden;flex:0 0 auto;max-height:220px}
+.wcb-codeindex-card .wcb-card-body{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin}
+.wcb-budget-card .wcb-budget-split{flex:1;min-height:0;overflow-y:auto}
+.wcb-budget-split{display:flex;flex-direction:column;gap:8px;padding:6px 12px}
 .wcb-budget-left{display:flex;flex-direction:column;gap:8px}
-.wcb-budget-right{display:flex;flex-direction:column;gap:5px;min-width:0}
+.wcb-budget-right{display:flex;flex-direction:column;gap:5px;min-width:0;min-height:0}
 @media(min-width:600px){
   .wcb-budget-split{flex-direction:row;gap:14px}
   .wcb-budget-left{width:200px;flex:none}
   .wcb-budget-right{flex:1}
 }
-.wcb-budget-overview{display:flex;align-items:center;gap:10px}
-.wcb-budget-total{font-size:17px;font-weight:700;color:var(--wcb-text);font-variant-numeric:tabular-nums;line-height:1.1}
-.wcb-budget-of{font-size:10px;color:var(--wcb-dim);margin-top:2px}
-.wcb-budget-remain{font-size:9.5px;color:var(--wcb-ok);margin-top:2px}
+.wcb-budget-overview{display:flex;align-items:center;gap:9px;flex-wrap:nowrap;min-width:0}
+.wcb-budget-figures{display:flex;align-items:baseline;gap:6px;min-width:0;flex-wrap:wrap;line-height:1.2}
+.wcb-budget-total{font-size:15px;font-weight:700;color:var(--wcb-text);font-variant-numeric:tabular-nums;line-height:1.1;white-space:nowrap}
+.wcb-budget-of{font-size:10px;color:var(--wcb-dim);white-space:nowrap}
+.wcb-budget-remain{font-size:9.5px;color:var(--wcb-ok);white-space:nowrap}
 .wcb-donut{position:relative;flex:none}
 .wcb-donut-center{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--wcb-text)}
 .wcb-stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}
-.wcb-stat-card{background:var(--wcb-surface);border:1px solid var(--wcb-line2);border-radius:5px;padding:5px 7px}
-.wcb-stat-label{color:var(--wcb-dim);font-size:8px;text-transform:uppercase;letter-spacing:.2px}
-.wcb-stat-value{color:var(--wcb-text);font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:1px}
-.wcb-stat-value-sm{color:var(--wcb-text2);font-size:11px;font-weight:500;font-variant-numeric:tabular-nums;margin-top:1px}
+/* 每张统计卡「标题 + 数值」同一行，显著缩短卡片高度 */
+.wcb-stat-card{background:var(--wcb-surface);border:1px solid var(--wcb-line2);border-radius:5px;padding:3px 7px;display:flex;align-items:baseline;gap:5px;min-width:0}
+.wcb-stat-label{color:var(--wcb-dim);font-size:8px;text-transform:uppercase;letter-spacing:.2px;flex:none;white-space:nowrap}
+.wcb-stat-value{color:var(--wcb-text);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;margin-left:auto}
+.wcb-stat-value-sm{color:var(--wcb-text2);font-size:11px;font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap;margin-left:auto}
 .wcb-dir-usage-title{font-size:9px;color:var(--wcb-dim);text-transform:uppercase;letter-spacing:.3px;margin-bottom:1px}
-/* 分目录用量柱状图（竖直柱 + 网格线 + 数值/名称） */
-.wcb-bars{position:relative;display:flex;align-items:flex-end;gap:6px;height:104px;padding:0 2px;min-width:0}
-.wcb-bars-grid{position:absolute;inset:14px 0 18px 0;display:flex;flex-direction:column;justify-content:space-between;pointer-events:none}
-.wcb-bars-gridline{height:1px;background:var(--wcb-line)}
-.wcb-bar-col{position:relative;flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;gap:3px;height:100%;justify-content:flex-end}
-.wcb-bar-val{font-size:9px;color:var(--wcb-text2);font-variant-numeric:tabular-nums;flex:none;line-height:1}
-.wcb-bar-track{flex:1;width:100%;max-width:26px;display:flex;align-items:flex-end;justify-content:center;min-height:0}
-.wcb-bar-fill-v{width:100%;border-radius:3px 3px 0 0;min-height:2px;transition:height .2s}
-.wcb-bar-name{font-size:9px;color:var(--wcb-dim);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none;line-height:1.2;text-align:center}
+/* 分目录用量：横向条形列表（可滚动、逐条可删除） */
+.wcb-bars{display:flex;flex-direction:column;gap:3px;overflow-y:auto;min-height:0;flex:1 1 auto;padding-right:2px;scrollbar-width:thin}
+.wcb-bar-row{display:flex;align-items:center;gap:6px;min-width:0}
+.wcb-bar-name{flex:none;width:62px;font-size:9.5px;color:var(--wcb-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wcb-bar-track-h{flex:1 1 auto;height:8px;min-width:18px;background:var(--wcb-surface);border:1px solid var(--wcb-line);border-radius:4px;overflow:hidden}
+.wcb-bar-fill-h{height:100%;border-radius:3px;transition:width .2s}
+.wcb-bar-val{flex:none;width:42px;text-align:right;font-size:9px;color:var(--wcb-text2);font-variant-numeric:tabular-nums;white-space:nowrap}
 .wcb-dir-usage-item{display:flex;align-items:center;gap:8px;background:var(--wcb-surface);border:1px solid var(--wcb-line);border-radius:5px;padding:5px 8px}
 .wcb-dir-usage-info{flex:1;min-width:0}
 .wcb-dir-usage-name-row{display:flex;align-items:center;justify-content:space-between;gap:5px}

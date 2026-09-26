@@ -5,8 +5,8 @@
  */
 
 import { API } from '../invariant.ts'
-import type { ContextStats, DetectedProject, GitStatus, LoadMode, Workspace, WorkspaceMode, WorkspaceRef } from '../core/types.ts'
-import type { FileTreeNode } from '../host/fileIndex.ts'
+import type { CodeIndexEntry, ContextStats, DetectedProject, GitStatus, LoadMode, Workspace, WorkspaceMode, WorkspaceRef } from '../core/types.ts'
+import type { FileTreeNode } from '../core/fileTree.ts'
 
 /** 统一 JSON 请求/响应。 */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -108,16 +108,24 @@ export class WorkspaceCombinerApi {
   }
 
   /** 局部更新工作空间级元信息（模式 / 加载模式 / 置顶 / 颜色 / token 预算）。 */
-  async patchWorkspace(id: string, patch: { mode?: WorkspaceMode; loadMode?: LoadMode; pinned?: boolean; color?: string; tokenBudget?: number }): Promise<void> {
+  async patchWorkspace(id: string, patch: { mode?: WorkspaceMode; loadMode?: LoadMode; pinned?: boolean; color?: string; tokenBudget?: number; codeIndexEnabled?: boolean; codeIndexBudget?: number; codeIndexSummary?: 'off' | 'llm' }): Promise<void> {
     await request<{ ok: boolean }>(API.workspacePatch, {
       method: 'POST',
       body: JSON.stringify({ id, ...patch }),
     })
   }
 
-  /** 读取单目录文件索引（面板预览 prompt 用）；目录不存在时抛错。 */
-  async fileIndex(path: string): Promise<{ root: string; files: number; dirs: number; tree: FileTreeNode[] }> {
-    return await request<{ root: string; files: number; dirs: number; tree: FileTreeNode[] }>(API.fileIndex, {
+  /** 读取单目录文件索引（面板预览 prompt 用）；目录不存在时抛错。loadMode 决定树深度，与注入 prompt 对齐。 */
+  async fileIndex(path: string, loadMode: LoadMode = 'tree'): Promise<{ root: string; files: number; dirs: number; truncated: boolean; tree: FileTreeNode[] }> {
+    return await request<{ root: string; files: number; dirs: number; truncated: boolean; tree: FileTreeNode[] }>(API.fileIndex, {
+      method: 'POST',
+      body: JSON.stringify({ path, loadMode }),
+    })
+  }
+
+  /** 轻量存在性探测：目录失效检测用，避免为判断存在而构建整棵文件树。 */
+  async stat(path: string): Promise<{ exists: boolean; isDirectory: boolean }> {
+    return await request<{ exists: boolean; isDirectory: boolean }>(API.stat, {
       method: 'POST',
       body: JSON.stringify({ path }),
     })
@@ -135,5 +143,11 @@ export class WorkspaceCombinerApi {
   /** 获取上下文统计（各目录文件数 + 估算 token）。 */
   async contextStats(): Promise<ContextStats> {
     return await request<ContextStats>(API.contextStats, { method: 'GET' })
+  }
+
+  /** 读取当前工作空间的功能/接口索引（面板预览用）。 */
+  async codeIndex(): Promise<CodeIndexEntry[]> {
+    const body = await request<{ entries: CodeIndexEntry[] }>(API.codeIndex, { method: 'GET' })
+    return body.entries
   }
 }

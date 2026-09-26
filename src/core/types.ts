@@ -26,6 +26,11 @@ export type WorkspaceMode = 'anchor' | 'single'
 /** 文件加载模式：full=完整文件树，summary=目录摘要（计数），tree=浅层目录树。 */
 export type LoadMode = 'full' | 'summary' | 'tree'
 
+/** 加载模式对应的文件树最大扫描深度（summary 只需计数，深度 1 足够）。 */
+export function loadModeMaxDepth(loadMode: LoadMode): number {
+  return loadMode === 'full' ? 4 : loadMode === 'tree' ? 3 : 1
+}
+
 /** 一个被选中的项目（目录）引用。path 是宿主文件系统的绝对路径。 */
 export interface WorkspaceRef {
   /** 稳定 id（本插件内 = path；兼容历史 DSH workspaceId）。 */
@@ -58,6 +63,28 @@ export interface GitStatus {
   untracked: number
   /** 领先远程提交数。 */
   ahead: number
+}
+
+/** 一处代码落点（相对某目录根的路径 + 行号）。 */
+export interface CodeIndexLoc {
+  file: string
+  line: number
+}
+
+/** 功能角度代码索引条目：一个端点的前后端落点（自动抽取，可能有噪声）。 */
+export interface CodeIndexEntry {
+  /** 功能名（优先端点常量名，否则取路径首段）。 */
+  feature: string
+  /** 端点路径。 */
+  endpoint: string
+  /** 服务端注册/处理处。 */
+  server?: CodeIndexLoc
+  /** 客户端调用处。 */
+  client?: CodeIndexLoc
+  /** 其它引用处数量。 */
+  refs: number
+  /** 可选的一句话功能摘要（codeIndexSummary='llm' 时生成并缓存）。 */
+  summary?: string
 }
 
 /** 目录项：工作空间里的一条项目目录引用（与 WorkspaceRef 同构，语义别名）。 */
@@ -113,6 +140,12 @@ export interface Workspace {
   pinned?: boolean
   /** 颜色标识（面板工作空间列表色点；6 色循环）。 */
   color?: string
+  /** 是否注入功能/接口索引（缺省 true）。 */
+  codeIndexEnabled?: boolean
+  /** 功能索引 token 预算（缺省 DEFAULT_CODE_INDEX_BUDGET）。 */
+  codeIndexBudget?: number
+  /** 功能摘要模式：off=不生成（缺省）；llm=调用模型生成一句话摘要并缓存。 */
+  codeIndexSummary?: 'off' | 'llm'
 }
 
 /** 宿主持久化文件（~/.dsh/dsh-workspace-combiner.json）的磁盘形状。 */
