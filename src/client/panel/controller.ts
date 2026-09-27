@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { WorkspaceCombinerApi } from '../api.ts'
-import type { CodeIndexEntry, ContextStats, DirectoryAccess, GitStatus, LoadMode, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceSnapshot, WorkspaceStandards } from '../../core/types.ts'
+import type { CodeIndexEntry, ContextStats, DirectoryAccess, DirectoryCommands, EndpointImpact, GitStatus, LoadMode, TokenUsageReport, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceSnapshot, WorkspaceStandards } from '../../core/types.ts'
 import { emptyLibrary, resolveStandardGroups, type StandardGroup, type StandardsLibrary } from '../../core/standards.ts'
 import type { FileTreeNode } from '../../core/fileTree.ts'
 import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_STANDARDS_BUDGET, DEFAULT_TOKEN_BUDGET } from '../../invariant.ts'
@@ -138,6 +138,17 @@ export interface WorkspaceCombinerState {
   setLoadMode(loadMode: LoadMode): void
   contextStats: ContextStats | null
   refreshContextStats(): void
+  /** 真实 token 用量（provider 上报，含提示词缓存命中率）。 */
+  tokenUsage: TokenUsageReport | null
+  refreshTokenUsage(): void
+  /** 由工作区改动文件反查出的受影响端点（确定性查询，非预测）。 */
+  endpointImpact: readonly EndpointImpact[]
+  /** 参与反查的改动文件数（0 = 工作区干净）。 */
+  endpointImpactFiles: number
+  endpointImpactLoading: boolean
+  refreshEndpointImpact(): void
+  /** 设置某目录的常用命令（空对象则删除该字段）。 */
+  setDirectoryCommands(path: string, commands: DirectoryCommands | undefined): void
   saveSnapshot(): void
   restoreSnapshot(snapshotId: string): void
   deleteSnapshot(snapshotId: string): void
@@ -185,6 +196,10 @@ export function useWorkspaceCombiner(
   const [previewTrees, setPreviewTrees] = useState<readonly PreviewFileTree[]>([])
   const [codeEntries, setCodeEntries] = useState<readonly CodeIndexEntry[]>([])
   const [standardsLibrary, setStandardsLibrary] = useState<StandardsLibrary>(() => emptyLibrary())
+  const [tokenUsage, setTokenUsage] = useState<TokenUsageReport | null>(null)
+  const [endpointImpact, setEndpointImpact] = useState<readonly EndpointImpact[]>([])
+  const [endpointImpactFiles, setEndpointImpactFiles] = useState(0)
+  const [endpointImpactLoading, setEndpointImpactLoading] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [budgetOverride, setBudgetOverride] = useState<number | null>(null)
   const currentWsIdRef = useRef('')
@@ -207,6 +222,18 @@ export function useWorkspaceCombiner(
       .then(setContextStats)
       .catch(() => setContextStats(null))
   }, [])
+
+  // 真实用量：宿主侧是内存读，轮询代价可忽略；10s 刷新一次即可反映最新消耗。
+  const refreshTokenUsage = useCallback((): void => {
+    const api = apiRef.current
+    if (api === null) return
+    void api.tokenUsage().then(setTokenUsage).catch(() => {})
+  }, [])
+  useEffect(() => {
+    refreshTokenUsage()
+    const timer = setInterval(refreshTokenUsage, 10_000)
+    return () => clearInterval(timer)
+  }, [refreshTokenUsage])
 
   // 水合。
   useEffect(() => {
@@ -582,6 +609,20 @@ export function useWorkspaceCombiner(
   // 目录路径签名：目录集合变化时触发 git / 失效 / 预览的重新拉取。
   const dirsKey = useMemo(() => dirs.map(d => d.path).join('\n'), [dirs])
 
+  // 设置目录常用命令（三个字段全空则删除该字段，避免注入空区块）。
+  const setDirectoryCommands = useCallback((path: string, commands: DirectoryCommands | undefined): void => {
+    const idx = dirs.findIndex(d => d.path === path)
+    if (idx < 0) return
+    applyDirs(dirs.map((d, i) => {
+      if (i !== idx) return d
+      if (commands === undefined) {
+        const { commands: _commands, ...rest } = d
+        return rest
+      }
+      return { ...d, commands }
+    }))
+  }, [dirs, applyDirs])
+
   // 设置目录备注（空串则删除该字段）。
   const setDirectoryNote = useCallback((path: string, note: string): void => {
     const idx = dirs.findIndex(d => d.path === path)
@@ -610,6 +651,20 @@ export function useWorkspaceCombiner(
 
   // 目录变化（含切换工作空间）时重新拉取 git 状态。
   useEffect(() => { refreshGitStatuses() }, [dirsKey, refreshGitStatuses])
+
+  // ---------------- 改动文件 -> 受影响端点（确定性反查，不用 AI） ----------------
+  const refreshEndpointImpact = useCallback((): void => {
+    const api = apiRef.current
+    if (api === null) return
+    setEndpointImpactLoading(true)
+    void api.endpointImpact()
+      .then(result => { setEndpointImpact(result.impact); setEndpointImpactFiles(result.changedFiles) })
+      .catch(() => { setEndpointImpact([]); setEndpointImpactFiles(0) })
+      .finally(() => setEndpointImpactLoading(false))
+  }, [])
+
+  // 目录变化时跟着 git 状态一起刷新（git 状态里就有变更文件）。
+  useEffect(() => { refreshEndpointImpact() }, [dirsKey, refreshEndpointImpact])
 
   // ---------------- 目录失效检测（轻量 stat，不构建文件树） ----------------
   useEffect(() => {
@@ -757,6 +812,13 @@ export function useWorkspaceCombiner(
     setLoadMode,
     contextStats,
     refreshContextStats,
+    tokenUsage,
+    refreshTokenUsage,
+    endpointImpact,
+    endpointImpactFiles,
+    endpointImpactLoading,
+    refreshEndpointImpact,
+    setDirectoryCommands,
     saveSnapshot,
     restoreSnapshot,
     deleteSnapshot,

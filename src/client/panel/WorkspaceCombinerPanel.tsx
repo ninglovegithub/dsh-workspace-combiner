@@ -190,6 +190,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
   const [cmdkQuery, setCmdkQuery] = useState('')
   const [cmdkIndex, setCmdkIndex] = useState(0)
   const [editingNotePath, setEditingNotePath] = useState<string | null>(null)
+  const [editingCmdPath, setEditingCmdPath] = useState<string | null>(null)
   const [ciQuery, setCiQuery] = useState('')
   const currentWs = state.currentWorkspace
   const dirCount = state.dirs.length
@@ -513,6 +514,49 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                                 )}
                               </div>
                             )}
+                            {editingCmdPath === d.path ? (
+                              <div className="wcb-dir-cmd-edit" onClick={(event) => event.stopPropagation()}>
+                                {([['run', tt('cmdRun')], ['test', tt('cmdTest')], ['build', tt('cmdBuild')]] as Array<['run' | 'test' | 'build', string]>).map(([field, label]) => (
+                                  <div className="wcb-dir-cmd-row" key={field}>
+                                    <span className="wcb-dir-cmd-label">{label}</span>
+                                    <input
+                                      className="wcb-dir-note-input"
+                                      value={d.commands?.[field] ?? ""}
+                                      placeholder={tt('cmdPlaceholder')}
+                                      aria-label={label}
+                                      onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                                        const next = { ...(d.commands ?? {}), [field]: event.currentTarget.value.trim() }
+                                        const any = Object.values(next).some(v => v !== undefined && v !== '')
+                                        state.setDirectoryCommands(d.path, any ? next : undefined)
+                                      }}
+                                    />
+                                  </div>
+                                ))}
+                                <div className="wcb-dir-cmd-actions">
+                                  <span className="wcb-hint">{tt('cmdHint')}</span>
+                                  <button type="button" className="wcb-linkbtn" aria-label={tt('confirm')} onClick={() => setEditingCmdPath(null)}>{tt('confirm')}</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div
+                                className="wcb-dir-note"
+                                title={d.commands === undefined ? tt('cmdTitle') : tt('cmdEdit')}
+                                role="button"
+                                tabIndex={0}
+                                aria-label={tt('cmdTitle')}
+                                onClick={(event) => { event.stopPropagation(); setEditingCmdPath(d.path) }}
+                                onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setEditingCmdPath(d.path) } }}
+                              >
+                                {d.commands !== undefined ? (
+                                  <>
+                                    <span className="wcb-dir-note-icon" aria-hidden="true">⌘</span>
+                                    {[d.commands.run, d.commands.test, d.commands.build].filter(x => x !== undefined && x !== '').join(' · ')}
+                                  </>
+                                ) : (
+                                  <span className="wcb-dir-note-add">{'+ ' + tt('cmdTitle')}</span>
+                                )}
+                              </div>
+                            )}
                           </div>
                           {missing ? <span className="wcb-warn-icon" title={tt('dirMissing')} role="img" aria-label={tt('dirMissing')}>⚠</span> : null}
                           {i > 0 ? (
@@ -622,6 +666,45 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
               <div className="wcb-hint" style={{ marginTop: 5 }}>{tt('codeIndexHint')}{state.codeIndexSummary === 'llm' ? ' · ' + tt('codeIndexSummaryHint') : ''}</div>
             </div>
           </section>
+
+          {/* 本次变更 -> 受影响端点：确定性反查（改动文件 -> 端点 -> 对端落点） */}
+          <section className="wcb-card">
+            <div className="wcb-card-head">
+              {tt('impactTitle')}
+              <div className="wcb-head-actions">
+                {state.endpointImpactFiles > 0 ? <span className="wcb-label" style={{ margin: 0 }}>{tt('impactFiles', { n: state.endpointImpactFiles })}</span> : null}
+                <button type="button" className="wcb-linkbtn" aria-label={tt('impactRefresh')} disabled={state.endpointImpactLoading} onClick={state.refreshEndpointImpact}>{'↻ ' + tt('impactRefresh')}</button>
+              </div>
+            </div>
+            <div className="wcb-card-body">
+              {state.endpointImpactFiles === 0 ? (
+                <div className="wcb-hint">{tt('impactEmpty')}</div>
+              ) : state.endpointImpact.length === 0 ? (
+                <div className="wcb-hint">{tt('impactNone')}</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {state.endpointImpact.map(item => (
+                    <div
+                      key={item.endpoint + '|' + item.changedFile + '|' + (item.counterpart?.file ?? '')}
+                      role="button"
+                      tabIndex={0}
+                      title={tt('codeIndexCopy')}
+                      onClick={() => state.copyText('@' + item.feature)}
+                      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); state.copyText('@' + item.feature) } }}
+                      style={{ display: 'flex', gap: 6, alignItems: 'baseline', fontSize: 10, cursor: 'pointer', padding: '2px 5px', borderRadius: 4, background: 'var(--wcb-surface)' }}
+                    >
+                      <span style={{ color: 'var(--wcb-purple)', fontWeight: 600, flex: 'none' }}>{'@' + item.feature}</span>
+                      <span style={{ color: 'var(--wcb-text2)', flex: 'none', fontFamily: 'var(--ds-font-family-code,monospace)' }}>{item.endpoint}</span>
+                      <span style={{ color: 'var(--wcb-muted)', flex: 'none' }}>{'✎ ' + item.changedFile}</span>
+                      {item.counterpart !== undefined ? (
+                        <span style={{ color: 'var(--wcb-dim)', flex: 'none' }}>{tt('impactCounterpart') + ' → ' + item.counterpart.file + ':' + item.counterpart.line}</span>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
         </div>
       </div>
 
@@ -686,10 +769,11 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
       {budgetOpen ? (
         <BudgetModal
           stats={state.contextStats}
+          usage={state.tokenUsage}
           budget={state.tokenBudget}
           dirs={state.dirs}
           onBudget={state.setTokenBudget}
-          onRefresh={state.refreshContextStats}
+          onRefresh={() => { state.refreshContextStats(); state.refreshTokenUsage() }}
           onClose={() => setBudgetOpen(false)}
         />
       ) : null}

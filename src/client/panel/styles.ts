@@ -455,6 +455,20 @@ const PANEL_CSS = String.raw`
 .wcb-dir-usage-name{font-size:11px;color:var(--wcb-text);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wcb-dir-usage-tokens{font-size:10px;color:var(--wcb-text2);font-variant-numeric:tabular-nums;font-weight:600;flex:none}
 
+/* ---------- 真实 token 用量（provider 上报） ---------- */
+.wcb-usage-block{display:flex;flex-direction:column;gap:4px;border-top:1px solid var(--wcb-line2);padding-top:6px}
+.wcb-usage-sessions{float:right;color:var(--wcb-muted);text-transform:none;letter-spacing:0}
+.wcb-usage-ctx-row{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
+.wcb-usage-ctx-label{font-size:9px;color:var(--wcb-dim);text-transform:uppercase;letter-spacing:.2px}
+.wcb-usage-ctx-val{font-size:10px;color:var(--wcb-text2);font-variant-numeric:tabular-nums}
+
+/* ---------- 目录常用命令（内联编辑） ---------- */
+.wcb-dir-cmd-edit{display:flex;flex-direction:column;gap:3px;margin-top:3px;padding:4px 5px;background:var(--wcb-surface);border:1px solid var(--wcb-line2);border-radius:5px}
+.wcb-dir-cmd-row{display:flex;align-items:center;gap:5px}
+.wcb-dir-cmd-label{flex:none;width:26px;font-size:9px;color:var(--wcb-dim)}
+.wcb-dir-cmd-actions{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.wcb-dir-cmd-actions .wcb-hint{margin:0;flex:1 1 auto;min-width:0}
+
 /* ---------- 无障碍 ---------- */
 .wcb-root :focus-visible{outline:2px solid var(--wcb-accent);outline-offset:1px}
 .wcb-root button{font-family:inherit}

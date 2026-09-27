@@ -14,9 +14,9 @@ import { chmod, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:f
 import { dirname, join, relative, sep } from 'node:path'
 import { isIgnored, loadGitignore } from './fileIndex.ts'
 import { dshHome } from '../store.ts'
-import type { CodeIndexEntry, CodeIndexLoc, WorkspaceRef } from '../core/types.ts'
+import type { CodeIndexEntry, CodeIndexLoc, EndpointImpact, WorkspaceRef } from '../core/types.ts'
 
-export type { CodeIndexEntry, CodeIndexLoc }
+export type { CodeIndexEntry, CodeIndexLoc, EndpointImpact }
 
 /** 参与扫描的代码扩展名（含常见后端语言，便于跨前后端联结）。 */
 const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.java', '.kt', '.go', '.py', '.rb', '.cs'])
@@ -35,6 +35,43 @@ const NAMED_SUFFIX = /([A-Za-z_$][\w$]*)\s*[:=]\s*$/
 const REF_TOKEN = /\.([A-Za-z_$][\w$]*)\b|\[\s*['"]([A-Za-z_$][\w$]*)['"]\s*\]/g
 /** 资源/文件扩展名，用于排除 '/a/b.png' 这类非端点。 */
 const ASSET_EXT = /\.(png|jpe?g|gif|svg|ico|webp|css|scss|less|sass|woff2?|ttf|eot|map|html?|json|ya?ml|md|txt|lock|xml|vue|ts|tsx|js|jsx)$/i
+/** Java 类级路由前缀（@RequestMapping("...")）。 */
+const JAVA_REQUEST_MAPPING = /@RequestMapping\s*\(([^)]*)\)/
+/** Java 方法级映射注解（@GetMapping 等，路径由类前缀拼接）。 */
+const JAVA_METHOD_MAPPING = /@(Get|Post|Put|Patch|Delete)Mapping\b/
+/** 注解里的第一个字符串字面量参数。 */
+const ANNOTATION_STRING = /["']([^"']*)["']/
+
+/**
+ * 找出 Java 控制器文件里的类级路由前缀。
+ *
+ * 只在「文件里存在方法级映射注解」时才认定第一条 @RequestMapping 是类级前缀：
+ * 否则它本身就是端点（例如只有 @RequestMapping(value=..., method=GET) 的写法），
+ * 误判会把唯一端点整条吃掉。这是无 AST 的行扫描下最稳的判据。
+ * @param lines - 文件按行拆分的内容。
+ * @returns 前缀（已去尾斜杠）与所在行号；无法判定时返回 undefined。
+ */
+function findJavaClassPrefix(lines: readonly string[]): { prefix: string; line: number } | undefined {
+  if (!lines.some(line => JAVA_METHOD_MAPPING.test(line))) return undefined
+  for (let i = 0; i < lines.length; i++) {
+    const mapping = JAVA_REQUEST_MAPPING.exec(lines[i])
+    if (mapping === null) continue
+    const value = ANNOTATION_STRING.exec(mapping[1])
+    if (value === null) return undefined
+    const prefix = value[1].replace(/\/+$/, '')
+    return prefix === '' ? undefined : { prefix, line: i }
+  }
+  return undefined
+}
+
+/** 拼接类级前缀与方法级路径（斜杠归一，避免 //user//detail）。 */
+function joinRoute(prefix: string, path: string): string {
+  const head = prefix.replace(/\/+$/, '')
+  const tail = path.replace(/^\/+/, '')
+  if (head === '') return '/' + tail
+  return tail === '' ? head : head + '/' + tail
+}
+
 /** 客户端调用线索（含 vue-router 页面路由）。 */
 const CLIENT_HINT = /\b(fetch|axios|request|http|got|ky)\s*\(|\.(get|post|put|patch|delete)\s*\(|url\s*:|createRouter\s*\(|component\s*:/
 /** 服务端注册/处理线索（含 Java 注解与 Go/gin 的大写方法）。 */
@@ -54,6 +91,17 @@ function normalizeEndpoint(endpoint: string): string {
     .replace(/\/:[A-Za-z_][\w]*/g, '/_')
 }
 
+/**
+ * 端点匹配键：归一化占位符后，再剥掉前端代理惯用的 /api 前缀，使前端
+ * '/api/user/detail' 与后端 '/user/detail' 能联结为同一功能。
+ * 只剥一层 /api（可跟 /vN）——更激进的剥离会把不同端点误并。
+ */
+export function matchKey(endpoint: string): string {
+  const normalized = normalizeEndpoint(endpoint)
+  const stripped = normalized.replace(/^\/api(\/v\d+)?(?=\/|$)/, '')
+  return stripped === '' || stripped === '/' ? normalized : stripped
+}
+
 /** 判断一个字面量是否像 HTTP 端点。 */
 function looksLikeEndpoint(path: string): boolean {
   if (path.length < 2 || !path.startsWith('/')) return false
@@ -69,11 +117,25 @@ function deriveFeature(endpoint: string): string {
   return segs[0] ?? endpoint
 }
 
-/** 累积一条端点的两侧落点。 */
-function applyLoc(acc: CodeIndexEntry, file: string, line: number, server: boolean, client: boolean): void {
-  if (server && acc.server === undefined) acc.server = { file, line }
-  else if (client && acc.client === undefined) acc.client = { file, line }
-  else acc.refs++
+/** 累积一条端点的两侧落点（含所属目录，供跨目录配对展示）。 */
+function applyLoc(acc: CodeIndexEntry, file: string, line: number, server: boolean, client: boolean, dir: string): void {
+  if (server && acc.server === undefined) {
+    acc.server = { file, line }
+    acc.serverDir = dir
+  } else if (client && acc.client === undefined) {
+    acc.client = { file, line }
+    acc.clientDir = dir
+  } else acc.refs++
+}
+
+/** 文件级反向索引：绝对文件路径 -> 该文件涉及端点的匹配键集合。 */
+type FileEndpointMap = Map<string, Set<string>>
+
+/** 记录「某文件涉及某端点」，供改动反查。 */
+function touch(map: FileEndpointMap, abs: string, key: string): void {
+  const set = map.get(abs)
+  if (set === undefined) map.set(abs, new Set([key]))
+  else set.add(key)
 }
 
 /** 递归收集代码文件（复用文件索引的忽略规则）。 */
@@ -105,15 +167,23 @@ async function collectCodeFiles(root: string, patterns: RegExp[]): Promise<strin
   return out
 }
 
+/** 功能索引构建结果：端点条目 + 文件级反向索引。 */
+export interface CodeIndexResult {
+  entries: CodeIndexEntry[]
+  /** 绝对文件路径 -> 该文件涉及的端点匹配键（用于「改动文件反查端点」）。 */
+  fileEndpoints: Record<string, string[]>
+}
+
 /**
  * 构建功能角度代码索引。
  * @param dirs - 工作空间的目录列表（disabled 目录跳过）。
- * @returns 端点条目（仅保留至少有一侧落点的），按功能名与端点排序。
+ * @returns 端点条目（仅保留至少有一侧落点的）+ 文件到端点的反向索引。
  */
-export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<CodeIndexEntry[]> {
+export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<CodeIndexResult> {
   const names = new Map<string, string>()
   const byEndpoint = new Map<string, CodeIndexEntry>()
-  const files: { rel: string; content: string; lines: string[]; server: boolean; client: boolean }[] = []
+  const touched: FileEndpointMap = new Map()
+  const files: { abs: string; dir: string; rel: string; content: string; lines: string[]; server: boolean; client: boolean }[] = []
   let totalBytes = 0
 
   // key 用归一化端点（/x/{id} 与 /x/${id} 视作同一端点），display 保留首次出现的原始写法。
@@ -141,6 +211,8 @@ export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<Cod
       }
       totalBytes += content.length
       files.push({
+        abs,
+        dir: dir.path,
         rel: relative(dir.path, abs).split(sep).join('/'),
         content,
         lines: content.split('\n'),
@@ -152,22 +224,29 @@ export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<Cod
 
   // 第一遍：字面量 + 命名定义。
   for (const f of files) {
+    // Java 控制器：类级 @RequestMapping 是前缀而非端点，方法级映射要拼上前缀，
+    // 否则后端 '/detail' 与前端 '/api/user/detail' 永远配不上。
+    const javaPrefix = findJavaClassPrefix(f.lines)
     for (let i = 0; i < f.lines.length; i++) {
       const line = f.lines[i]
       const trimmed = line.trimStart()
       if (trimmed.startsWith('/') || trimmed.startsWith('*') || trimmed.startsWith('#')) continue
       // 跳过正则字面量/正则 API 行，否则会把正则源码里的 '/path' 当成端点。
       if (trimmed.includes('= /') || trimmed.includes('(/') || trimmed.includes('RegExp(')) continue
+      if (javaPrefix !== undefined && i === javaPrefix.line) continue
+      const methodMapping = javaPrefix !== undefined && JAVA_METHOD_MAPPING.test(line)
       ENDPOINT_LITERAL.lastIndex = 0
       let m: RegExpExecArray | null
       while ((m = ENDPOINT_LITERAL.exec(line)) !== null) {
         const endpoint = m[1]
         if (!looksLikeEndpoint(endpoint)) continue
-        const key = normalizeEndpoint(endpoint)
+        const effective = methodMapping ? joinRoute(javaPrefix.prefix, endpoint) : endpoint
+        const key = matchKey(effective)
         const rawName = NAMED_SUFFIX.exec(line.slice(0, m.index))?.[1]
         const name = rawName !== undefined && !NAME_DENYLIST.has(rawName) ? rawName : undefined
         if (name !== undefined) names.set(name, key)
-        applyLoc(upsert(key, endpoint, name ?? deriveFeature(endpoint)), f.rel, i + 1, f.server, f.client)
+        touch(touched, f.abs, key)
+        applyLoc(upsert(key, effective, name ?? deriveFeature(effective)), f.rel, i + 1, f.server, f.client, f.dir)
       }
     }
   }
@@ -184,16 +263,67 @@ export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<Cod
           if (name === undefined) continue
           const key = names.get(name)
           if (key === undefined) continue
-          applyLoc(upsert(key, name, name), f.rel, i + 1, f.server, f.client)
+          touch(touched, f.abs, key)
+          applyLoc(upsert(key, name, name), f.rel, i + 1, f.server, f.client, f.dir)
         }
       }
     }
   }
 
-  return [...byEndpoint.values()]
+  const entries = [...byEndpoint.values()]
     .filter(entry => entry.server !== undefined || entry.client !== undefined)
     .sort((a, b) => a.feature.localeCompare(b.feature) || a.endpoint.localeCompare(b.endpoint))
     .slice(0, MAX_ENTRIES)
+  // 只保留最终存在条目的键，避免反向索引指向被 MAX_ENTRIES 截断掉的端点。
+  const kept = new Set(entries.map(entry => matchKey(entry.endpoint)))
+  const fileEndpoints: Record<string, string[]> = {}
+  for (const [abs, keys] of touched) {
+    const alive = [...keys].filter(key => kept.has(key))
+    if (alive.length > 0) fileEndpoints[abs] = alive
+  }
+  return { entries, fileEndpoints }
+}
+
+/**
+ * 由「改动文件」反查受影响的端点：确定性查询（只查索引里该文件声明/调用的端点），
+ * 不做任何语义猜测，因此不会出现「AI 预测影响」那类误报。
+ * @param result - 当前工作空间的功能索引。
+ * @param changed - 改动文件列表（目录绝对路径 + 相对该目录的路径）。
+ * @returns 受影响的端点及其对端落点（同端点同一改动文件只出现一次）。
+ */
+export function findEndpointImpact(result: CodeIndexResult, changed: readonly { dir: string; file: string }[]): EndpointImpact[] {
+  const byKey = new Map<string, CodeIndexEntry>()
+  for (const entry of result.entries) {
+    const key = matchKey(entry.endpoint)
+    if (!byKey.has(key)) byKey.set(key, entry)
+  }
+  const out: EndpointImpact[] = []
+  const seen = new Set<string>()
+  for (const item of changed) {
+    const abs = join(item.dir, item.file)
+    const keys = result.fileEndpoints[abs]
+    if (keys === undefined) continue
+    for (const key of keys) {
+      const entry = byKey.get(key)
+      if (entry === undefined) continue
+      const dedupe = key + '\u0000' + abs
+      if (seen.has(dedupe)) continue
+      seen.add(dedupe)
+      // 对端 = 另一侧的落点：改动文件在某侧目录时，给出另一侧。
+      const onServer = entry.serverDir === item.dir
+      const counterpart = onServer ? entry.client : entry.server
+      const counterpartDir = onServer ? entry.clientDir : entry.serverDir
+      out.push({
+        feature: entry.feature,
+        endpoint: entry.endpoint,
+        changedDir: item.dir,
+        changedFile: item.file,
+        ...(counterpart === undefined ? {} : { counterpart }),
+        ...(counterpartDir === undefined ? {} : { counterpartDir }),
+      })
+    }
+  }
+  return out
 }
 
 /** 功能索引落盘文件（跨重启复用，避免首会话重扫全部代码）。 */
@@ -206,6 +336,25 @@ interface PersistedCodeIndex {
   signature: string
   at: number
   entries: CodeIndexEntry[]
+  /** 文件到端点的反向索引（旧版本文件缺此字段时退化为空，不影响条目读取）。 */
+  fileEndpoints: Record<string, string[]>
+}
+
+/** 空索引结果。 */
+export function emptyCodeIndex(): CodeIndexResult {
+  return { entries: [], fileEndpoints: {} }
+}
+
+/** 校验落盘 / 读取到的反向索引字段。 */
+function parseFileEndpoints(raw: unknown): Record<string, string[]> {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: Record<string, string[]> = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(value)) continue
+    const keys = value.filter((item): item is string => typeof item === 'string' && item !== '')
+    if (keys.length > 0) out[key] = keys
+  }
+  return out
 }
 
 /**
@@ -215,7 +364,7 @@ interface PersistedCodeIndex {
 export class CodeIndexCache {
   /** 缓存有效期：内容级改动不改根目录 mtime，用 TTL 兜住索引陈旧（行号漂移）。 */
   private static readonly TTL_MS = 60_000
-  private readonly cache = new Map<string, { at: number; entries: CodeIndexEntry[] }>()
+  private readonly cache = new Map<string, { at: number; value: CodeIndexResult }>()
   private readonly file: string
   private diskLoaded = false
 
@@ -223,7 +372,7 @@ export class CodeIndexCache {
     this.file = file
   }
 
-  async get(dirs: readonly WorkspaceRef[]): Promise<CodeIndexEntry[]> {
+  async get(dirs: readonly WorkspaceRef[]): Promise<CodeIndexResult> {
     const active = dirs.filter(d => (d.access ?? 'readwrite') !== 'disabled')
     const parts: string[] = []
     for (const d of active) {
@@ -237,19 +386,20 @@ export class CodeIndexCache {
     }
     const key = parts.join('|')
     const hit = this.cache.get(key)
-    if (hit !== undefined && Date.now() - hit.at < CodeIndexCache.TTL_MS) return hit.entries
+    if (hit !== undefined && Date.now() - hit.at < CodeIndexCache.TTL_MS) return hit.value
     if (!this.diskLoaded) {
       this.diskLoaded = true
       const disk = await this.loadDisk()
       if (disk !== undefined && disk.signature === key && Date.now() - disk.at < CodeIndexCache.TTL_MS) {
-        this.cache.set(key, { at: disk.at, entries: disk.entries })
-        return disk.entries
+        const value: CodeIndexResult = { entries: disk.entries, fileEndpoints: disk.fileEndpoints }
+        this.cache.set(key, { at: disk.at, value })
+        return value
       }
     }
     const value = await buildCodeIndex(active)
     this.cache.clear()
-    this.cache.set(key, { at: Date.now(), entries: value })
-    await this.saveDisk({ signature: key, at: Date.now(), entries: value })
+    this.cache.set(key, { at: Date.now(), value })
+    await this.saveDisk({ signature: key, at: Date.now(), entries: value.entries, fileEndpoints: value.fileEndpoints })
     return value
   }
 
@@ -268,7 +418,7 @@ export class CodeIndexCache {
         const entry = item as Record<string, unknown>
         return typeof entry.feature === 'string' && typeof entry.endpoint === 'string'
       })
-      return { signature: record.signature, at: record.at, entries }
+      return { signature: record.signature, at: record.at, entries, fileEndpoints: parseFileEndpoints(record.fileEndpoints) }
     } catch {
       return undefined
     }

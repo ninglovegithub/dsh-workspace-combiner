@@ -9,18 +9,19 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { mkdir, stat } from 'node:fs/promises'
-import { join } from 'node:path'
-import { API, DEFAULT_CODE_INDEX_BUDGET, DEFAULT_STANDARDS_BUDGET, DEFAULT_TOKEN_BUDGET, DEFAULT_WORKSPACE_NAME, MAX_JSON_BODY_BYTES } from './invariant.ts'
+import { isAbsolute, join, relative } from 'node:path'
+import { API, DEFAULT_CODE_INDEX_BUDGET, DEFAULT_COMMANDS_BUDGET, DEFAULT_STANDARDS_BUDGET, DEFAULT_TOKEN_BUDGET, DEFAULT_WORKSPACE_NAME, MAX_JSON_BODY_BYTES } from './invariant.ts'
 import { scanDirectory } from './host/projectDetector.ts'
 import { FileIndexCache } from './host/fileIndex.ts'
-import { CodeIndexCache } from './host/codeIndex.ts'
+import { CodeIndexCache, findEndpointImpact } from './host/codeIndex.ts'
+import type { TokenUsageTracker } from './host/tokenUsage.ts'
 import { codeIndexSignature, type FeatureSummaryCache } from './host/codeIndexSummary.ts'
 import { StandardsLibraryStore, parseLibrary } from './host/standardsLibrary.ts'
 import { generateStandardDraft } from './host/standardsAi.ts'
 import { resolveStandardGroups } from './core/standards.ts'
 import { parseWorkspaceRefs } from './core/validate.ts'
 import { computeContextStats } from './host/contextStats.ts'
-import { getGitStatus } from './host/gitStatus.ts'
+import { getChangedFiles, getGitStatus } from './host/gitStatus.ts'
 import { syncExtraRoots } from './sandbox-sync.ts'
 import { WorkspaceCombinerStore } from './store.ts'
 import { loadModeMaxDepth, type LoadMode, type WorkspaceMode, type WorkspaceRef } from './core/types.ts'
@@ -78,12 +79,20 @@ function sanitizeFolderName(name: string): string {
   return cleaned === '' ? DEFAULT_WORKSPACE_NAME : cleaned.slice(0, 80)
 }
 
+/** token 用量路由所需的宿主侧依赖。 */
+export interface TokenUsageDeps {
+  tokenUsage: TokenUsageTracker
+  /** 某工作空间关联的会话 id 列表（会话 -> 工作空间绑定在 session/created 时确定）。 */
+  sessionsOfWorkspace(workspaceId: string): readonly string[]
+}
+
 /**
  * 构建全部路由。
  * @param ctx - 宿主上下文（用于沙盒联动）。
  * @param store - 持久化存储。
+ * @param usage - token 用量观测与工作空间会话映射。
  */
-export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileIndexCache: FileIndexCache, codeIndexCache: CodeIndexCache, summaryCache: FeatureSummaryCache, standardsLibrary: StandardsLibraryStore): WebRoute[] {
+export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileIndexCache: FileIndexCache, codeIndexCache: CodeIndexCache, summaryCache: FeatureSummaryCache, standardsLibrary: StandardsLibraryStore, usage: TokenUsageDeps): WebRoute[] {
   const guard = (req: IncomingMessage, res: ServerResponse, method: string): boolean => {
     if (!isLoopbackRequest(req)) {
       writeJson(res, 403, { error: 'forbidden: loopback-only' })
@@ -471,7 +480,7 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
             writeJson(res, 200, { entries: [] })
             return
           }
-          const raw = await codeIndexCache.get(ws.directories)
+          const raw = (await codeIndexCache.get(ws.directories)).entries
           const summaries = await summaryCache.get(codeIndexSignature(raw))
           const entries = summaries === undefined ? raw : raw.map(entry => summaries.has(entry.feature) ? { ...entry, summary: summaries.get(entry.feature) } : entry)
           writeJson(res, 200, { entries })
@@ -570,11 +579,11 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         try {
           const ws = await store.getCurrentWorkspace()
           if (ws === undefined) {
-            writeJson(res, 200, { loadMode: 'summary', directories: [], totalFiles: 0, totalDirs: 0, fileIndexTokens: 0, promptOverheadTokens: 0, standardsTokens: 0 })
+            writeJson(res, 200, { loadMode: 'summary', directories: [], totalFiles: 0, totalDirs: 0, fileIndexTokens: 0, promptOverheadTokens: 0, standardsTokens: 0, codeIndexTokens: 0, commandsTokens: 0 })
             return
           }
           const codeIndexEnabled = ws.codeIndexEnabled ?? true
-          const summaries = codeIndexEnabled ? await summaryCache.get(codeIndexSignature(await codeIndexCache.get(ws.directories))) : undefined
+          const summaries = codeIndexEnabled ? await summaryCache.get(codeIndexSignature((await codeIndexCache.get(ws.directories)).entries)) : undefined
           const standardGroups = resolveStandardGroups(ws.standards, ws.directories, await standardsLibrary.get())
           const stats = await computeContextStats({
             directories: ws.directories,
@@ -586,8 +595,74 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
             codeConfig: { enabled: codeIndexEnabled, budget: ws.codeIndexBudget ?? DEFAULT_CODE_INDEX_BUDGET, ...(summaries === undefined ? {} : { summaries }) },
             standardGroups,
             standardsBudget: ws.standards?.budget ?? DEFAULT_STANDARDS_BUDGET,
+            commandsBudget: DEFAULT_COMMANDS_BUDGET,
           })
           writeJson(res, 200, stats)
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    // ---------------------------------------------------------- token-usage（真实用量）
+    {
+      kind: 'exact',
+      path: API.tokenUsage,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        try {
+          const ws = await store.getCurrentWorkspace()
+          const sessionIds = ws === undefined ? [] : usage.sessionsOfWorkspace(ws.id)
+          // 优先「最近有活动的会话」，且必须属于当前工作空间；否则退到最后一个有样本的会话。
+          const active = usage.tokenUsage.latestSessionId()
+          const latestId = sessionIds.includes(active)
+            ? active
+            : [...sessionIds].reverse().find(id => usage.tokenUsage.latestOf(id) !== null) ?? ''
+          const info = latestId === '' ? null : usage.tokenUsage.latestOf(latestId)
+          writeJson(res, 200, {
+            sessions: sessionIds.length,
+            totals: usage.tokenUsage.summarize(sessionIds),
+            latest: info === null ? null : { sessionId: latestId, ...info },
+          })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    // ---------------------------------------------------------- endpoint-impact（改动反查端点）
+    {
+      kind: 'exact',
+      path: API.endpointImpact,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        try {
+          const ws = await store.getCurrentWorkspace()
+          if (ws === undefined) {
+            writeJson(res, 200, { impact: [], changedFiles: 0 })
+            return
+          }
+          const dirs = ws.directories.filter(dir => (dir.access ?? 'readwrite') !== 'disabled')
+          const requested = body !== undefined && Array.isArray(body.files)
+            ? body.files.filter((item): item is string => typeof item === 'string' && item.trim() !== '')
+            : undefined
+          // 未指定文件时用 git 工作区变更（含未跟踪）作为输入：确定性、无需用户操作。
+          const changed: { dir: string; file: string }[] = []
+          if (requested === undefined) {
+            const lists = await Promise.all(dirs.map(async dir => ({ dir: dir.path, files: await getChangedFiles(dir.path) })))
+            for (const item of lists) for (const file of item.files) changed.push({ dir: item.dir, file })
+          } else {
+            for (const raw of requested) {
+              const file = raw.trim()
+              if (isAbsolute(file)) {
+                const dir = dirs.find(d => file === d.path || file.startsWith(d.path + '/'))
+                if (dir !== undefined) changed.push({ dir: dir.path, file: relative(dir.path, file) })
+              } else {
+                for (const dir of dirs) changed.push({ dir: dir.path, file })
+              }
+            }
+          }
+          const index = await codeIndexCache.get(ws.directories)
+          writeJson(res, 200, { impact: findEndpointImpact(index, changed), changedFiles: changed.length })
         } catch (error) {
           fail(res, error)
         }

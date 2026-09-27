@@ -16,6 +16,61 @@ const GIT_TIMEOUT_MS = 5000
 /** 匹配 "[ahead N]"。 */
 const AHEAD_RE = /\[ahead (\d+)/
 
+/** 单次列出的变更文件上限（防大仓库把请求体撑爆）。 */
+const MAX_CHANGED_FILES = 200
+
+/**
+ * 解析 git status --porcelain 的变更文件列表（跳过分支头行）。
+ * 重命名行形如 'R  old -> new'，取箭头右侧的新路径。
+ * @param stdout - git 的标准输出。
+ * @returns 相对仓库根的路径列表（去重、封顶）。
+ */
+export function parseChangedFiles(stdout: string): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const line of stdout.split('\n')) {
+    if (line.length < 4 || line.startsWith('## ')) continue
+    let file = line.slice(3)
+    const arrow = file.indexOf(' -> ')
+    if (arrow >= 0) file = file.slice(arrow + 4)
+    // git 对含空格/中文的路径会加引号并转义；去掉外层引号即可覆盖常见情况。
+    if (file.startsWith('"') && file.endsWith('"') && file.length > 1) file = file.slice(1, -1)
+    if (file === '' || seen.has(file)) continue
+    seen.add(file)
+    out.push(file)
+    if (out.length >= MAX_CHANGED_FILES) break
+  }
+  return out
+}
+
+/**
+ * 列出目录下已变更（含未跟踪）的文件，相对该目录根。
+ * @param path - 目录绝对路径。
+ * @returns 相对路径列表；非 git 仓库 / 任何失败返回空数组。
+ */
+export async function getChangedFiles(path: string): Promise<string[]> {
+  const trimmed = path.trim()
+  if (trimmed === '') return []
+  return await new Promise<string[]>((resolve) => {
+    execFile(
+      'git',
+      ['-C', trimmed, 'status', '--porcelain', '--short'],
+      { timeout: GIT_TIMEOUT_MS, maxBuffer: 4 << 20, windowsHide: true },
+      (error, stdout) => {
+        if (error !== null) {
+          resolve([])
+          return
+        }
+        try {
+          resolve(parseChangedFiles(stdout))
+        } catch {
+          resolve([])
+        }
+      },
+    )
+  })
+}
+
 /**
  * 解析 git status --porcelain -b 的输出。
  * 首行形如 '## main...origin/main [ahead 2]'；其余行前两列是 XY 状态码，

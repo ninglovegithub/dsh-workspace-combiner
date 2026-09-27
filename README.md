@@ -60,8 +60,25 @@ Layers 1-4 ship today; see [Changelog](./CHANGELOG.md) · [中文](./CHANGELOG.z
   re-syncs the sandbox immediately.
 - **File index + load modes** — gitignore-aware bounded file-tree scan with an mtime
   cache; a per-workspace load mode controls injected detail.
-- **Context monitor** — a panel card with per-directory file counts and an estimated
-  token budget, so you can tune the load mode and watch context shrink.
+- **Code/API index** — deterministic HTTP-endpoint extraction that links the server
+  registration site to the client call site as `file:line` across TS/JS/TSX/JSX/Vue and
+  Java/Kotlin/Go/Python/Ruby/C#. Toggleable, budgeted, and copyable as `@featureName`.
+- **Deterministic endpoint correlation** — each endpoint records which directory each side
+  lives in; `/api/user/detail` and `/user/detail` join up (one optional `/api`, optionally
+  followed by `/vN`), and Spring's class-level `@RequestMapping("/user")` is composed with
+  method mappings into `/user/list`. **No semantic guessing, so no false positives.**
+- **Endpoints touched by these changes** — a deterministic reverse lookup from the git
+  working tree, through the file→endpoint map built during the same scan, to the endpoints
+  those files declare or call, with the counterpart file on the other side.
+- **Per-project command handbook** — `run` / `test` / `build` per directory, edited inline and
+  injected with **absolute paths** so the model knows which command to run where. Prefilled
+  from the detected project type only where the command is certain.
+- **Context monitor (estimates)** — a budget modal with per-directory file counts and estimated
+  tokens, so you can tune the load mode and watch context shrink. Fixed overhead is derived as
+  `whole-block render − each block`, so the figures add up to what is actually injected.
+- **Real token usage (measured)** — the same modal shows provider-reported usage: uncached
+  input / cache read / cache write / output, **cache hit rate**, an occupancy bar against the
+  context window, and the **plugin's share** of the latest request.
 - **@-command dynamic scope** — a prompt section teaches the model to resolve `@`-prefixed
   tokens as explicitly referenced paths across all workspace roots (`@dir/`, `@file`,
   `@"path with spaces"`), pulling files into scope on demand.
@@ -81,8 +98,9 @@ Layers 1-4 ship today; see [Changelog](./CHANGELOG.md) · [中文](./CHANGELOG.z
   cards, and a per-directory **column chart**; the panel warns past 80% and past 100%.
 - **Fixed-height panel with local scrolling** — the panel fills the sidebar and only its lists
   scroll, so the header and the New-session button never leave the screen.
-- **Resizable split** — drag the divider between project directories and the context budget
-  (default 6:4); the ratio is remembered.
+- **Compact entry cards + modals** — advanced config, coding standards, prompt preview and the
+  context budget are left-column entry cards that open modals, so they no longer occupy permanent
+  panel height.
 - **Keyboard** — `Cmd/Ctrl+N` new session, `Cmd/Ctrl+K` command palette, `Esc` to close; the
   palette covers switching workspaces, adding directories, refreshing stats and changing modes.
 
@@ -207,6 +225,12 @@ Current session loads[2]project directories:
   12 files / 3 dirs
 [example-backend]/abs/path
   210 files / 42 dirs
+
+# Per-project commands (must be run in the matching absolute path; for self-start and self-verification)
+- example-backend (/abs/path): run `mvn spring-boot:run` | test `mvn test`
+
+# Code/API index (auto-extracted, for navigation; the real code wins)
+- @workspaceCreate → /api/dsh-workspace-combiner/workspace-create | server src/routes.ts:130 | client src/client/api.ts:39
 
 # @-command dynamic scope
 - Tokens prefixed with @ are explicitly referenced paths: @absolute/path or @relative/to-a-workspace-root

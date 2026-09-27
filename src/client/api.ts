@@ -5,7 +5,7 @@
  */
 
 import { API } from '../invariant.ts'
-import type { CodeIndexEntry, ContextStats, DetectedProject, GitStatus, LoadMode, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceStandards } from '../core/types.ts'
+import type { CodeIndexEntry, ContextStats, DetectedProject, EndpointImpact, GitStatus, LoadMode, TokenUsageReport, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceStandards } from '../core/types.ts'
 import type { StandardsLibrary } from '../core/standards.ts'
 import type { FileTreeNode } from '../core/fileTree.ts'
 
@@ -172,5 +172,18 @@ export class WorkspaceCombinerApi {
   async generateStandard(payload: { name: string; tech?: string; directory?: string; hint?: string }): Promise<string> {
     const body = await request<{ body: string }>(API.standardsAi, { method: 'POST', body: JSON.stringify(payload) })
     return body.body
+  }
+
+  /** 读取当前工作空间的真实 token 用量（provider 上报，含提示词缓存命中）。 */
+  async tokenUsage(): Promise<TokenUsageReport> {
+    return await request<TokenUsageReport>(API.tokenUsage, { method: 'GET' })
+  }
+
+  /** 由改动文件反查受影响的前后端端点（不传 files 时用 git 工作区变更）。 */
+  async endpointImpact(files?: readonly string[]): Promise<{ impact: EndpointImpact[]; changedFiles: number }> {
+    return await request<{ impact: EndpointImpact[]; changedFiles: number }>(API.endpointImpact, {
+      method: 'POST',
+      body: JSON.stringify(files === undefined ? {} : { files }),
+    })
   }
 }

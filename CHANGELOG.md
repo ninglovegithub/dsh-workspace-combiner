@@ -6,6 +6,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 English · [中文](./CHANGELOG.zh.md)
 
+## [Unreleased]
+
+### Added — real token usage (provider-reported)
+
+- **"Real usage" block in the context modal** — reads actual provider-reported usage from
+  `session/event` (`assistant/message` settlement samples) and shows uncached input, cache read,
+  cache write, output, **cache hit rate**, and context occupancy against the model's context window.
+- **Plugin share** — the injected blocks' estimated tokens divided by the latest request's prompt
+  tokens, so you can see what percentage of each request your own context injection costs.
+- **Estimates vs reality side by side** — the existing per-block figures stay as estimates; the new
+  block is ground truth. A large gap tells you the estimator needs fixing.
+
+### Added — per-project command handbook
+
+- **`commands` per directory** (`run` / `test` / `build`) — edited inline in a directory card,
+  persisted with the directory list (no new file), and injected as its own prompt block
+  (`# Per-project commands`) with absolute paths and a 400-token budget.
+- **Prefilled from project type** — the workspace wizard and the directory scanner fill in
+  `mvn spring-boot:run`, `go run .`, `pnpm dev`, … where the command is certain; commands that
+  need extra arguments are left empty rather than injected as something that cannot run.
+
+### Added — deterministic endpoint correlation
+
+- **Per-directory endpoint attribution** — each indexed endpoint now records which directory its
+  server side and client side live in.
+- **`/api` prefix tolerance** — `/api/user/detail` and `/user/detail` now match, so a proxied
+  frontend and a plain backend endpoint join up instead of being indexed twice.
+- **Spring class-level prefix composition** — `@RequestMapping("/user")` plus `@GetMapping("/list")`
+  is indexed as `/user/list` instead of the bare `/list`.
+- **"Endpoints touched by these changes" card** — a deterministic reverse lookup from the git
+  working-tree changes (via the file→endpoint map built during the same scan) to the endpoints
+  those files declare or call, with the counterpart file on the other side. No AI, no guessing.
+
+### Changed — context accounting
+
+- Per-block token accounting is exact: the fixed-overhead figure is now derived as
+  `whole-block render − file index − code index − standards − commands`, so the panel's numbers add
+  up to the amount actually injected instead of double-counting the block header.
+- New `codeIndexTokens` and `commandsTokens` fields on the context stats, each with its own card.
+
 ## [0.5.0] - 2026-09-27
 
 ### Added — preset coding standards

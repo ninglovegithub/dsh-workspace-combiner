@@ -6,7 +6,7 @@
 import type { CodeIndexEntry, LoadMode, WorkspaceMode, WorkspaceRef } from './core/types.ts'
 import { renderTree, estimateTokens, type FileIndexEntry } from './core/fileTree.ts'
 import type { StandardGroup } from './core/standards.ts'
-import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_STANDARDS_BUDGET } from './invariant.ts'
+import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_COMMANDS_BUDGET, DEFAULT_STANDARDS_BUDGET } from './invariant.ts'
 
 /** 功能索引默认预算（不挤占文件索引配额）。 */
 export const CODE_INDEX_TOKEN_BUDGET = DEFAULT_CODE_INDEX_BUDGET
@@ -39,6 +39,40 @@ export function renderCodeIndex(entries: readonly CodeIndexEntry[], tokenBudget 
 
 /** 目录被配额截断时的块内标注。 */
 const QUOTA_NOTE = '  …（本目录已达配额，可调高预算或改用摘要模式）'
+
+/**
+ * 渲染「各项目常用命令」区块（面板可编辑；带绝对路径，避免模型在错误的 cwd 执行）。
+ * 只渲染填了命令的目录，一条都没填时返回空串（不占用上下文）。
+ * @param directories - 工作空间的目录列表。
+ * @param tokenBudget - >0 时限制该区块的 token 上限。
+ */
+export function renderCommands(directories: readonly WorkspaceRef[], tokenBudget = DEFAULT_COMMANDS_BUDGET): string {
+  const rows = directories
+    .filter(dir => (dir.access ?? 'readwrite') !== 'disabled')
+    .map(dir => {
+      const commands = dir.commands
+      if (commands === undefined) return undefined
+      const parts = [
+        ...(commands.run === undefined ? [] : ['启动 `' + commands.run + '`']),
+        ...(commands.test === undefined ? [] : ['测试 `' + commands.test + '`']),
+        ...(commands.build === undefined ? [] : ['构建 `' + commands.build + '`']),
+      ]
+      return parts.length === 0 ? undefined : '- ' + dir.name + '（' + dir.path + '）: ' + parts.join(' | ')
+    })
+    .filter((row): row is string => row !== undefined)
+  if (rows.length === 0) return ''
+  const header = '# 各项目常用命令（必须在对应绝对路径下执行；用于自启与自证）'
+  const budget = tokenBudget > 0 ? tokenBudget : Number.POSITIVE_INFINITY
+  const lines: string[] = [header]
+  let used = estimateTokens(header)
+  for (const row of rows) {
+    const cost = estimateTokens(row) + 1
+    if (used + cost > budget) { lines.push('…（命令已达预算上限，可在面板调整）'); break }
+    lines.push(row)
+    used += cost
+  }
+  return lines.join('\n')
+}
 
 /**
  * 渲染文件索引区块（按加载模式）。
@@ -146,6 +180,8 @@ export interface MultiWorkspacePromptInput {
   /** 生效的开发规范分组（按作用域）。 */
   standardGroups?: readonly StandardGroup[]
   standardsBudget?: number
+  /** 各项目常用命令区块预算。 */
+  commandsBudget?: number
 }
 
 /**
@@ -165,6 +201,7 @@ export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): st
     codeIndexBudget = CODE_INDEX_TOKEN_BUDGET,
     standardGroups = [],
     standardsBudget = DEFAULT_STANDARDS_BUDGET,
+    commandsBudget = DEFAULT_COMMANDS_BUDGET,
   } = input
   // 剔除「禁用」目录（不注入上下文）；主项目（第 0 项）恒保留。
   const active = workspaces.filter((ws, index) => index === 0 || (ws.access ?? 'readwrite') !== 'disabled')
@@ -186,10 +223,12 @@ export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): st
   const standards = renderStandards(standardGroups, standardsBudget)
   const fileIndex = renderFileIndex(entries, loadMode, tokenBudget)
   const codeIndex = renderCodeIndex(codeEntries, codeIndexBudget)
+  const commands = renderCommands(active, commandsBudget)
   return [
     '# 多工作区联合开发模式生效',
     `当前会话加载【${active.length}】个项目目录：`,
     list,
+    ...(commands !== '' ? ['', commands] : []),
     ...(standards !== '' ? ['', standards] : []),
     ...(fileIndex !== '' ? ['', fileIndex] : []),
     ...(codeIndex !== '' ? ['', codeIndex] : []),

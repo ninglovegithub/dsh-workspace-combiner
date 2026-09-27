@@ -4,7 +4,27 @@
  * @module dsh-workspace-combiner/core/validate
  */
 
-import type { WorkspaceRef } from './types.ts'
+import type { DirectoryCommands, WorkspaceRef } from './types.ts'
+
+/**
+ * 校验并规范化目录命令：三个字段都是可选非空字符串，全空时返回 undefined
+ * （避免把空对象写进持久化数据）。
+ */
+export function parseCommands(raw: unknown): DirectoryCommands | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const record = raw as Record<string, unknown>
+  const pick = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
+  const run = pick(record.run)
+  const test = pick(record.test)
+  const build = pick(record.build)
+  if (run === undefined && test === undefined && build === undefined) return undefined
+  return {
+    ...(run === undefined ? {} : { run }),
+    ...(test === undefined ? {} : { test }),
+    ...(build === undefined ? {} : { build }),
+  }
+}
 
 /** 校验并规范化一条目录项；缺 id/name/path 等必填字段时返回 undefined。 */
 export function parseWorkspaceRef(raw: unknown): WorkspaceRef | undefined {
@@ -21,6 +41,7 @@ export function parseWorkspaceRef(raw: unknown): WorkspaceRef | undefined {
     ...(ref.access === 'readwrite' || ref.access === 'readonly' || ref.access === 'disabled' ? { access: ref.access } : {}),
     ...(typeof ref.group === 'string' && ref.group !== '' ? { group: ref.group } : {}),
     ...(typeof ref.note === 'string' && ref.note !== '' ? { note: ref.note } : {}),
+    ...(parseCommands(ref.commands) === undefined ? {} : { commands: parseCommands(ref.commands) as DirectoryCommands }),
   }
 }
 

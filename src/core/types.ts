@@ -31,6 +31,16 @@ export function loadModeMaxDepth(loadMode: LoadMode): number {
   return loadMode === 'full' ? 4 : loadMode === 'tree' ? 3 : 1
 }
 
+/** 一个目录的常用命令（面板可编辑，注入 prompt 供模型自证与自启）。 */
+export interface DirectoryCommands {
+  /** 启动 / 开发服务命令。 */
+  run?: string
+  /** 测试命令。 */
+  test?: string
+  /** 构建命令。 */
+  build?: string
+}
+
 /** 一个被选中的项目（目录）引用。path 是宿主文件系统的绝对路径。 */
 export interface WorkspaceRef {
   /** 稳定 id（本插件内 = path；兼容历史 DSH workspaceId）。 */
@@ -51,6 +61,8 @@ export interface WorkspaceRef {
   group?: string
   /** 目录备注（用户自定义，展示在目录名下方；随目录列表整体持久化）。 */
   note?: string
+  /** 该目录的常用命令（启动 / 测试 / 构建；注入 prompt 时带绝对路径）。 */
+  commands?: DirectoryCommands
 }
 
 /** 一个目录的 git 状态（非 git 仓库时为 null）。 */
@@ -81,6 +93,10 @@ export interface CodeIndexEntry {
   server?: CodeIndexLoc
   /** 客户端调用处。 */
   client?: CodeIndexLoc
+  /** 服务端落点所属目录的绝对路径（跨目录配对展示用）。 */
+  serverDir?: string
+  /** 客户端落点所属目录的绝对路径。 */
+  clientDir?: string
   /** 其它引用处数量。 */
   refs: number
   /** 可选的一句话功能摘要（codeIndexSummary='llm' 时生成并缓存）。 */
@@ -100,6 +116,8 @@ export interface DetectedProject {
   type: ProjectType
   /** 识别依据（特征文件名或描述）。 */
   evidence: string
+  /** 按项目类型推断的常用命令默认值（面板可改）。 */
+  commands?: DirectoryCommands
 }
 
 /** 工作空间目录配置快照（一键保存/恢复目录选择 + 访问模式 + 分组）。 */
@@ -213,8 +231,66 @@ export interface ContextStats {
   totalDirs: number
   /** 文件索引区块估算 token 数。 */
   fileIndexTokens: number
-  /** 目录清单 + 规则等固定开销估算 token 数。 */
+  /** 目录清单 + 规则等固定开销估算 token 数（不含功能索引与命令区块）。 */
   promptOverheadTokens: number
   /** 开发规范区块估算 token 数。 */
   standardsTokens: number
+  /** 功能/接口索引区块估算 token 数。 */
+  codeIndexTokens: number
+  /** 各项目常用命令区块估算 token 数。 */
+  commandsTokens: number
+}
+
+// ---------------------------------------------------------------------------
+// 真实 token 用量（provider 上报；用于面板「真实消耗」块）
+// ---------------------------------------------------------------------------
+
+/** 一步的 provider 上报用量（单次模型调用的结算样本）。 */
+export interface TokenUsageSample {
+  /** 未命中缓存的输入 token。 */
+  inputTokens: number
+  outputTokens: number
+  /** 命中提示词缓存的输入 token。 */
+  cacheReadTokens: number
+  /** 写入缓存的 token。 */
+  cacheWriteTokens: number
+}
+
+/** 一个会话（或一组会话求和）的 token 用量汇总。 */
+export interface TokenUsageSummary {
+  /** 结算的步数（turn/step 去重后）。 */
+  steps: number
+  /** 未命中缓存的输入总量。 */
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  /** prompt 侧总量 = 未命中输入 + 缓存读 + 缓存写。 */
+  promptTokens: number
+  /** 缓存命中率（0~1，cacheRead / promptTokens）；无样本时为 null。 */
+  cacheHitRate: number | null
+}
+
+/** 面板「真实消耗」块的查询结果。 */
+export interface TokenUsageReport {
+  /** 统计覆盖的会话数。 */
+  sessions: number
+  /** 这些会话的用量合计。 */
+  totals: TokenUsageSummary
+  /** 最近活跃会话的上下文占用（无样本时为 null）。 */
+  latest: { sessionId: string; contextWindow?: number; promptTokens: number } | null
+}
+
+/** 一处端点因某个文件改动而受影响。 */
+export interface EndpointImpact {
+  feature: string
+  endpoint: string
+  /** 命中的改动文件所属目录绝对路径。 */
+  changedDir: string
+  /** 命中的改动文件（相对其目录根）。 */
+  changedFile: string
+  /** 对端落点（服务端或客户端）所在目录绝对路径。 */
+  counterpartDir?: string
+  /** 对端落点（服务端或客户端）。 */
+  counterpart?: CodeIndexLoc
 }

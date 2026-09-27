@@ -84,7 +84,11 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
 
   const finalName = name.trim() === '' ? DEFAULT_WORKSPACE_NAME : name.trim()
   const selected = projects.filter(p => checked.has(p.root))
-  const buildSecondaryRefs = (): WorkspaceRef[] => selected.map(p => ({ id: p.root, name: p.name, path: p.root, projectType: p.type, evidence: p.evidence }))
+  // 识别出的项目类型顺带带上预填命令（面板里可改），省掉「这项目怎么跑」的手工录入。
+  const buildSecondaryRefs = (): WorkspaceRef[] => selected.map(p => ({
+    id: p.root, name: p.name, path: p.root, projectType: p.type, evidence: p.evidence,
+    ...(p.commands === undefined ? {} : { commands: p.commands }),
+  }))
 
   return (
     <div className="wcb-overlay" onClick={onClose}>

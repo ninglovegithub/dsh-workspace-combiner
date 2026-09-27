@@ -1,11 +1,14 @@
 /**
- * 上下文预算弹窗：环形总览 + 单行统计卡 + 逐目录横向条形图（可滚动）+ 预算与刷新。
- * 从右栏移入左栏「更多」入口，避免长期占用右栏高度。
+ * 上下文预算弹窗：环形总览（估算）+ 真实消耗块（provider 上报）+ 单行统计卡 +
+ * 逐目录横向条形图（可滚动）+ 预算与刷新。从右栏移入左栏「更多」入口。
+ *
+ * 「估算」和「真实」并排显示是有意的：估算值告诉你预算分配是否合理，真实值告诉你
+ * 到底花了多少、缓存命中多少。二者差值大说明估算模型需要修正。
  * @module dsh-workspace-combiner/client/panel/BudgetModal
  */
 
 import { useEffect, type ChangeEvent, type ReactElement } from 'react'
-import type { ContextStats, ProjectType, WorkspaceRef } from '../../core/types.ts'
+import type { ContextStats, ProjectType, TokenUsageReport, WorkspaceRef } from '../../core/types.ts'
 import { tt } from '../locales.ts'
 
 /** 千分位 token 简写（36200 -> 36.2k）。 */
@@ -48,16 +51,86 @@ function Donut({ percentage, size = 44, strokeWidth = 4, color = '#4f8cff' }: {
   )
 }
 
+/** 百分比展示（0~1；null 显示 —）。 */
+function pct(value: number | null): string {
+  return value === null ? '—' : Math.round(value * 100) + '%'
+}
+
+/** 真实消耗块：provider 上报的用量 + 插件注入占比。与上方估算值对照看。 */
+function RealUsage({ usage, injected }: { usage: TokenUsageReport | null; injected: number }): ReactElement {
+  if (usage === null || (usage.totals.steps === 0 && usage.latest === null)) {
+    return (
+      <div className="wcb-usage-block">
+        <div className="wcb-dir-usage-title">{tt('usageTitle')}</div>
+        <div className="wcb-hint">{tt('usageNoData')}</div>
+      </div>
+    )
+  }
+  const t = usage.totals
+  const latest = usage.latest
+  const window = latest?.contextWindow
+  const pressure = latest?.promptTokens ?? 0
+  const occupancy = window !== undefined && window > 0 ? pressure / window : null
+  const share = latest !== null && latest.promptTokens > 0 ? injected / latest.promptTokens : null
+  return (
+    <div className="wcb-usage-block">
+      <div className="wcb-dir-usage-title">
+        {tt('usageTitle')}
+        <span className="wcb-usage-sessions">{tt('usageSessions', { n: String(usage.sessions) })}</span>
+      </div>
+      <div className="wcb-stat-grid">
+        <div className="wcb-stat-card">
+          <div className="wcb-stat-label">{tt('usageInput')}</div>
+          <div className="wcb-stat-value-sm">{kmTokens(t.inputTokens)}</div>
+        </div>
+        <div className="wcb-stat-card">
+          <div className="wcb-stat-label">{tt('usageCacheRead')}</div>
+          <div className="wcb-stat-value-sm">{kmTokens(t.cacheReadTokens)}</div>
+        </div>
+        <div className="wcb-stat-card">
+          <div className="wcb-stat-label">{tt('usageCacheWrite')}</div>
+          <div className="wcb-stat-value-sm">{kmTokens(t.cacheWriteTokens)}</div>
+        </div>
+        <div className="wcb-stat-card">
+          <div className="wcb-stat-label">{tt('usageOutput')}</div>
+          <div className="wcb-stat-value-sm">{kmTokens(t.outputTokens)}</div>
+        </div>
+        <div className="wcb-stat-card">
+          <div className="wcb-stat-label">{tt('usageHitRate')}</div>
+          <div className="wcb-stat-value-sm">{pct(t.cacheHitRate)}</div>
+        </div>
+        <div className="wcb-stat-card">
+          <div className="wcb-stat-label">{tt('usagePluginShare')}</div>
+          <div className="wcb-stat-value-sm">{pct(share)}</div>
+        </div>
+      </div>
+      {window !== undefined && window > 0 ? (
+        <>
+          <div className="wcb-usage-ctx-row">
+            <span className="wcb-usage-ctx-label">{tt('usageContext')}</span>
+            <span className="wcb-usage-ctx-val">{kmTokens(pressure) + ' / ' + kmTokens(window)}</span>
+          </div>
+          <div className="wcb-bar-track-h">
+            <div className="wcb-bar-fill-h" style={{ width: Math.max(1, Math.round((occupancy ?? 0) * 100)) + '%', background: (occupancy ?? 0) > 0.9 ? '#f85149' : (occupancy ?? 0) > 0.7 ? '#d4a017' : '#4f8cff' }} />
+          </div>
+        </>
+      ) : null}
+      <div className="wcb-hint">{tt('usageHint')}</div>
+    </div>
+  )
+}
+
 interface BudgetModalProps {
   stats: ContextStats | null
   budget: number
   dirs: readonly WorkspaceRef[]
+  usage: TokenUsageReport | null
   onBudget(value: number): void
   onRefresh(): void
   onClose(): void
 }
 
-export function BudgetModal({ stats, budget, dirs, onBudget, onRefresh, onClose }: BudgetModalProps): ReactElement {
+export function BudgetModal({ stats, budget, dirs, usage, onBudget, onRefresh, onClose }: BudgetModalProps): ReactElement {
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
@@ -65,6 +138,7 @@ export function BudgetModal({ stats, budget, dirs, onBudget, onRefresh, onClose 
   }, [onClose])
 
   const total = (stats?.fileIndexTokens ?? 0) + (stats?.promptOverheadTokens ?? 0) + (stats?.standardsTokens ?? 0)
+    + (stats?.codeIndexTokens ?? 0) + (stats?.commandsTokens ?? 0)
   const ratio = budget > 0 ? total / budget : 0
   const activeDirs = (stats?.directories ?? []).filter(d => d.access !== 'disabled')
   const maxDirTokens = Math.max(1, ...(stats?.directories ?? []).map(d => d.tokens))
@@ -117,7 +191,16 @@ export function BudgetModal({ stats, budget, dirs, onBudget, onRefresh, onClose 
                   <div className="wcb-stat-label">{tt('statStandards')}</div>
                   <div className="wcb-stat-value-sm">{kmTokens(stats.standardsTokens)}</div>
                 </div>
+                <div className="wcb-stat-card">
+                  <div className="wcb-stat-label">{tt('statCodeIndex')}</div>
+                  <div className="wcb-stat-value-sm">{kmTokens(stats.codeIndexTokens)}</div>
+                </div>
+                <div className="wcb-stat-card">
+                  <div className="wcb-stat-label">{tt('statCommands')}</div>
+                  <div className="wcb-stat-value-sm">{kmTokens(stats.commandsTokens)}</div>
+                </div>
               </div>
+              <RealUsage usage={usage} injected={total} />
               <div className="wcb-dir-usage-title">{tt('dirUsageTitle')}</div>
               {activeDirs.length === 0 ? <div className="wcb-hint">{tt('monitorLoading')}</div> : (
                 <div className="wcb-bars" role="list" aria-label={tt('dirUsageTitle')}>

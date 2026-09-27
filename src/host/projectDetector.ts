@@ -9,7 +9,7 @@
 import { readdir, readFile } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { basename, join } from 'node:path'
-import type { DetectedProject, ProjectType } from '../core/types.ts'
+import type { DetectedProject, DirectoryCommands, ProjectType } from '../core/types.ts'
 
 /** 最大扫描深度（根 = 0，向下到第 2 层子目录）。 */
 const MAX_SCAN_DEPTH = 2
@@ -72,6 +72,27 @@ function evidenceFor(type: ProjectType): string {
   }
 }
 
+/**
+ * 按项目类型给出常用命令默认值（面板预填，用户可改）。
+ * 只给「几乎必然正确」的通用命令：需要额外参数（profile、模块名）的一律留空，
+ * 宁可让用户自己填，也不要注入一条跑不通的命令。
+ * @param type - 识别出的项目类型。
+ * @returns 默认命令（无把握时缺字段）。
+ */
+export function defaultCommands(type: ProjectType): DirectoryCommands | undefined {
+  switch (type) {
+    case 'java': return { run: 'mvn spring-boot:run', test: 'mvn test', build: 'mvn -q package -DskipTests' }
+    case 'go': return { run: 'go run .', test: 'go test ./...', build: 'go build ./...' }
+    case 'python': return { test: 'pytest' }
+    case 'frontend-next': return { run: 'pnpm dev', test: 'pnpm test', build: 'pnpm build' }
+    case 'frontend-vue':
+    case 'frontend-react':
+    case 'frontend-webpack':
+    case 'frontend': return { run: 'pnpm dev', test: 'pnpm test', build: 'pnpm build' }
+    default: return undefined
+  }
+}
+
 /** 从根目录向下扫描（最多 2 层），返回识别到的项目列表。 */
 export async function scanDirectory(root: string): Promise<DetectedProject[]> {
   const found: DetectedProject[] = []
@@ -89,7 +110,8 @@ export async function scanDirectory(root: string): Promise<DetectedProject[]> {
     const names = entries.map(e => e.name)
     const type = await detectType(dir, names)
     if (type !== 'none') {
-      found.push({ root: dir, name: basename(dir), type, evidence: evidenceFor(type) })
+      const commands = defaultCommands(type)
+      found.push({ root: dir, name: basename(dir), type, evidence: evidenceFor(type), ...(commands === undefined ? {} : { commands }) })
       return
     }
     if (depth >= MAX_SCAN_DEPTH) return

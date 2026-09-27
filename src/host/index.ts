@@ -34,6 +34,7 @@ import { loadModeMaxDepth, type CodeIndexEntry, type LoadMode, type WorkspaceMod
 import { CodeIndexCache } from './codeIndex.ts'
 import { FeatureSummaryCache, codeIndexSignature, summarizeFeatures } from './codeIndexSummary.ts'
 import { StandardsLibraryStore } from './standardsLibrary.ts'
+import { TokenUsageTracker, type TrackedEvent, type TrackedSession } from './tokenUsage.ts'
 import { resolveStandardGroups, type StandardGroup } from '../core/standards.ts'
 
 /** 稳定的 cordis 插件名（编排行 id）。 */
@@ -88,6 +89,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   const codeIndexCache = new CodeIndexCache()
   const summaryCache = new FeatureSummaryCache()
   const standardsLibrary = new StandardsLibraryStore()
+  const tokenUsage = new TokenUsageTracker()
   const selectionBySession = new Map<string, { directories: readonly WorkspaceRef[]; mode: WorkspaceMode; loadMode: LoadMode; tokenBudget: number; entries: FileIndexEntry[]; codeEntries: CodeIndexEntry[]; codeIndexBudget: number; standardGroups: StandardGroup[]; standardsBudget: number }>()
   // 会话 id -> 归属的自定义工作空间 id（新建会话时的当前工作空间）。
   const sessionWorkspaceBySession = new Map<string, string>()
@@ -150,7 +152,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         }))
       // 功能/接口索引：把前后端落点连起来，减少盲搜。可在面板关闭或改预算；
       // codeIndexSummary='llm' 时按签名生成一次一句话摘要并缓存（失败静默降级）。
-      const baseCodeEntries = (ws.codeIndexEnabled ?? true) ? await codeIndexCache.get(directories) : []
+      const baseCodeEntries = (ws.codeIndexEnabled ?? true) ? (await codeIndexCache.get(directories)).entries : []
       const signature = codeIndexSignature(baseCodeEntries)
       const cachedSummaries = baseCodeEntries.length > 0 ? await summaryCache.get(signature) : undefined
       const codeEntries = withSummaries(baseCodeEntries, cachedSummaries)
@@ -183,11 +185,23 @@ export function apply(ctx: Context, config: Config = {}): void {
     selectionBySession.delete(session.id)
     sessionWorkspaceBySession.delete(session.id)
     renderedBySession.delete(session.id)
+    tokenUsage.forget(session.id)
+  }, { global: true })
+
+  // 2.5) 真实 token 用量：采样 assistant/message 的 provider 上报值（含提示词缓存命中）。
+  // 用量只在内存里观测，不落盘——面板显示的是「本机本次运行」的真实消耗。
+  ctx.on('session/event', (session: TrackedSession, event: TrackedEvent) => {
+    tokenUsage.observe(session, event)
   }, { global: true })
 
   // 3) 路由族（client -> host：读写勾选与模板；勾选变化时联动沙盒）。
   ctx.effect(() => {
-    const disposers = makeRoutes(ctx, store, fileIndexCache, codeIndexCache, summaryCache, standardsLibrary).map(route => ctx.webServer.register(route))
+    const disposers = makeRoutes(ctx, store, fileIndexCache, codeIndexCache, summaryCache, standardsLibrary, {
+      tokenUsage,
+      // 用量按工作空间聚合：会话 -> 工作空间的绑定在 session/created 时确定。
+      sessionsOfWorkspace: (workspaceId: string) =>
+        [...sessionWorkspaceBySession].filter(([, id]) => id === workspaceId).map(([sessionId]) => sessionId),
+    }).map(route => ctx.webServer.register(route))
     return () => {
       for (const dispose of disposers) dispose()
     }

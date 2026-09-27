@@ -31,6 +31,9 @@ export const DEFAULT_CODE_INDEX_BUDGET = 400
 /** 开发规范区块的 token 预算默认值（独立预算，避免把文件索引挤掉）。 */
 export const DEFAULT_STANDARDS_BUDGET = 800
 
+/** 各项目常用命令区块的 token 预算默认值。 */
+export const DEFAULT_COMMANDS_BUDGET = 400
+
 /** 宿主持久化文件名（相对 $DSH_HOME / ~/.dsh）。 */
 export const STORE_FILE = 'dsh-workspace-combiner.json'
 
@@ -55,6 +58,8 @@ export const API = {
   standards: '/api/dsh-workspace-combiner/standards',
   workspaceStandards: '/api/dsh-workspace-combiner/workspace-standards',
   standardsAi: '/api/dsh-workspace-combiner/standards-ai',
+  tokenUsage: '/api/dsh-workspace-combiner/token-usage',
+  endpointImpact: '/api/dsh-workspace-combiner/endpoint-impact',
 } as const
 
 /** 请求体上限（1 MiB），超出直接拒绝。 */
