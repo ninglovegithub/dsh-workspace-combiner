@@ -423,7 +423,7 @@ const PANEL_CSS = String.raw`
 .wcb-codeindex-card{display:flex;flex-direction:column;overflow:hidden;flex:0 0 auto;max-height:320px}
 .wcb-codeindex-card .wcb-card-body{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin}
 /* 卡片底部固定说明行：放在滚动容器 body 之外，所以列表再长它也钉在卡片底部，卡片高度仍受 max-height 限制 */
-.wcb-codeindex-footer{flex:none;padding:0 12px 7px}
+.wcb-codeindex-footer{flex:none;margin:5px 12px 7px}
 .wcb-budget-card .wcb-budget-split{flex:1;min-height:0;overflow-y:auto}
 .wcb-budget-split{display:flex;flex-direction:column;gap:8px;padding:6px 12px}
 .wcb-budget-left{display:flex;flex-direction:column;gap:8px}
@@ -475,7 +475,7 @@ const PANEL_CSS = String.raw`
 .wcb-dir-cmd-actions .wcb-hint{margin:0;flex:1 1 auto;min-width:0}
 
 /* ---------- 本次变更 -> 受影响端点（并入功能索引卡，不再单独占一张卡） ---------- */
-.wcb-impact{display:flex;flex-direction:column;gap:3px;padding:5px 6px;margin-bottom:5px;border:1px solid var(--wcb-line2);border-radius:5px;background:var(--wcb-surface)}
+.wcb-impact{flex:0 1 auto;min-height:0;max-height:110px;overflow-y:auto;margin:0 12px 5px;display:flex;flex-direction:column;gap:3px;padding:5px 6px;border:1px solid var(--wcb-line2);border-radius:5px;background:var(--wcb-surface)}
 .wcb-impact-head{display:flex;align-items:center;gap:6px;min-width:0}
 .wcb-impact-title{font-size:9px;color:var(--wcb-dim);text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
 .wcb-impact-count{font-size:9px;color:var(--wcb-muted);white-space:nowrap}

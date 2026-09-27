@@ -639,37 +639,37 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                 </select>
               </div>
             </div>
-            <div className="wcb-card-body">
-              {/* 本次变更 -> 受影响端点：确定性反查（改动文件 -> 端点 -> 对端落点）；
-                  与功能索引同卡，避免左栏多出一张固定高度卡被裁掉 */}
-              <div className="wcb-impact">
-                <div className="wcb-impact-head">
-                  <span className="wcb-impact-title">{tt('impactTitle')}</span>
-                  <span className="wcb-impact-count">{state.endpointImpactFiles > 0 ? tt('impactFiles', { n: state.endpointImpactFiles }) : tt('impactEmpty')}</span>
-                  <button type="button" className="wcb-linkbtn" aria-label={tt('impactRefresh')} disabled={state.endpointImpactLoading} onClick={state.refreshEndpointImpact}>{'↻ ' + tt('impactRefresh')}</button>
-                </div>
-                {state.endpointImpactFiles > 0 && state.endpointImpact.length === 0 ? (
-                  <span className="wcb-hint">{tt('impactNone')}</span>
-                ) : null}
-                {state.endpointImpact.map(item => (
-                  <div
-                    key={item.endpoint + '|' + item.changedFile + '|' + (item.counterpart?.file ?? '')}
-                    role="button"
-                    tabIndex={0}
-                    title={tt('codeIndexCopy')}
-                    onClick={() => state.copyText('@' + item.feature)}
-                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); state.copyText('@' + item.feature) } }}
-                    style={{ display: 'flex', gap: 6, alignItems: 'baseline', fontSize: 10, cursor: 'pointer', padding: '2px 5px', borderRadius: 4, background: 'var(--wcb-surface)' }}
-                  >
-                    <span style={{ color: 'var(--wcb-purple)', fontWeight: 600, flex: 'none' }}>{'@' + item.feature}</span>
-                    <span style={{ color: 'var(--wcb-text2)', flex: 'none', fontFamily: 'var(--ds-font-family-code,monospace)' }}>{item.endpoint}</span>
-                    <span style={{ color: 'var(--wcb-muted)', flex: 'none' }}>{'✎ ' + item.changedFile}</span>
-                    {item.counterpart !== undefined ? (
-                      <span style={{ color: 'var(--wcb-dim)', flex: 'none' }}>{tt('impactCounterpart') + ' → ' + item.counterpart.file + ':' + item.counterpart.line}</span>
-                    ) : null}
-                  </div>
-                ))}
+            {/* 本次变更 -> 受影响端点：确定性反查（改动文件 -> 端点 -> 对端落点）；
+                与功能索引同卡，避免左栏多出一张固定高度卡被裁掉 */}
+            <div className="wcb-impact">
+              <div className="wcb-impact-head">
+                <span className="wcb-impact-title">{tt('impactTitle')}</span>
+                <span className="wcb-impact-count">{state.endpointImpactFiles > 0 ? tt('impactFiles', { n: state.endpointImpactFiles }) : tt('impactEmpty')}</span>
+                <button type="button" className="wcb-linkbtn" aria-label={tt('impactRefresh')} disabled={state.endpointImpactLoading} onClick={state.refreshEndpointImpact}>{'↻ ' + tt('impactRefresh')}</button>
               </div>
+              {state.endpointImpactFiles > 0 && state.endpointImpact.length === 0 ? (
+                <span className="wcb-hint">{tt('impactNone')}</span>
+              ) : null}
+              {state.endpointImpact.map(item => (
+                <div
+                  key={item.endpoint + '|' + item.changedFile + '|' + (item.counterpart?.file ?? '')}
+                  role="button"
+                  tabIndex={0}
+                  title={tt('codeIndexCopy')}
+                  onClick={() => state.copyText('@' + item.feature)}
+                  onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); state.copyText('@' + item.feature) } }}
+                  style={{ display: 'flex', gap: 6, alignItems: 'baseline', fontSize: 10, cursor: 'pointer', padding: '2px 5px', borderRadius: 4, background: 'var(--wcb-surface)' }}
+                >
+                  <span style={{ color: 'var(--wcb-purple)', fontWeight: 600, flex: 'none' }}>{'@' + item.feature}</span>
+                  <span style={{ color: 'var(--wcb-text2)', flex: 'none', fontFamily: 'var(--ds-font-family-code,monospace)' }}>{item.endpoint}</span>
+                  <span style={{ color: 'var(--wcb-muted)', flex: 'none' }}>{'✎ ' + item.changedFile}</span>
+                  {item.counterpart !== undefined ? (
+                    <span style={{ color: 'var(--wcb-dim)', flex: 'none' }}>{tt('impactCounterpart') + ' → ' + item.counterpart.file + ':' + item.counterpart.line}</span>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+            <div className="wcb-card-body">
               {(!state.codeIndexEnabled || state.codeEntries.length === 0 || codeEntriesFiltered.length === 0) ? (
                 <div className="wcb-hint">{tt('codeIndexEmpty')}</div>
               ) : (
