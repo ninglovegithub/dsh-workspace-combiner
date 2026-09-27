@@ -422,6 +422,8 @@ const PANEL_CSS = String.raw`
 .wcb-budget-card{display:flex;flex-direction:column;overflow:hidden}
 .wcb-codeindex-card{display:flex;flex-direction:column;overflow:hidden;flex:0 0 auto;max-height:320px}
 .wcb-codeindex-card .wcb-card-body{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin}
+/* 卡片底部固定说明行：放在滚动容器 body 之外，所以列表再长它也钉在卡片底部，卡片高度仍受 max-height 限制 */
+.wcb-codeindex-footer{flex:none;padding:0 12px 7px}
 .wcb-budget-card .wcb-budget-split{flex:1;min-height:0;overflow-y:auto}
 .wcb-budget-split{display:flex;flex-direction:column;gap:8px;padding:6px 12px}
 .wcb-budget-left{display:flex;flex-direction:column;gap:8px}

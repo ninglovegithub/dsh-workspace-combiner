@@ -693,8 +693,8 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                   ))}
                 </div>
               )}
-              <div className="wcb-hint" style={{ marginTop: 5 }}>{tt('codeIndexHint')}{state.codeIndexSummary === 'llm' ? ' · ' + tt('codeIndexSummaryHint') : ''}</div>
             </div>
+            <div className="wcb-hint wcb-codeindex-footer">{tt('codeIndexHint')}{state.codeIndexSummary === 'llm' ? ' · ' + tt('codeIndexSummaryHint') : ''}</div>
           </section>
         </div>
       </div>

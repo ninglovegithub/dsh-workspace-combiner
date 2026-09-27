@@ -60,6 +60,12 @@ English · [中文](./CHANGELOG.zh.md)
   local draft: nothing is written until Save, Cancel discards both, and Save stays disabled until
   something actually changed. The draft re-syncs when the workspace changes, so opening the dialog
   while the workspace is still loading cannot silently write the default mode.
+### Changed — the code-index hint is now a pinned card footer
+
+- The endpoint-index hint line sits outside the card scroll container, so a long endpoint list
+  scrolls underneath it while the line stays pinned at the bottom of the card; the card still
+  honours its max-height of 320px. Previously it was the last item inside the scroll area and
+  scrolled away together with the list.
 ## [0.5.0] - 2026-09-27
 
 ### Added — preset coding standards
