@@ -54,6 +54,15 @@ English · [中文](./CHANGELOG.zh.md)
   simply invisible. The column is now overflow-y: auto and the workspace card keeps a 150px floor.
 - **The endpoint list moved inside the code-index card** instead of occupying a card of its own,
   so the left column no longer grows by a whole card per new feature.
+### Changed — 高级配置改为草稿式保存 + 复制反馈就地显示
+
+- **Advanced config now has a Save button.** The workspace mode and file load mode are edited as a
+  local draft; nothing is written until Save, and Cancel discards both. Save stays disabled until
+  something actually changed.
+- **Copying a feature is confirmed on the row you clicked**, not with a toast pinned to the bottom
+  of the window, so the feedback stays with the item and scrolls away with it.
+- **The index hint is no longer a permanent line at the bottom of the card.** It is now the card
+  title tooltip and is shown inline only when the index is still empty.
 ## [0.5.0] - 2026-09-27
 
 ### Added — preset coding standards

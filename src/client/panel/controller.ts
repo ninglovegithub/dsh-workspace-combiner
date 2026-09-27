@@ -154,6 +154,12 @@ export interface WorkspaceCombinerState {
   deleteSnapshot(snapshotId: string): void
   copyPreview(): void
   copyText(text: string): void
+  /** 复制 @功能名：反馈就地显示在被点击的那一行，不弹固定底部 toast。 */
+  copyRow(rowKey: string, text: string): void
+  /** 高级配置弹窗：一次性提交草稿（工作空间模式 + 文件加载模式）。 */
+  saveAdvanced(mode: WorkspaceMode, loadMode: LoadMode): void
+  /** 最近一次就地复制反馈对应的行 key（null = 无）。 */
+  copiedKey: string | null
   createSession(): void
   dismissToast(id: number): void
 }
@@ -200,11 +206,13 @@ export function useWorkspaceCombiner(
   const [endpointImpact, setEndpointImpact] = useState<readonly EndpointImpact[]>([])
   const [endpointImpactFiles, setEndpointImpactFiles] = useState(0)
   const [endpointImpactLoading, setEndpointImpactLoading] = useState(false)
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [budgetOverride, setBudgetOverride] = useState<number | null>(null)
   const currentWsIdRef = useRef('')
   currentWsIdRef.current = currentWorkspaceId
   const toastSeq = useRef(0)
+  const copiedSeq = useRef(0)
 
   const showToast = useCallback((text: string, kind: 'ok' | 'error' = 'ok'): void => {
     const id = ++toastSeq.current
@@ -535,6 +543,17 @@ export function useWorkspaceCombiner(
       .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
   }, [showToast])
 
+  // 高级配置弹窗：草稿一次性落库（工作空间模式 + 文件加载模式）。
+  const saveAdvanced = useCallback((mode: WorkspaceMode, loadMode: LoadMode): void => {
+    const id = currentWsIdRef.current
+    const api = apiRef.current
+    if (api === null || id === '') return
+    setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, mode, loadMode, updatedAt: Date.now() } : w))
+    void api.patchWorkspace(id, { mode, loadMode })
+      .then(() => showToast(tt('wsSaved')))
+      .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+  }, [showToast])
+
   // token 预算（乐观即时生效 + 持久化）。
   const setTokenBudget = useCallback((value: number): void => {
     const next = Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_TOKEN_BUDGET
@@ -739,6 +758,17 @@ export function useWorkspaceCombiner(
     void copyToClipboard(text).then(ok => showToast(ok ? tt('copied') : tt('copyFailed'), ok ? 'ok' : 'error'))
   }, [showToast])
 
+  // 复制 @功能名：成功反馈就地落在被点的那一行（1.6s 后自动消失），不再用固定底部 toast。
+  const copyRow = useCallback((rowKey: string, text: string): void => {
+    const seq = ++copiedSeq.current
+    void copyToClipboard(text).then(ok => {
+      if (!ok) { showToast(tt('copyFailed'), 'error'); return }
+      if (seq !== copiedSeq.current) return
+      setCopiedKey(rowKey)
+      window.setTimeout(() => { if (seq === copiedSeq.current) setCopiedKey(null) }, 1600)
+    })
+  }, [showToast])
+
   // 新建会话：在主目录打开（标题 = 工作空间名，startSession 内去重）。
   const createSession = useCallback((): void => {
     const primary = dirs[0]?.path
@@ -824,6 +854,9 @@ export function useWorkspaceCombiner(
     deleteSnapshot,
     copyPreview,
     copyText,
+    copyRow,
+    copiedKey,
+    saveAdvanced,
     createSession,
     dismissToast,
   }

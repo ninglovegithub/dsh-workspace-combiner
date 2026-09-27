@@ -618,9 +618,9 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
           </section>
 
 
-          {/* 功能/接口索引：端点 ↔ 服务端 ↔ 前端（点击复制 @功能名） */}
+          {/* 功能/接口索引：端点 ↔ 服务端 ↔ 前端（点击条目就地复制 @功能名） */}
           <section className="wcb-card wcb-codeindex-card">
-            <div className="wcb-card-head">
+            <div className="wcb-card-head" title={tt('codeIndexHint')}>
               {tt('codeIndexTitle')}
               <div className="wcb-head-actions">
                 {state.codeIndexEnabled && state.codeEntries.length > 0 ? (
@@ -651,49 +651,61 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                 {state.endpointImpactFiles > 0 && state.endpointImpact.length === 0 ? (
                   <span className="wcb-hint">{tt('impactNone')}</span>
                 ) : null}
-                {state.endpointImpact.map(item => (
-                  <div
-                    key={item.endpoint + '|' + item.changedFile + '|' + (item.counterpart?.file ?? '')}
-                    role="button"
-                    tabIndex={0}
-                    title={tt('codeIndexCopy')}
-                    onClick={() => state.copyText('@' + item.feature)}
-                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); state.copyText('@' + item.feature) } }}
-                    style={{ display: 'flex', gap: 6, alignItems: 'baseline', fontSize: 10, cursor: 'pointer', padding: '2px 5px', borderRadius: 4, background: 'var(--wcb-surface)' }}
-                  >
-                    <span style={{ color: 'var(--wcb-purple)', fontWeight: 600, flex: 'none' }}>{'@' + item.feature}</span>
-                    <span style={{ color: 'var(--wcb-text2)', flex: 'none', fontFamily: 'var(--ds-font-family-code,monospace)' }}>{item.endpoint}</span>
-                    <span style={{ color: 'var(--wcb-muted)', flex: 'none' }}>{'✎ ' + item.changedFile}</span>
-                    {item.counterpart !== undefined ? (
-                      <span style={{ color: 'var(--wcb-dim)', flex: 'none' }}>{tt('impactCounterpart') + ' → ' + item.counterpart.file + ':' + item.counterpart.line}</span>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-              {(!state.codeIndexEnabled || state.codeEntries.length === 0 || codeEntriesFiltered.length === 0) ? (
-                <div className="wcb-hint">{tt('codeIndexEmpty')}</div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                  {codeEntriesFiltered.map(entry => (
+                {state.endpointImpact.map(item => {
+                  const rowKey = item.endpoint + '|' + item.changedFile + '|' + (item.counterpart?.file ?? '')
+                  const copied = state.copiedKey === rowKey
+                  return (
                     <div
-                      key={entry.feature + '|' + entry.endpoint}
+                      key={rowKey}
                       role="button"
                       tabIndex={0}
                       title={tt('codeIndexCopy')}
-                      onClick={() => state.copyText('@' + entry.feature)}
-                      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); state.copyText('@' + entry.feature) } }}
-                      style={{ display: 'flex', gap: 6, alignItems: 'baseline', fontSize: 10, cursor: 'pointer', padding: '2px 5px', borderRadius: 4, background: 'var(--wcb-surface)' }}
+                      onClick={() => state.copyRow(rowKey, '@' + item.feature)}
+                      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); state.copyRow(rowKey, '@' + item.feature) } }}
+                      style={{ display: 'flex', gap: 6, alignItems: 'baseline', fontSize: 10, cursor: 'pointer', padding: '2px 5px', borderRadius: 4, background: copied ? 'rgba(93,216,163,.16)' : 'var(--wcb-surface)' }}
                     >
-                      <span style={{ color: 'var(--wcb-purple)', fontWeight: 600, flex: 'none' }}>{'@' + entry.feature}</span>
-                      <span style={{ color: 'var(--wcb-text2)', flex: 'none', fontFamily: 'var(--ds-font-family-code,monospace)' }}>{entry.endpoint}</span>
-                      {entry.server !== undefined ? <span style={{ color: 'var(--wcb-muted)', flex: 'none' }}>{tt('codeIndexServer') + ' ' + entry.server.file + ':' + entry.server.line}</span> : null}
-                      {entry.client !== undefined ? <span style={{ color: 'var(--wcb-muted)', flex: 'none' }}>{tt('codeIndexClient') + ' ' + entry.client.file + ':' + entry.client.line}</span> : null}
-                      {entry.summary !== undefined && entry.summary !== '' ? <span style={{ color: 'var(--wcb-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.summary}</span> : null}
+                      <span style={{ color: 'var(--wcb-purple)', fontWeight: 600, flex: 'none' }}>{'@' + item.feature}</span>
+                      <span style={{ color: 'var(--wcb-text2)', flex: 'none', fontFamily: 'var(--ds-font-family-code,monospace)' }}>{item.endpoint}</span>
+                      <span style={{ color: 'var(--wcb-muted)', flex: 'none' }}>{'✎ ' + item.changedFile}</span>
+                      {item.counterpart !== undefined ? (
+                        <span style={{ color: 'var(--wcb-dim)', flex: 'none' }}>{tt('impactCounterpart') + ' → ' + item.counterpart.file + ':' + item.counterpart.line}</span>
+                      ) : null}
+                      {copied ? <span className="wcb-copied-chip">{tt('copiedShort')}</span> : null}
                     </div>
-                  ))}
+                  )
+                })}
+              </div>
+              {(!state.codeIndexEnabled || state.codeEntries.length === 0 || codeEntriesFiltered.length === 0) ? (
+                <>
+                  <div className="wcb-hint">{tt('codeIndexEmpty')}</div>
+                  {state.codeEntries.length === 0 ? <div className="wcb-hint">{tt('codeIndexHint')}{state.codeIndexSummary === 'llm' ? ' · ' + tt('codeIndexSummaryHint') : ''}</div> : null}
+                </>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {codeEntriesFiltered.map(entry => {
+                    const rowKey = entry.feature + '|' + entry.endpoint
+                    const copied = state.copiedKey === rowKey
+                    return (
+                      <div
+                        key={rowKey}
+                        role="button"
+                        tabIndex={0}
+                        title={tt('codeIndexCopy')}
+                        onClick={() => state.copyRow(rowKey, '@' + entry.feature)}
+                        onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); state.copyRow(rowKey, '@' + entry.feature) } }}
+                        style={{ display: 'flex', gap: 6, alignItems: 'baseline', fontSize: 10, cursor: 'pointer', padding: '2px 5px', borderRadius: 4, background: copied ? 'rgba(93,216,163,.16)' : 'var(--wcb-surface)' }}
+                      >
+                        <span style={{ color: 'var(--wcb-purple)', fontWeight: 600, flex: 'none' }}>{'@' + entry.feature}</span>
+                        <span style={{ color: 'var(--wcb-text2)', flex: 'none', fontFamily: 'var(--ds-font-family-code,monospace)' }}>{entry.endpoint}</span>
+                        {entry.server !== undefined ? <span style={{ color: 'var(--wcb-muted)', flex: 'none' }}>{tt('codeIndexServer') + ' ' + entry.server.file + ':' + entry.server.line}</span> : null}
+                        {entry.client !== undefined ? <span style={{ color: 'var(--wcb-muted)', flex: 'none' }}>{tt('codeIndexClient') + ' ' + entry.client.file + ':' + entry.client.line}</span> : null}
+                        {entry.summary !== undefined && entry.summary !== '' ? <span style={{ color: 'var(--wcb-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.summary}</span> : null}
+                        {copied ? <span className="wcb-copied-chip">{tt('copiedShort')}</span> : null}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
-              <div className="wcb-hint" style={{ marginTop: 5 }}>{tt('codeIndexHint')}{state.codeIndexSummary === 'llm' ? ' · ' + tt('codeIndexSummaryHint') : ''}</div>
             </div>
           </section>
         </div>

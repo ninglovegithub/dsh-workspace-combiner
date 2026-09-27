@@ -479,6 +479,9 @@ const PANEL_CSS = String.raw`
 .wcb-impact-count{font-size:9px;color:var(--wcb-muted);white-space:nowrap}
 .wcb-impact-head .wcb-linkbtn{margin-left:auto;flex:none}
 
+.wcb-copied-chip{margin-left:auto;flex:none;font-size:9px;line-height:1.6;padding:0 5px;border-radius:3px;
+  background:rgba(93,216,163,.18);color:#5dd8a3;white-space:nowrap}
+
 /* ---------- 无障碍 ---------- */
 .wcb-root :focus-visible{outline:2px solid var(--wcb-accent);outline-offset:1px}
 .wcb-root button{font-family:inherit}

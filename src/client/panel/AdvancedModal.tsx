@@ -3,7 +3,7 @@
  * @module dsh-workspace-combiner/client/panel/AdvancedModal
  */
 
-import { useEffect, type ChangeEvent, type ReactElement } from 'react'
+import { useState, useEffect, type ChangeEvent, type ReactElement } from 'react'
 import type { LoadMode, Workspace, WorkspaceMode } from '../../core/types.ts'
 import type { WorkspaceCombinerState } from './controller.ts'
 import { tt } from '../locales.ts'
@@ -15,6 +15,17 @@ interface AdvancedModalProps {
 }
 
 export function AdvancedModal({ state, currentWs, onClose }: AdvancedModalProps): ReactElement {
+  // 草稿：弹窗内改的是本地副本，点「保存」才一次性提交，「取消」即丢弃。
+  const [draftMode, setDraftMode] = useState<WorkspaceMode>(currentWs?.mode ?? 'anchor')
+  const [draftLoad, setDraftLoad] = useState<LoadMode>(currentWs?.loadMode ?? 'summary')
+  const dirty = draftMode !== (currentWs?.mode ?? 'anchor') || draftLoad !== (currentWs?.loadMode ?? 'summary')
+
+  // 打开弹窗时工作空间可能还没加载完，或期间切换了工作空间：把草稿对齐到当前值（按 id 变化触发，避免覆盖正在编辑的草稿）。
+  useEffect(() => {
+    setDraftMode(currentWs?.mode ?? 'anchor')
+    setDraftLoad(currentWs?.loadMode ?? 'summary')
+  }, [currentWs?.id])
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
@@ -30,7 +41,7 @@ export function AdvancedModal({ state, currentWs, onClose }: AdvancedModalProps)
             <div className="wcb-label">{tt('wsModeLabel')}</div>
             <div className="wcb-tabs" role="tablist" aria-label={tt('wsModeLabel')}>
               {([['anchor', tt('wsModeAnchor')], ['single', tt('wsModeSingle')]] as Array<[WorkspaceMode, string]>).map(([value, label]) => (
-                <button key={value} type="button" role="tab" aria-selected={(currentWs?.mode ?? 'anchor') === value} aria-label={label} className={'wcb-tab' + ((currentWs?.mode ?? 'anchor') === value ? ' wcb-tab-on' : '')} onClick={() => state.setWorkspaceMode(value)}>{label}</button>
+                <button key={value} type="button" role="tab" aria-selected={draftMode === value} aria-label={label} className={'wcb-tab' + (draftMode === value ? ' wcb-tab-on' : '')} onClick={() => setDraftMode(value)}>{label}</button>
               ))}
             </div>
           </div>
@@ -38,7 +49,7 @@ export function AdvancedModal({ state, currentWs, onClose }: AdvancedModalProps)
             <div className="wcb-label">{tt('loadModeLabel')}</div>
             <div className="wcb-tabs" role="tablist" aria-label={tt('loadModeLabel')}>
               {([['summary', tt('loadModeSummary')], ['tree', tt('loadModeTree')], ['full', tt('loadModeFull')]] as Array<[LoadMode, string]>).map(([value, label]) => (
-                <button key={value} type="button" role="tab" aria-selected={(currentWs?.loadMode ?? 'summary') === value} aria-label={label} className={'wcb-tab' + ((currentWs?.loadMode ?? 'summary') === value ? ' wcb-tab-on' : '')} onClick={() => state.setLoadMode(value)}>{label}</button>
+                <button key={value} type="button" role="tab" aria-selected={draftLoad === value} aria-label={label} className={'wcb-tab' + (draftLoad === value ? ' wcb-tab-on' : '')} onClick={() => setDraftLoad(value)}>{label}</button>
               ))}
             </div>
           </div>
@@ -86,6 +97,7 @@ export function AdvancedModal({ state, currentWs, onClose }: AdvancedModalProps)
         </div>
         <div className="wcb-modal-actions">
           <button type="button" className="wcb-btn-plain" aria-label={tt('cancel')} onClick={onClose}>{tt('cancel')}</button>
+          <button type="button" className="wcb-btn" aria-label={tt('advSave')} disabled={!dirty} onClick={() => { state.saveAdvanced(draftMode, draftLoad); onClose() }}>{tt('advSave')}</button>
         </div>
       </div>
     </div>
