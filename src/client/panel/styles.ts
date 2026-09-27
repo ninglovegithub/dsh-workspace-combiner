@@ -392,8 +392,11 @@ const PANEL_CSS = String.raw`
 /* ---------- 宽屏左右分栏布局 ---------- */
 .wcb-top{flex:none}
 .wcb-main-split{flex:1;min-height:0;display:flex;flex-direction:column;gap:0}
-.wcb-left-col{display:flex;flex-direction:column;min-height:0;overflow:hidden}
-.wcb-left-col>.wcb-card:first-child{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+/* 左栏必须可滚动：非首卡是 flex:none（固定内容高度），一旦固定卡总量超过栏高，
+   旧的 overflow:hidden 会把最后一张卡直接裁掉——没有滚动条、也不报错，纯粹看不见。
+   改为 overflow-y:auto，并给工作空间卡一个最小高度，避免它被挤成 0。 */
+.wcb-left-col{display:flex;flex-direction:column;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin}
+.wcb-left-col>.wcb-card:first-child{flex:1;min-height:150px;display:flex;flex-direction:column;overflow:hidden}
 .wcb-left-col>.wcb-card:first-child .wcb-card-body{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
 .wcb-left-col>.wcb-card:first-child .wcb-ws-list{flex:1;min-height:0;max-height:none;overflow-y:auto}
 .wcb-left-col>.wcb-card{flex:none}
@@ -417,7 +420,7 @@ const PANEL_CSS = String.raw`
 /* ---------- 上下文预算左右布局 ---------- */
 /* 预算卡在固定高度内可滚动（显式类名，不再依赖 :last-child——后面还有功能索引卡） */
 .wcb-budget-card{display:flex;flex-direction:column;overflow:hidden}
-.wcb-codeindex-card{display:flex;flex-direction:column;overflow:hidden;flex:0 0 auto;max-height:220px}
+.wcb-codeindex-card{display:flex;flex-direction:column;overflow:hidden;flex:0 0 auto;max-height:320px}
 .wcb-codeindex-card .wcb-card-body{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin}
 .wcb-budget-card .wcb-budget-split{flex:1;min-height:0;overflow-y:auto}
 .wcb-budget-split{display:flex;flex-direction:column;gap:8px;padding:6px 12px}
@@ -468,6 +471,13 @@ const PANEL_CSS = String.raw`
 .wcb-dir-cmd-label{flex:none;width:26px;font-size:9px;color:var(--wcb-dim)}
 .wcb-dir-cmd-actions{display:flex;align-items:center;justify-content:space-between;gap:6px}
 .wcb-dir-cmd-actions .wcb-hint{margin:0;flex:1 1 auto;min-width:0}
+
+/* ---------- 本次变更 -> 受影响端点（并入功能索引卡，不再单独占一张卡） ---------- */
+.wcb-impact{display:flex;flex-direction:column;gap:3px;padding:5px 6px;margin-bottom:5px;border:1px solid var(--wcb-line2);border-radius:5px;background:var(--wcb-surface)}
+.wcb-impact-head{display:flex;align-items:center;gap:6px;min-width:0}
+.wcb-impact-title{font-size:9px;color:var(--wcb-dim);text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
+.wcb-impact-count{font-size:9px;color:var(--wcb-muted);white-space:nowrap}
+.wcb-impact-head .wcb-linkbtn{margin-left:auto;flex:none}
 
 /* ---------- 无障碍 ---------- */
 .wcb-root :focus-visible{outline:2px solid var(--wcb-accent);outline-offset:1px}

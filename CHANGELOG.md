@@ -46,6 +46,14 @@ English · [中文](./CHANGELOG.zh.md)
   up to the amount actually injected instead of double-counting the block header.
 - New `codeIndexTokens` and `commandsTokens` fields on the context stats, each with its own card.
 
+### Fixed — a new left-column card could be silently clipped
+
+- **The left column now scrolls.** Its cards have a fixed content height (flex: none) while the
+  column itself was overflow: hidden, so once the fixed cards exceeded the column height the
+  *last* card was clipped with no scrollbar and no error — on a shorter window the feature was
+  simply invisible. The column is now overflow-y: auto and the workspace card keeps a 150px floor.
+- **The endpoint list moved inside the code-index card** instead of occupying a card of its own,
+  so the left column no longer grows by a whole card per new feature.
 ## [0.5.0] - 2026-09-27
 
 ### Added — preset coding standards
