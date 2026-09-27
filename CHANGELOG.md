@@ -8,6 +8,8 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-27
+
 ### Added — real token usage (provider-reported)
 
 - **"Real usage" block in the context modal** — reads actual provider-reported usage from
