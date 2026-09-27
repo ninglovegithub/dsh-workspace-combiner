@@ -6,9 +6,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { WorkspaceCombinerApi } from '../api.ts'
-import type { CodeIndexEntry, ContextStats, DirectoryAccess, GitStatus, LoadMode, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceSnapshot } from '../../core/types.ts'
+import type { CodeIndexEntry, ContextStats, DirectoryAccess, GitStatus, LoadMode, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceSnapshot, WorkspaceStandards } from '../../core/types.ts'
+import { emptyLibrary, resolveStandardGroups, type StandardGroup, type StandardsLibrary } from '../../core/standards.ts'
 import type { FileTreeNode } from '../../core/fileTree.ts'
-import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_TOKEN_BUDGET } from '../../invariant.ts'
+import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_STANDARDS_BUDGET, DEFAULT_TOKEN_BUDGET } from '../../invariant.ts'
 import { renderMultiWorkspacePrompt } from '../../prompt.ts'
 import { tt } from '../locales.ts'
 import { checkWorkspaceNameDuplicate, sanitizeWorkspaceName } from './naming.ts'
@@ -99,6 +100,17 @@ export interface WorkspaceCombinerState {
   setCodeIndexEnabled(enabled: boolean): void
   setCodeIndexBudget(value: number): void
   setCodeIndexSummary(mode: 'off' | 'llm'): void
+  /** 全局规范库（覆盖 + 全局自建）。 */
+  standardsLibrary: StandardsLibrary
+  /** 当前工作空间的规范绑定。 */
+  workspaceStandards: WorkspaceStandards | undefined
+  /** 生效的规范分组。 */
+  standardGroups: readonly StandardGroup[]
+  /** 规范注入预算。 */
+  standardsBudget: number
+  saveStandardsLibrary(library: StandardsLibrary): void
+  setWorkspaceStandards(next: WorkspaceStandards): void
+  generateStandard(request: { name: string; tech?: string; directory?: string; hint?: string }): Promise<string>
   /** 当前工作空间的会话占用数（props 注入；缺省 0）。 */
   sessionCount: number
   setManualPath(path: string): void
@@ -172,6 +184,7 @@ export function useWorkspaceCombiner(
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewTrees, setPreviewTrees] = useState<readonly PreviewFileTree[]>([])
   const [codeEntries, setCodeEntries] = useState<readonly CodeIndexEntry[]>([])
+  const [standardsLibrary, setStandardsLibrary] = useState<StandardsLibrary>(() => emptyLibrary())
   const [previewLoading, setPreviewLoading] = useState(false)
   const [budgetOverride, setBudgetOverride] = useState<number | null>(null)
   const currentWsIdRef = useRef('')
@@ -250,6 +263,54 @@ export function useWorkspaceCombiner(
   const codeIndexEnabled = currentWorkspace?.codeIndexEnabled ?? true
   const codeIndexBudget = currentWorkspace?.codeIndexBudget ?? DEFAULT_CODE_INDEX_BUDGET
   const codeIndexSummary = currentWorkspace?.codeIndexSummary ?? 'off'
+
+  const workspaceStandards: WorkspaceStandards | undefined = currentWorkspace?.standards
+  const standardsBudget = workspaceStandards?.budget ?? DEFAULT_STANDARDS_BUDGET
+  // 生效规范分组（与宿主同源：同一份 core/standards 纯函数）。
+  const standardGroups = useMemo(
+    () => resolveStandardGroups(workspaceStandards, dirs, standardsLibrary),
+    [workspaceStandards, dirs, standardsLibrary],
+  )
+
+  // 全局规范库：挂载时拉一次，保存后本地更新。
+  useEffect(() => {
+    const api = apiRef.current
+    if (api === null) return
+    let cancelled = false
+    void api.standards().then(library => { if (!cancelled) setStandardsLibrary(library) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  const saveStandardsLibrary = useCallback((library: StandardsLibrary): void => {
+    setStandardsLibrary(library)
+    const api = apiRef.current
+    if (api === null) return
+    void api.saveStandards(library).catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+  }, [showToast])
+
+  /** 用默认模型起草一份规范正文（可选能力；失败返回空串并提示）。 */
+  const generateStandard = useCallback(async (request: { name: string; tech?: string; directory?: string; hint?: string }): Promise<string> => {
+    const api = apiRef.current
+    if (api === null) return ''
+    try {
+      const text = await api.generateStandard(request)
+      if (text === '') showToast(tt('standardsAiFailed'), 'error')
+      return text
+    } catch (error) {
+      showToast(tt('standardsAiFailed') + '：' + errText(error), 'error')
+      return ''
+    }
+  }, [showToast])
+
+  const setWorkspaceStandards = useCallback((next: WorkspaceStandards): void => {
+    const id = currentWsIdRef.current
+    const api = apiRef.current
+    if (api === null || id === '') return
+    setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, standards: next, updatedAt: Date.now() } : w))
+    void api.setWorkspaceStandards(id, next)
+      .then(() => refreshContextStats())
+      .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+  }, [showToast, refreshContextStats])
 
   // 功能/接口索引：目录或配置变化时重新拉取；关闭时清空（不注入也不显示）。
   useEffect(() => {
@@ -600,8 +661,18 @@ export function useWorkspaceCombiner(
   const previewText = useMemo(() => {
     const mode = currentWorkspace?.mode ?? 'anchor'
     const loadMode = currentWorkspace?.loadMode ?? 'summary'
-    return renderMultiWorkspacePrompt(dirs, mode, loadMode, previewTrees, tokenBudget, codeIndexEnabled ? codeEntries : [], codeIndexBudget)
-  }, [dirs, currentWorkspace, previewTrees, tokenBudget, codeEntries, codeIndexEnabled, codeIndexBudget])
+    return renderMultiWorkspacePrompt({
+      workspaces: dirs,
+      mode,
+      loadMode,
+      entries: previewTrees,
+      tokenBudget,
+      codeEntries: codeIndexEnabled ? codeEntries : [],
+      codeIndexBudget,
+      standardGroups,
+      standardsBudget,
+    })
+  }, [dirs, currentWorkspace, previewTrees, tokenBudget, codeEntries, codeIndexEnabled, codeIndexBudget, standardGroups, standardsBudget])
 
   const copyPreview = useCallback((): void => {
     if (previewText === '') return
@@ -648,6 +719,13 @@ export function useWorkspaceCombiner(
     codeIndexEnabled,
     codeIndexBudget,
     codeIndexSummary,
+    standardsLibrary,
+    workspaceStandards,
+    standardGroups,
+    standardsBudget,
+    saveStandardsLibrary,
+    setWorkspaceStandards,
+    generateStandard,
     setCodeIndexEnabled,
     setCodeIndexBudget,
     setCodeIndexSummary,

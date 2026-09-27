@@ -5,7 +5,8 @@
  */
 
 import { API } from '../invariant.ts'
-import type { CodeIndexEntry, ContextStats, DetectedProject, GitStatus, LoadMode, Workspace, WorkspaceMode, WorkspaceRef } from '../core/types.ts'
+import type { CodeIndexEntry, ContextStats, DetectedProject, GitStatus, LoadMode, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceStandards } from '../core/types.ts'
+import type { StandardsLibrary } from '../core/standards.ts'
 import type { FileTreeNode } from '../core/fileTree.ts'
 
 /** 统一 JSON 请求/响应。 */
@@ -149,5 +150,27 @@ export class WorkspaceCombinerApi {
   async codeIndex(): Promise<CodeIndexEntry[]> {
     const body = await request<{ entries: CodeIndexEntry[] }>(API.codeIndex, { method: 'GET' })
     return body.entries
+  }
+
+  /** 读取全局开发规范库（覆盖正文 + 全局自建规范）。 */
+  async standards(): Promise<StandardsLibrary> {
+    const body = await request<{ library: StandardsLibrary }>(API.standards, { method: 'GET' })
+    return body.library
+  }
+
+  /** 整份保存全局开发规范库。 */
+  async saveStandards(library: StandardsLibrary): Promise<void> {
+    await request<{ ok: boolean }>(API.standards, { method: 'POST', body: JSON.stringify({ library }) })
+  }
+
+  /** 覆盖某工作空间的开发规范绑定。 */
+  async setWorkspaceStandards(id: string, standards: WorkspaceStandards): Promise<void> {
+    await request<{ ok: boolean }>(API.workspaceStandards, { method: 'POST', body: JSON.stringify({ id, standards }) })
+  }
+
+  /** 用默认模型起草一份规范正文（可选能力；不可用时返回空串）。 */
+  async generateStandard(payload: { name: string; tech?: string; directory?: string; hint?: string }): Promise<string> {
+    const body = await request<{ body: string }>(API.standardsAi, { method: 'POST', body: JSON.stringify(payload) })
+    return body.body
   }
 }

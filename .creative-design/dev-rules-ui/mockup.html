@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-canvas-width="420" data-canvas-height="820">
+<head>
+<meta charset="UTF-8">
+<title>开发规范功能 UI 效果图</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:420px;height:820px;overflow:hidden}
+  body{
+    font-family:-apple-system,'SF Pro Text','Segoe UI','PingFang SC',sans-serif;
+    background:#141414;color:#ccc;padding:24px 50px;
+    display:flex;flex-direction:column;align-items:center;
+  }
+  .page-title{font-size:14px;font-weight:600;color:#e6edf3;margin-bottom:2px;letter-spacing:.2px}
+  .page-sub{font-size:10.5px;color:#6e7681;margin-bottom:14px}
+
+  /* ===== 面板 ===== */
+  .panel{
+    width:320px;flex:none;
+    height:720px;display:flex;flex-direction:column;
+    background:#1e1e1e;border:1px solid rgba(255,255,255,0.07);
+    border-radius:8px;overflow:hidden;
+    font-size:12px;color:#ccc;
+    box-shadow:0 8px 32px rgba(0,0,0,0.4);
+  }
+
+  /* 区块通用 */
+  .section{padding:9px 12px;border-bottom:1px solid rgba(255,255,255,0.05)}
+  .section-grow{flex:1;min-height:0;display:flex;flex-direction:column;padding:0;overflow:hidden}
+  .section-head{display:flex;align-items:center;gap:6px;padding:7px 12px 5px;font-size:10.5px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:.4px;user-select:none}
+  .section-head .count{font-size:9.5px;color:#666;background:rgba(255,255,255,0.06);border-radius:4px;padding:0 5px;font-weight:400;letter-spacing:0}
+  .caret{font-size:9px;color:#666;flex:none}
+
+  /* 品牌行 */
+  .brand{display:flex;align-items:center;gap:8px;padding:10px 12px 8px;border-bottom:1px solid rgba(255,255,255,0.05)}
+  .brand-icon{width:20px;height:20px;border-radius:5px;background:linear-gradient(135deg,#4f8cff,#3a6fd4);display:flex;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;flex:none}
+  .brand-text{flex:1;min-width:0}
+  .brand-title{font-size:12.5px;font-weight:600;color:#e6edf3}
+  .brand-sub{font-size:10px;color:#777;margin-top:0px}
+  .kbd{font-size:9px;color:#888;border:1px solid rgba(255,255,255,0.1);border-radius:4px;padding:1px 4px;font-family:monospace;background:rgba(255,255,255,0.03)}
+
+  /* 当前工作空间 */
+  .current{
+    margin:8px 12px;padding:8px 10px;border-radius:6px;
+    background:rgba(79,140,255,0.07);border:1px solid rgba(79,140,255,0.16);
+    border-left:2px solid #4f8cff;
+    display:flex;align-items:center;gap:8px;
+  }
+  .current-dot{width:6px;height:6px;border-radius:50%;background:#5dd8a3;flex:none;box-shadow:0 0 4px rgba(93,216,163,0.5)}
+  .current-text{flex:1;min-width:0}
+  .current-name{font-size:12px;font-weight:600;color:#e6edf3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .current-meta{font-size:9.5px;color:#888;margin-top:1px}
+  .btn-primary{
+    font-size:10.5px;font-weight:500;color:#fff;border:none;border-radius:5px;padding:4px 9px;
+    background:#4f8cff;cursor:pointer;white-space:nowrap;flex:none;
+  }
+
+  /* 工作空间列表 */
+  .ws-list{padding:0 8px 6px;display:flex;flex-direction:column;gap:1px}
+  .ws-item{display:flex;align-items:center;gap:7px;border-radius:5px;padding:4px 8px;border:1px solid transparent}
+  .ws-item-active{background:rgba(79,140,255,0.08);border-color:rgba(79,140,255,0.15)}
+  .ws-color{width:6px;height:6px;border-radius:50%;flex:none}
+  .ws-name{flex:1;min-width:0;font-size:11px;color:#aaa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ws-item-active .ws-name{color:#ddd;font-weight:500}
+  .ws-time{font-size:9px;color:#666;flex:none;font-variant-numeric:tabular-nums}
+
+  /* 目录列表 */
+  .dir-list{flex:1;min-height:0;overflow-y:auto;padding:2px 8px 4px;display:flex;flex-direction:column;gap:1px}
+  .dir-row{
+    border-radius:5px;padding:6px 8px;display:flex;align-items:flex-start;gap:6px;
+    background:transparent;border:1px solid transparent;
+  }
+  .dir-row:hover{background:rgba(255,255,255,0.03)}
+  .type-sq{width:15px;height:15px;border-radius:4px;color:#fff;font-size:7.5px;font-weight:700;display:flex;align-items:center;justify-content:center;flex:none;margin-top:2px}
+  .type-doc{background:#d4a017}
+  .type-backend{background:#8b5cf6}
+  .type-frontend{background:#3b82f6}
+  .dir-info{flex:1;min-width:0}
+  .dir-name-row{display:flex;align-items:center;gap:5px}
+  .dir-name{font-size:11px;font-weight:500;color:#ddd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .git-badge{font-size:8px;font-family:monospace;border-radius:3px;padding:0 4px;white-space:nowrap;flex:none}
+  .git-clean{color:#888;background:rgba(255,255,255,0.05)}
+  .dir-path{font-size:9px;color:#666;font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+  .cap{font-size:8px;border-radius:3px;padding:1px 4px;white-space:nowrap;flex:none;margin-top:2px}
+  .cap-doc{color:#d4a017;background:rgba(212,160,23,0.1)}
+  .cap-backend{color:#8b5cf6;background:rgba(139,92,246,0.1)}
+  .cap-frontend{color:#3b82f6;background:rgba(59,130,246,0.1)}
+  .cap-rw{color:#5dd8a3;background:rgba(93,216,163,0.1)}
+
+  /* ===== 开发规范卡片（新增） ===== */
+  .devrules{
+    margin:6px 10px;padding:0;
+    border-radius:7px;
+    background:rgba(79,140,255,0.05);
+    border:1px solid rgba(79,140,255,0.18);
+    border-left:2px solid #4f8cff;
+    overflow:hidden;
+  }
+  .devrules-head{
+    display:flex;align-items:center;gap:8px;
+    padding:8px 10px 6px;
+    border-bottom:1px solid rgba(79,140,255,0.1);
+  }
+  .devrules-icon{
+    width:16px;height:16px;border-radius:4px;flex:none;
+    background:linear-gradient(135deg,#4f8cff,#6ba3ff);
+    display:flex;align-items:center;justify-content:center;
+    color:#fff;font-size:9px;font-weight:700;
+  }
+  .devrules-title{flex:1;min-width:0}
+  .devrules-title-main{font-size:11.5px;font-weight:600;color:#e6edf3;display:flex;align-items:center;gap:5px}
+  .new-badge{
+    font-size:8px;font-weight:600;color:#fff;
+    background:linear-gradient(135deg,#4f8cff,#6ba3ff);
+    border-radius:3px;padding:0 4px;line-height:14px;letter-spacing:.3px;
+  }
+  .devrules-title-sub{font-size:9.5px;color:#888;margin-top:1px}
+
+  /* 开关 */
+  .toggle{
+    width:30px;height:16px;border-radius:8px;flex:none;cursor:pointer;position:relative;
+    background:#4f8cff;transition:background .15s;
+  }
+  .toggle::after{
+    content:'';position:absolute;top:2px;right:2px;
+    width:12px;height:12px;border-radius:50%;background:#fff;
+    box-shadow:0 1px 2px rgba(0,0,0,0.3);
+  }
+  .toggle.off{background:rgba(255,255,255,0.15)}
+  .toggle.off::after{right:auto;left:2px}
+
+  .devrules-body{padding:8px 10px 10px;display:flex;flex-direction:column;gap:9px}
+
+  /* 自动匹配行 */
+  .auto-row{display:flex;align-items:center;gap:8px}
+  .auto-text{flex:1;min-width:0}
+  .auto-label{font-size:10.5px;color:#ccc;font-weight:500}
+  .auto-desc{font-size:9px;color:#777;margin-top:1px}
+
+  /* 规则集 */
+  .ruleset-label{font-size:10px;color:#999;font-weight:500;display:flex;align-items:center;gap:5px}
+  .ruleset-label .num{color:#4f8cff;font-weight:600}
+  .chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+  .chip{
+    font-size:9.5px;padding:2px 7px;border-radius:4px;cursor:pointer;
+    border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.03);color:#999;
+    display:flex;align-items:center;gap:3px;white-space:nowrap;
+  }
+  .chip.active{
+    border-color:rgba(79,140,255,0.4);background:rgba(79,140,255,0.12);color:#cfe0ff;
+  }
+  .chip .check{font-size:8px;color:#4f8cff;font-weight:700}
+  .chip:not(.active) .check{display:none}
+
+  /* 自定义规则 */
+  .custom-row{display:flex;align-items:center;gap:6px;cursor:pointer}
+  .custom-label{font-size:10.5px;color:#ccc;font-weight:500;flex:1}
+  .custom-caret{font-size:9px;color:#777;transition:transform .15s}
+  .custom-box{
+    margin-top:5px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.08);
+    border-radius:5px;padding:6px 8px;font-size:9.5px;color:#aaa;
+    font-family:monospace;line-height:1.6;min-height:44px;
+  }
+  .custom-box .line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .custom-box .placeholder{color:#555}
+
+  /* 预算行 */
+  .budget-row{display:flex;align-items:center;gap:8px}
+  .budget-label{font-size:10px;color:#999;flex:none}
+  .budget-val{font-size:10.5px;color:#4f8cff;font-weight:600;font-family:monospace;flex:none}
+  .slider{
+    flex:1;height:4px;border-radius:2px;background:rgba(255,255,255,0.1);position:relative;
+  }
+  .slider-fill{position:absolute;left:0;top:0;height:100%;width:30%;border-radius:2px;background:#4f8cff}
+  .slider-thumb{
+    position:absolute;left:30%;top:50%;transform:translate(-50%,-50%);
+    width:10px;height:10px;border-radius:50%;background:#fff;
+    box-shadow:0 1px 3px rgba(0,0,0,0.4);
+  }
+
+  /* 预览按钮 */
+  .preview-btn{
+    display:flex;align-items:center;justify-content:center;gap:5px;
+    font-size:10px;color:#4f8cff;border:1px solid rgba(79,140,255,0.25);
+    border-radius:5px;padding:4px 8px;background:rgba(79,140,255,0.06);cursor:pointer;
+  }
+  .preview-btn:hover{background:rgba(79,140,255,0.12)}
+
+  /* 上下文预算 */
+  .ctx-card{margin:6px 10px 8px;padding:8px 10px;border-radius:7px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06)}
+  .ctx-head{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+  .ctx-title{font-size:10.5px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.3px}
+  .ring-wrap{display:flex;align-items:center;gap:10px}
+  .ring{width:36px;height:36px;border-radius:50%;flex:none;position:relative;
+    background:conic-gradient(#4f8cff 0% 62%,rgba(255,255,255,0.08) 62% 100%);
+    display:flex;align-items:center;justify-content:center;
+  }
+  .ring-inner{width:26px;height:26px;border-radius:50%;background:#1e1e1e;display:flex;align-items:center;justify-content:center}
+  .ring-text{font-size:8px;color:#aaa;font-weight:600}
+  .ctx-stats{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+  .ctx-stat{display:flex;justify-content:space-between;font-size:9.5px}
+  .ctx-stat .k{color:#888}
+  .ctx-stat .v{color:#bbb;font-family:monospace}
+
+  /* 底部图例 */
+  .legend{padding:6px 12px 8px;border-top:1px solid rgba(255,255,255,0.05);display:flex;gap:10px;flex-wrap:wrap}
+  .legend-item{display:flex;align-items:center;gap:4px;font-size:8.5px;color:#777}
+  .legend-dot{width:6px;height:6px;border-radius:50%;flex:none}
+</style>
+</head>
+<body>
+  <div class="page-title">工作区组合器 · 开发规范功能</div>
+  <div class="page-sub">新增「开发规范」卡片 UI 效果图 · 深色 DSH 原生风</div>
+
+  <div class="panel">
+    <!-- 品牌行 -->
+    <div class="brand">
+      <div class="brand-icon">W</div>
+      <div class="brand-text">
+        <div class="brand-title">工作区组合器</div>
+        <div class="brand-sub">多工作区联合开发</div>
+      </div>
+      <span class="kbd">⌘N</span>
+    </div>
+
+    <!-- 当前工作空间 -->
+    <div class="current">
+      <div class="current-dot"></div>
+      <div class="current-text">
+        <div class="current-name">my-fullstack-app</div>
+        <div class="current-meta">3 目录 · anchor 模式</div>
+      </div>
+      <button class="btn-primary">新建会话</button>
+    </div>
+
+    <!-- 工作空间列表（折叠） -->
+    <div class="section-head">
+      <span class="caret">▾</span>
+      工作空间
+      <span class="count">2</span>
+    </div>
+    <div class="ws-list">
+      <div class="ws-item ws-item-active">
+        <div class="ws-color" style="background:#4f8cff"></div>
+        <div class="ws-name">my-fullstack-app</div>
+        <div class="ws-time">今天</div>
+      </div>
+      <div class="ws-item">
+        <div class="ws-color" style="background:#8b5cf6"></div>
+        <div class="ws-name">api-gateway</div>
+        <div class="ws-time">昨天</div>
+      </div>
+    </div>
+
+    <!-- 目录列表 -->
+    <div class="section-head" style="padding-top:8px">
+      <span class="caret">▾</span>
+      项目目录
+      <span class="count">3</span>
+    </div>
+    <div class="dir-list">
+      <div class="dir-row">
+        <div class="type-sq type-doc">D</div>
+        <div class="dir-info">
+          <div class="dir-name-row">
+            <div class="dir-name">docs-anchor</div>
+            <span class="git-badge git-clean">main</span>
+          </div>
+          <div class="dir-path">/Users/.../docs-anchor</div>
+        </div>
+        <span class="cap cap-doc">Docs</span>
+      </div>
+      <div class="dir-row">
+        <div class="type-sq type-backend">J</div>
+        <div class="dir-info">
+          <div class="dir-name-row">
+            <div class="dir-name">backend-service</div>
+            <span class="git-badge git-clean">develop</span>
+          </div>
+          <div class="dir-path">/Users/.../backend-service</div>
+        </div>
+        <span class="cap cap-backend">Java</span>
+      </div>
+      <div class="dir-row">
+        <div class="type-sq type-frontend">R</div>
+        <div class="dir-info">
+          <div class="dir-name-row">
+            <div class="dir-name">frontend-web</div>
+            <span class="git-badge git-clean">main</span>
+          </div>
+          <div class="dir-path">/Users/.../frontend-web</div>
+        </div>
+        <span class="cap cap-frontend">React</span>
+      </div>
+    </div>
+
+    <!-- ===== 开发规范卡片（新增） ===== -->
+    <div class="devrules">
+      <div class="devrules-head">
+        <div class="devrules-icon">R</div>
+        <div class="devrules-title">
+          <div class="devrules-title-main">开发规范 <span class="new-badge">NEW</span></div>
+          <div class="devrules-title-sub">按技术栈预制 AI 编码约束</div>
+        </div>
+        <div class="toggle"></div>
+      </div>
+      <div class="devrules-body">
+        <!-- 自动匹配 -->
+        <div class="auto-row">
+          <div class="auto-text">
+            <div class="auto-label">自动匹配技术栈</div>
+            <div class="auto-desc">根据目录 projectType 自动勾选规则集</div>
+          </div>
+          <div class="toggle"></div>
+        </div>
+
+        <!-- 规则集多选 -->
+        <div>
+          <div class="ruleset-label">规则集 <span class="num">已选 4/9</span></div>
+          <div class="chips">
+            <div class="chip active"><span class="check">✓</span>通用工程</div>
+            <div class="chip active"><span class="check">✓</span>前端 TS/React</div>
+            <div class="chip"><span class="check">✓</span>Vue</div>
+            <div class="chip"><span class="check">✓</span>Node</div>
+            <div class="chip active"><span class="check">✓</span>Java/Spring</div>
+            <div class="chip"><span class="check">✓</span>Go</div>
+            <div class="chip"><span class="check">✓</span>Python</div>
+            <div class="chip"><span class="check">✓</span>SQL</div>
+            <div class="chip active"><span class="check">✓</span>REST API</div>
+          </div>
+        </div>
+
+        <!-- 自定义规则 -->
+        <div>
+          <div class="custom-row">
+            <span class="custom-label">自定义规则</span>
+            <span class="custom-caret">▾</span>
+          </div>
+          <div class="custom-box">
+            <div class="line">1. 所有对外接口必须记录请求/响应日志</div>
+            <div class="line">2. 前端组件文件不超过 300 行，超出拆子组件</div>
+            <div class="line placeholder">+ 添加更多规则…</div>
+          </div>
+        </div>
+
+        <!-- Token 预算 -->
+        <div class="budget-row">
+          <span class="budget-label">Token 预算</span>
+          <div class="slider">
+            <div class="slider-fill"></div>
+            <div class="slider-thumb"></div>
+          </div>
+          <span class="budget-val">1500</span>
+        </div>
+
+        <!-- 注入预览 -->
+        <div class="preview-btn">
+          <span>👁</span> 查看注入 prompt 预览
+        </div>
+      </div>
+    </div>
+
+    <!-- 上下文预算 -->
+    <div class="ctx-card">
+      <div class="ctx-head">
+        <span class="ctx-title">上下文预算</span>
+      </div>
+      <div class="ring-wrap">
+        <div class="ring">
+          <div class="ring-inner"><span class="ring-text">62%</span></div>
+        </div>
+        <div class="ctx-stats">
+          <div class="ctx-stat"><span class="k">文件索引</span><span class="v">38.2k</span></div>
+          <div class="ctx-stat"><span class="k">功能索引</span><span class="v">320</span></div>
+          <div class="ctx-stat"><span class="k">开发规范</span><span class="v">1.2k</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 底部图例 -->
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#4f8cff"></div>前端</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div>后端</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#d4a017"></div>文档</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#5dd8a3"></div>可写</div>
+    </div>
+  </div>
+</body>
+</html>

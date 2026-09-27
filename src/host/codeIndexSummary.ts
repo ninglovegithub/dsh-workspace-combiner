@@ -14,27 +14,13 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { CodeIndexEntry } from '../core/types.ts'
-import { PLUGIN_ID } from '../invariant.ts'
 import { dshHome } from '../store.ts'
+import { runLlmText } from './llmText.ts'
 
 const MAX_FEATURES = 24
 const MAX_OUTPUT_TOKENS = 800
 const TIMEOUT_MS = 20_000
 const MAX_SUMMARY_CHARS = 60
-
-/** 动态 import 的说明符（声明为 string，避免 TS 解析不到依赖而报错）。 */
-const LLM_MODULE: string = '@deepseek-ai/dsh-llm'
-
-interface LlmModule {
-  createUserMessage: (input: unknown) => unknown
-  BlockAssembler: new () => { push(chunk: unknown): void; blocks(): Array<{ type: string; text?: string }> }
-}
-interface LlmService {
-  stream(options: Record<string, unknown>): AsyncIterable<unknown>
-}
-interface DefaultModelService {
-  currentSelection(): { provider?: string; model?: string } | undefined
-}
 
 const SYSTEM = '你是代码库导航助手。根据给出的 HTTP 端点清单，为每个功能写一行中文摘要（不超过 20 字，说明它做什么）。只输出「功能名: 摘要」这样的行，不要任何多余解释。'
 
@@ -52,48 +38,29 @@ export function codeIndexSignature(entries: readonly CodeIndexEntry[]): string {
 export async function summarizeFeatures(ctx: Context, sessionId: string, entries: readonly CodeIndexEntry[]): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   if (entries.length === 0) return out
-  const llm = ctx.get('llm') as LlmService | undefined
-  const model = ctx.get('agentDefaultModel') as DefaultModelService | undefined
-  if (llm === undefined || model === undefined) return out
-  const selection = model.currentSelection()
-  if (selection?.provider === undefined || selection.model === undefined) return out
-
-  let mod: LlmModule
-  try {
-    mod = await import(LLM_MODULE) as LlmModule
-  } catch (error) {
-    ctx.logger?.warn('[dsh-workspace-combiner] cannot load @deepseek-ai/dsh-llm for feature summaries:', error)
-    return out
-  }
-
   const subset = entries.slice(0, MAX_FEATURES)
   const list = subset
     .map(e => [e.feature, e.endpoint, e.server === undefined ? '' : 'server ' + e.server.file, e.client === undefined ? '' : 'client ' + e.client.file].filter(s => s !== '').join(' | '))
     .join('\n')
-  try {
-    const messages = [mod.createUserMessage({ content: [{ type: 'text', text: list }], source: { kind: 'plugin', plugin: PLUGIN_ID } })]
-    const assembler = new mod.BlockAssembler()
-    const options = {
-      provider: selection.provider,
-      model: selection.model,
-      messages,
-      system: SYSTEM,
-      maxTokens: MAX_OUTPUT_TOKENS,
-      sessionId,
-      purpose: 'workspace-combiner-code-index-summary',
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    }
-    for await (const chunk of llm.stream(options)) assembler.push(chunk)
-    const text = assembler.blocks().filter(b => b.type === 'text').map(b => b.text ?? '').join('\n')
-    const known = new Set(subset.map(e => e.feature))
-    for (const line of text.split('\n')) {
-      const match = /^\s*(?:[-*]\s*)?([^:：|]+?)\s*[:：]\s*(.+?)\s*$/.exec(line)
-      if (match === null) continue
-      const feature = match[1].trim()
-      if (known.has(feature)) out.set(feature, match[2].trim().slice(0, MAX_SUMMARY_CHARS))
-    }
-  } catch (error) {
-    ctx.logger?.warn('[dsh-workspace-combiner] feature summary generation failed:', error)
+  const result = await runLlmText(ctx, {
+    system: SYSTEM,
+    userText: list,
+    sessionId,
+    maxTokens: MAX_OUTPUT_TOKENS,
+    purpose: 'workspace-combiner-code-index-summary',
+    timeoutMs: TIMEOUT_MS,
+  })
+  if (!result.ok) {
+    ctx.logger?.warn('[dsh-workspace-combiner] feature summary skipped:', result.error)
+    return out
+  }
+  const text = result.text
+  const known = new Set(subset.map(e => e.feature))
+  for (const line of text.split('\n')) {
+    const match = /^\s*(?:[-*]\s*)?([^:：|]+?)\s*[:：]\s*(.+?)\s*$/.exec(line)
+    if (match === null) continue
+    const feature = match[1].trim()
+    if (known.has(feature)) out.set(feature, match[2].trim().slice(0, MAX_SUMMARY_CHARS))
   }
   return out
 }

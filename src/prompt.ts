@@ -5,7 +5,8 @@
 
 import type { CodeIndexEntry, LoadMode, WorkspaceMode, WorkspaceRef } from './core/types.ts'
 import { renderTree, estimateTokens, type FileIndexEntry } from './core/fileTree.ts'
-import { DEFAULT_CODE_INDEX_BUDGET } from './invariant.ts'
+import type { StandardGroup } from './core/standards.ts'
+import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_STANDARDS_BUDGET } from './invariant.ts'
 
 /** 功能索引默认预算（不挤占文件索引配额）。 */
 export const CODE_INDEX_TOKEN_BUDGET = DEFAULT_CODE_INDEX_BUDGET
@@ -108,12 +109,63 @@ export function renderFileIndex(entries: readonly FileIndexEntry[], loadMode: Lo
 }
 
 /**
+ * 渲染开发规范区块（按作用域分组：通用 + 逐目录）。
+ * @param groups - 生效的规范分组。
+ * @param tokenBudget - >0 时限制该区块的 token 上限（0/缺省 = 不限制）。
+ */
+export function renderStandards(groups: readonly StandardGroup[], tokenBudget = DEFAULT_STANDARDS_BUDGET): string {
+  if (groups.length === 0) return ''
+  const header = '# 开发规范（按作用域生效，务必遵守；与其他说明冲突时以本区块为准）'
+  const lines: string[] = [header]
+  const budget = tokenBudget > 0 ? tokenBudget : Number.POSITIVE_INFINITY
+  let used = estimateTokens(header)
+  let truncated = false
+  for (const group of groups) {
+    let stopped = false
+    for (const line of ['## ' + group.title, ...group.body.split('\n')]) {
+      const cost = estimateTokens(line) + 1
+      if (used + cost > budget) { truncated = true; stopped = true; break }
+      lines.push(line)
+      used += cost
+    }
+    if (stopped) break
+  }
+  if (truncated) lines.push('…（开发规范已达预算上限被截断，可在面板调高预算或精简规范）')
+  return lines.join('\n')
+}
+
+/** renderMultiWorkspacePrompt 的输入。 */
+export interface MultiWorkspacePromptInput {
+  workspaces: readonly WorkspaceRef[]
+  mode?: WorkspaceMode
+  loadMode?: LoadMode
+  entries?: readonly FileIndexEntry[]
+  tokenBudget?: number
+  codeEntries?: readonly CodeIndexEntry[]
+  codeIndexBudget?: number
+  /** 生效的开发规范分组（按作用域）。 */
+  standardGroups?: readonly StandardGroup[]
+  standardsBudget?: number
+}
+
+/**
  * 把选中的工作区列表渲染成追加到 system prompt 的固定区块。空列表返回空串
  * （宿主据此不向会话注入任何内容）。
- * @param workspaces - 本次会话选中的工作区。
+ * @param input - 工作区、加载模式、文件索引、功能索引与开发规范等内容。
  * @returns 符合约定的 prompt 文本；空列表返回 ''。
  */
-export function renderMultiWorkspacePrompt(workspaces: readonly WorkspaceRef[], mode: WorkspaceMode = 'anchor', loadMode: LoadMode = 'summary', entries: readonly FileIndexEntry[] = [], tokenBudget = 0, codeEntries: readonly CodeIndexEntry[] = [], codeIndexBudget = CODE_INDEX_TOKEN_BUDGET): string {
+export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): string {
+  const {
+    workspaces,
+    mode = 'anchor',
+    loadMode = 'summary',
+    entries = [],
+    tokenBudget = 0,
+    codeEntries = [],
+    codeIndexBudget = CODE_INDEX_TOKEN_BUDGET,
+    standardGroups = [],
+    standardsBudget = DEFAULT_STANDARDS_BUDGET,
+  } = input
   // 剔除「禁用」目录（不注入上下文）；主项目（第 0 项）恒保留。
   const active = workspaces.filter((ws, index) => index === 0 || (ws.access ?? 'readwrite') !== 'disabled')
   if (active.length === 0) return ''
@@ -131,12 +183,14 @@ export function renderMultiWorkspacePrompt(workspaces: readonly WorkspaceRef[], 
       return `${header}${index + 1}.${ws.name}${role}${lock}绝对路径：${ws.path}`
     })
     .join('\n')
+  const standards = renderStandards(standardGroups, standardsBudget)
   const fileIndex = renderFileIndex(entries, loadMode, tokenBudget)
   const codeIndex = renderCodeIndex(codeEntries, codeIndexBudget)
   return [
     '# 多工作区联合开发模式生效',
     `当前会话加载【${active.length}】个项目目录：`,
     list,
+    ...(standards !== '' ? ['', standards] : []),
     ...(fileIndex !== '' ? ['', fileIndex] : []),
     ...(codeIndex !== '' ? ['', codeIndex] : []),
     '',

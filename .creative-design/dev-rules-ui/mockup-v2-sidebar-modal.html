@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-canvas-width="760" data-canvas-height="680">
+<head>
+<meta charset="UTF-8">
+<title>开发规范功能 · 左侧入口 + 弹窗</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:760px;height:680px;overflow:hidden}
+  body{
+    font-family:-apple-system,'SF Pro Text','Segoe UI','PingFang SC',sans-serif;
+    background:#141414;color:#ccc;
+    display:flex;
+  }
+
+  /* ===== 左侧边栏 ===== */
+  .sidebar{
+    width:240px;flex:none;height:680px;
+    background:#1a1a1a;border-right:1px solid rgba(255,255,255,0.06);
+    display:flex;flex-direction:column;
+    position:relative;z-index:1;
+  }
+
+  /* 侧栏头部 */
+  .sb-head{
+    padding:10px 12px 8px;
+    display:flex;align-items:center;gap:6px;
+    border-bottom:1px solid rgba(255,255,255,0.05);
+  }
+  .sb-title{font-size:12px;font-weight:600;color:#ddd;flex:1}
+  .sb-title .count{font-size:10px;color:#888;font-weight:400;margin-left:4px}
+  .sb-search{
+    width:70px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);
+    border-radius:4px;padding:2px 6px;color:#bbb;font-size:10px;outline:none;
+  }
+  .sb-new-btn{
+    font-size:10px;color:#4f8cff;border:1px solid rgba(79,140,255,0.3);
+    border-radius:4px;padding:2px 7px;background:rgba(79,140,255,0.08);cursor:pointer;white-space:nowrap;
+  }
+
+  /* 工作空间列表 */
+  .ws-list{flex:1;min-height:0;overflow-y:auto;padding:6px 8px}
+  .ws-item{
+    display:flex;align-items:center;gap:7px;
+    border-radius:5px;padding:6px 8px;margin-bottom:2px;
+    cursor:pointer;border:1px solid transparent;position:relative;
+  }
+  .ws-item:hover{background:rgba(255,255,255,0.03)}
+  .ws-item.active{background:rgba(79,140,255,0.12);border-color:rgba(79,140,255,0.2)}
+  .ws-dot{width:7px;height:7px;border-radius:50%;flex:none;background:#555}
+  .ws-item.active .ws-dot{background:#4f8cff;box-shadow:0 0 4px rgba(79,140,255,0.5)}
+  .ws-name{flex:1;min-width:0;font-size:12px;color:#bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ws-item.active .ws-name{color:#e6edf3;font-weight:500}
+  .ws-time{font-size:10px;color:#666;flex:none;font-variant-numeric:tabular-nums}
+  .ws-badge{
+    font-size:8.5px;color:#5dd8a3;background:rgba(93,216,163,0.12);
+    border-radius:3px;padding:0 4px;flex:none;font-weight:500;
+  }
+  .ws-actions{display:flex;gap:4px;opacity:0;transition:opacity .15s}
+  .ws-item:hover .ws-actions{opacity:1}
+  .ws-icon-btn{font-size:11px;color:#777;cursor:pointer;background:none;border:none;padding:0}
+  .ws-icon-btn:hover{color:#aaa}
+
+  /* ===== 新增：开发规范入口 ===== */
+  .devrules-entry{
+    margin:4px 8px;padding:7px 9px;border-radius:6px;
+    background:rgba(79,140,255,0.06);border:1px solid rgba(79,140,255,0.15);
+    border-left:2px solid #4f8cff;
+    display:flex;align-items:center;gap:8px;cursor:pointer;
+    transition:background .15s;
+  }
+  .devrules-entry:hover{background:rgba(79,140,255,0.12)}
+  .devrules-entry-icon{
+    width:16px;height:16px;border-radius:4px;flex:none;
+    background:linear-gradient(135deg,#4f8cff,#6ba3ff);
+    display:flex;align-items:center;justify-content:center;
+    color:#fff;font-size:8.5px;font-weight:700;
+  }
+  .devrules-entry-text{flex:1;min-width:0}
+  .devrules-entry-label{font-size:11.5px;font-weight:600;color:#cfe0ff;display:flex;align-items:center;gap:5px}
+  .new-tag{
+    font-size:7.5px;font-weight:600;color:#fff;
+    background:linear-gradient(135deg,#4f8cff,#6ba3ff);
+    border-radius:3px;padding:0 3.5px;line-height:12px;letter-spacing:.3px;
+  }
+  .devrules-entry-sub{font-size:9.5px;color:#7a8ba3;margin-top:1px}
+  .devrules-entry-caret{font-size:9px;color:#4f8cff;flex:none}
+  .devrules-entry-status{
+    width:22px;height:12px;border-radius:6px;flex:none;position:relative;background:#4f8cff;
+  }
+  .devrules-entry-status::after{
+    content:'';position:absolute;top:1.5px;right:1.5px;
+    width:9px;height:9px;border-radius:50%;background:#fff;
+  }
+
+  /* 折叠项（高级配置 / 预览注入） */
+  .collapse-item{
+    display:flex;align-items:center;gap:6px;
+    padding:6px 12px;cursor:pointer;
+    font-size:11.5px;color:#999;
+    border-top:1px solid rgba(255,255,255,0.04);
+  }
+  .collapse-item:hover{color:#bbb;background:rgba(255,255,255,0.02)}
+  .collapse-caret{font-size:8px;color:#777;flex:none}
+  .collapse-label{flex:1}
+  .collapse-meta{font-size:9.5px;color:#666;font-family:monospace}
+
+  /* 底部图例 */
+  .sb-footer{
+    padding:8px 12px;border-top:1px solid rgba(255,255,255,0.05);
+    display:flex;gap:10px;align-items:center;
+  }
+  .legend-item{display:flex;align-items:center;gap:4px;font-size:9px;color:#777}
+  .legend-dot{width:6px;height:6px;border-radius:50%;flex:none}
+  .sandbox-status{margin-left:auto;font-size:9px;color:#5dd8a3;display:flex;align-items:center;gap:4px}
+  .sandbox-dot{width:5px;height:5px;border-radius:50%;background:#5dd8a3;box-shadow:0 0 3px rgba(93,216,163,0.5)}
+
+  /* ===== 右侧主内容区（背景，淡化） ===== */
+  .main-area{
+    flex:1;height:680px;background:#161616;position:relative;overflow:hidden;
+  }
+  .main-header{
+    padding:12px 16px;display:flex;align-items:center;gap:10px;
+    border-bottom:1px solid rgba(255,255,255,0.05);
+  }
+  .main-ws-name{font-size:14px;font-weight:600;color:#e6edf3}
+  .main-ws-meta{font-size:11px;color:#888}
+  .main-new-btn{
+    margin-left:auto;font-size:12px;font-weight:500;color:#fff;
+    background:#4f8cff;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;
+  }
+  .main-section-title{
+    padding:10px 16px 6px;font-size:11px;font-weight:600;color:#888;
+    text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;gap:6px;
+  }
+  .main-section-title .count{font-size:10px;color:#666;background:rgba(255,255,255,0.06);border-radius:4px;padding:0 5px;font-weight:400;letter-spacing:0}
+  .dir-row{
+    display:flex;align-items:center;gap:8px;padding:7px 16px;
+    border-bottom:1px solid rgba(255,255,255,0.03);
+  }
+  .dir-checkbox{width:13px;height:13px;border-radius:3px;border:1px solid rgba(255,255,255,0.2);flex:none}
+  .dir-star{color:#d4a017;font-size:11px;flex:none}
+  .dir-type-icon{
+    width:18px;height:18px;border-radius:4px;display:flex;align-items:center;justify-content:center;
+    color:#fff;font-size:9px;font-weight:700;flex:none;
+  }
+  .type-d{background:#d4a017}
+  .type-b{background:#8b5cf6}
+  .type-p{background:#8b5cf6}
+  .type-f{background:#3b82f6}
+  .dir-info{flex:1;min-width:0}
+  .dir-name{font-size:12px;color:#ddd;font-weight:500}
+  .dir-path{font-size:10px;color:#666;font-family:monospace;margin-top:1px}
+  .dir-tags{display:flex;gap:5px;align-items:center}
+  .dir-tag{font-size:9px;border-radius:3px;padding:1px 5px;white-space:nowrap}
+  .tag-doc{color:#d4a017;background:rgba(212,160,23,0.1)}
+  .tag-code{color:#aaa;background:rgba(255,255,255,0.06)}
+  .tag-group{color:#888;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08)}
+  .tag-access{color:#5dd8a3;background:rgba(93,216,163,0.1)}
+
+  /* 遮罩 */
+  .overlay{
+    position:absolute;inset:0;background:rgba(0,0,0,0.55);
+    backdrop-filter:blur(2px);z-index:10;
+    display:flex;align-items:center;justify-content:center;
+  }
+
+  /* ===== 弹窗 ===== */
+  .modal{
+    width:440px;max-height:560px;
+    background:#1e1e1e;border:1px solid rgba(255,255,255,0.1);
+    border-radius:10px;box-shadow:0 16px 48px rgba(0,0,0,0.5);
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+  .modal-head{
+    padding:14px 16px 12px;
+    border-bottom:1px solid rgba(255,255,255,0.07);
+    display:flex;align-items:center;gap:10px;
+  }
+  .modal-icon{
+    width:22px;height:22px;border-radius:6px;flex:none;
+    background:linear-gradient(135deg,#4f8cff,#6ba3ff);
+    display:flex;align-items:center;justify-content:center;
+    color:#fff;font-size:11px;font-weight:700;
+  }
+  .modal-title-wrap{flex:1;min-width:0}
+  .modal-title{font-size:14px;font-weight:600;color:#e6edf3;display:flex;align-items:center;gap:7px}
+  .modal-sub{font-size:10.5px;color:#888;margin-top:1px}
+  .modal-close{
+    width:24px;height:24px;border-radius:5px;flex:none;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;
+    color:#888;font-size:14px;background:rgba(255,255,255,0.04);border:none;
+  }
+  .modal-close:hover{background:rgba(255,255,255,0.08);color:#ccc}
+
+  /* 开关 */
+  .toggle{
+    width:32px;height:18px;border-radius:9px;flex:none;cursor:pointer;position:relative;
+    background:#4f8cff;transition:background .15s;
+  }
+  .toggle::after{
+    content:'';position:absolute;top:2px;right:2px;
+    width:14px;height:14px;border-radius:50%;background:#fff;
+    box-shadow:0 1px 3px rgba(0,0,0,0.3);
+  }
+  .toggle.off{background:rgba(255,255,255,0.15)}
+  .toggle.off::after{right:auto;left:2px}
+
+  .modal-body{
+    flex:1;min-height:0;overflow-y:auto;padding:14px 16px;
+    display:flex;flex-direction:column;gap:14px;
+  }
+
+  /* 自动匹配行 */
+  .auto-row{display:flex;align-items:center;gap:10px}
+  .auto-text{flex:1;min-width:0}
+  .auto-label{font-size:12px;color:#ddd;font-weight:500}
+  .auto-desc{font-size:10px;color:#777;margin-top:1px}
+
+  /* 规则集 */
+  .ruleset-label{
+    font-size:11px;color:#999;font-weight:600;display:flex;align-items:center;gap:6px;
+    margin-bottom:8px;
+  }
+  .ruleset-label .num{color:#4f8cff;font-weight:600}
+  .chips{display:flex;flex-wrap:wrap;gap:5px}
+  .chip{
+    font-size:10.5px;padding:3px 9px;border-radius:5px;cursor:pointer;
+    border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.03);color:#999;
+    display:flex;align-items:center;gap:4px;white-space:nowrap;transition:all .12s;
+  }
+  .chip:hover{border-color:rgba(255,255,255,0.2);color:#bbb}
+  .chip.active{
+    border-color:rgba(79,140,255,0.45);background:rgba(79,140,255,0.14);color:#cfe0ff;
+  }
+  .chip .check{font-size:9px;color:#4f8cff;font-weight:700}
+  .chip:not(.active) .check{display:none}
+
+  /* 自定义规则 */
+  .custom-label{font-size:11px;color:#999;font-weight:600;margin-bottom:6px}
+  .custom-textarea{
+    width:100%;min-height:64px;resize:vertical;
+    background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.08);
+    border-radius:6px;padding:8px 10px;color:#bbb;
+    font-family:monospace;font-size:10.5px;line-height:1.6;outline:none;
+  }
+  .custom-textarea:focus{border-color:rgba(79,140,255,0.4)}
+  .custom-textarea::placeholder{color:#555}
+
+  /* 预算行 */
+  .budget-row{display:flex;align-items:center;gap:10px}
+  .budget-label{font-size:11px;color:#999;font-weight:600;flex:none}
+  .slider{
+    flex:1;height:4px;border-radius:2px;background:rgba(255,255,255,0.1);position:relative;cursor:pointer;
+  }
+  .slider-fill{position:absolute;left:0;top:0;height:100%;width:30%;border-radius:2px;background:#4f8cff}
+  .slider-thumb{
+    position:absolute;left:30%;top:50%;transform:translate(-50%,-50%);
+    width:12px;height:12px;border-radius:50%;background:#fff;
+    box-shadow:0 1px 3px rgba(0,0,0,0.4);cursor:grab;
+  }
+  .budget-val{font-size:11.5px;color:#4f8cff;font-weight:600;font-family:monospace;flex:none;min-width:36px;text-align:right}
+
+  /* 预览区 */
+  .preview-toggle{
+    display:flex;align-items:center;gap:6px;cursor:pointer;
+    font-size:11px;color:#4f8cff;font-weight:500;
+  }
+  .preview-box{
+    margin-top:8px;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.07);
+    border-radius:6px;padding:10px 12px;max-height:140px;overflow-y:auto;
+    font-family:monospace;font-size:9.5px;color:#999;line-height:1.7;
+  }
+  .preview-box .ph{color:#4f8cff;font-weight:600}
+  .preview-box .rs{color:#8b5cf6}
+
+  .modal-foot{
+    padding:10px 16px;border-top:1px solid rgba(255,255,255,0.07);
+    display:flex;align-items:center;gap:8px;justify-content:flex-end;
+  }
+  .btn-cancel{
+    font-size:11.5px;color:#aaa;border:1px solid rgba(255,255,255,0.1);
+    border-radius:6px;padding:6px 14px;background:rgba(255,255,255,0.03);cursor:pointer;
+  }
+  .btn-cancel:hover{background:rgba(255,255,255,0.07)}
+  .btn-save{
+    font-size:11.5px;font-weight:500;color:#fff;border:none;
+    border-radius:6px;padding:6px 16px;background:#4f8cff;cursor:pointer;
+  }
+  .btn-save:hover{background:#3a7aee}
+
+  /* 入口高亮标注 */
+  .entry-annotation{
+    position:absolute;left:248px;top:0;width:0;height:0;z-index:5;
+  }
+  .anno-line{
+    position:absolute;top:340px;left:0;width:30px;height:1px;
+    background:#4f8cff;
+  }
+  .anno-text{
+    position:absolute;top:328px;left:34px;
+    font-size:10px;color:#4f8cff;font-weight:600;white-space:nowrap;
+    background:rgba(79,140,255,0.1);padding:2px 7px;border-radius:4px;
+    border:1px solid rgba(79,140,255,0.25);
+  }
+</style>
+</head>
+<body>
+
+  <!-- ===== 左侧边栏 ===== -->
+  <div class="sidebar">
+    <div class="sb-head">
+      <span class="sb-title">工作空间<span class="count">2</span></span>
+      <input class="sb-search" placeholder="搜索…">
+      <span class="sb-new-btn">+ 新建</span>
+    </div>
+
+    <div class="ws-list">
+      <div class="ws-item">
+        <div class="ws-dot"></div>
+        <span class="ws-name">优化-DSH-workSpac…</span>
+        <span class="ws-time">1 天前</span>
+        <div class="ws-actions">
+          <span class="ws-icon-btn">✎</span>
+          <span class="ws-icon-btn">×</span>
+        </div>
+      </div>
+      <div class="ws-item active">
+        <div class="ws-dot"></div>
+        <span class="ws-name">test-a1</span>
+        <span class="ws-badge">当前</span>
+        <span class="ws-time">刚刚</span>
+        <div class="ws-actions">
+          <span class="ws-icon-btn">✎</span>
+          <span class="ws-icon-btn">×</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ★ 新增：开发规范入口（在高级配置上方） -->
+    <div class="devrules-entry">
+      <div class="devrules-entry-icon">R</div>
+      <div class="devrules-entry-text">
+        <div class="devrules-entry-label">开发规范 <span class="new-tag">NEW</span></div>
+        <div class="devrules-entry-sub">已启用 · 4 套规则</div>
+      </div>
+      <div class="devrules-entry-status"></div>
+    </div>
+
+    <!-- 现有折叠项 -->
+    <div class="collapse-item">
+      <span class="collapse-caret">▸</span>
+      <span class="collapse-label">高级配置</span>
+      <span class="collapse-meta">文档锚点·摘要·0快照</span>
+    </div>
+    <div class="collapse-item">
+      <span class="collapse-caret">▸</span>
+      <span class="collapse-label">预览注入 PROMPT</span>
+    </div>
+
+    <!-- 底部图例 -->
+    <div class="sb-footer">
+      <div class="legend-item"><div class="legend-dot" style="background:#5dd8a3"></div>读写</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div>只读</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#666"></div>禁用</div>
+      <div class="sandbox-status"><div class="sandbox-dot"></div>沙盒 9/9</div>
+    </div>
+  </div>
+
+  <!-- ===== 右侧主内容区（淡化背景） ===== -->
+  <div class="main-area">
+    <div class="main-header">
+      <div>
+        <div class="main-ws-name">test-a1</div>
+        <div class="main-ws-meta">文档锚点模式 · 9 个项目 · 摘要</div>
+      </div>
+      <button class="main-new-btn">新建会话</button>
+    </div>
+
+    <div class="main-section-title">项目目录<span class="count">9</span><span style="margin-left:auto;font-size:10px;color:#666;text-transform:none;letter-spacing:0">+ 添加</span></div>
+
+    <div class="dir-row">
+      <div class="dir-star">★</div>
+      <div class="dir-type-icon type-d">D</div>
+      <div class="dir-info">
+        <div class="dir-name">test-a1 <span style="font-size:9px;color:#888;margin-left:4px">仅文档</span></div>
+        <div class="dir-path">/Users/maning/myCombiner/test-a1</div>
+      </div>
+      <div class="dir-tags">
+        <span class="dir-tag tag-doc">仅文档</span>
+        <span class="dir-tag tag-access">读写</span>
+      </div>
+    </div>
+    <div class="dir-row">
+      <div class="dir-checkbox"></div>
+      <div class="dir-type-icon type-b">B</div>
+      <div class="dir-info">
+        <div class="dir-name">backend <span style="font-size:9px;color:#888;margin-left:4px">⌤ master</span></div>
+        <div class="dir-path">/Users/maning/info-x-med-idea/agno_medical_science/backend</div>
+      </div>
+      <div class="dir-tags">
+        <span class="dir-tag tag-code">代码</span>
+        <span class="dir-tag tag-group">无分组 ▾</span>
+        <span class="dir-tag tag-access">读写 ▾</span>
+      </div>
+    </div>
+    <div class="dir-row">
+      <div class="dir-checkbox"></div>
+      <div class="dir-type-icon type-p">P</div>
+      <div class="dir-info">
+        <div class="dir-name">test <span style="font-size:9px;color:#888;margin-left:4px">⌤ master</span></div>
+        <div class="dir-path">/Users/maning/info-x-med-idea/agno_medical_science/test</div>
+      </div>
+      <div class="dir-tags">
+        <span class="dir-tag tag-code">代码</span>
+        <span class="dir-tag tag-group">无分组 ▾</span>
+        <span class="dir-tag tag-access">读写 ▾</span>
+      </div>
+    </div>
+    <div class="dir-row">
+      <div class="dir-checkbox"></div>
+      <div class="dir-type-icon type-f">F</div>
+      <div class="dir-info">
+        <div class="dir-name">document-search <span style="font-size:9px;color:#888;margin-left:4px">⌤ feature/dev</span></div>
+        <div class="dir-path">/Users/maning/info-x-med-idea/document-search</div>
+      </div>
+      <div class="dir-tags">
+        <span class="dir-tag tag-code">代码</span>
+        <span class="dir-tag tag-group">无分组 ▾</span>
+        <span class="dir-tag tag-access">读写 ▾</span>
+      </div>
+    </div>
+
+    <div style="padding:8px 16px;font-size:10px;color:#666;border-bottom:1px solid rgba(255,255,255,0.04)">
+      第一个是「主项目」：会话锚点，用于保存文档等非代码文件；其余是「代码项目」，可进行代码开发
+    </div>
+
+    <!-- 遮罩 + 弹窗 -->
+    <div class="overlay">
+      <div class="modal">
+        <!-- 弹窗头部 -->
+        <div class="modal-head">
+          <div class="modal-icon">R</div>
+          <div class="modal-title-wrap">
+            <div class="modal-title">开发规范 <span class="new-tag">NEW</span></div>
+            <div class="modal-sub">按技术栈预制 AI 编码约束，随会话注入 system prompt</div>
+          </div>
+          <div class="toggle"></div>
+          <button class="modal-close">×</button>
+        </div>
+
+        <!-- 弹窗主体 -->
+        <div class="modal-body">
+          <!-- 自动匹配 -->
+          <div class="auto-row">
+            <div class="auto-text">
+              <div class="auto-label">自动匹配技术栈</div>
+              <div class="auto-desc">根据目录 projectType 自动勾选对应规则集</div>
+            </div>
+            <div class="toggle"></div>
+          </div>
+
+          <!-- 规则集多选 -->
+          <div>
+            <div class="ruleset-label">规则集 <span class="num">已选 4 / 9</span></div>
+            <div class="chips">
+              <div class="chip active"><span class="check">✓</span>通用工程</div>
+              <div class="chip active"><span class="check">✓</span>前端 TS/React</div>
+              <div class="chip"><span class="check">✓</span>Vue</div>
+              <div class="chip"><span class="check">✓</span>Node</div>
+              <div class="chip active"><span class="check">✓</span>Java/Spring</div>
+              <div class="chip"><span class="check">✓</span>Go</div>
+              <div class="chip"><span class="check">✓</span>Python</div>
+              <div class="chip"><span class="check">✓</span>SQL</div>
+              <div class="chip active"><span class="check">✓</span>REST API</div>
+            </div>
+          </div>
+
+          <!-- 自定义规则 -->
+          <div>
+            <div class="custom-label">自定义规则（每行一条）</div>
+            <textarea class="custom-textarea" placeholder="例如：所有对外接口必须记录请求/响应日志&#10;前端组件文件不超过 300 行，超出拆子组件">1. 所有对外接口必须记录请求/响应日志
+2. 前端组件文件不超过 300 行，超出拆子组件</textarea>
+          </div>
+
+          <!-- Token 预算 -->
+          <div class="budget-row">
+            <span class="budget-label">Token 预算</span>
+            <div class="slider">
+              <div class="slider-fill"></div>
+              <div class="slider-thumb"></div>
+            </div>
+            <span class="budget-val">1500</span>
+          </div>
+
+          <!-- 注入预览 -->
+          <div>
+            <div class="preview-toggle">▾ 查看注入 prompt 预览</div>
+            <div class="preview-box">
+              <span class="ph"># 开发规范</span>（已启用：通用工程规范 · 前端TypeScript/React · 后端Java/Spring · REST API）<br>
+              <span class="rs">【通用工程规范】</span><br>
+              1. 命名清晰表意：变量/函数/类用业务语义命名…<br>
+              2. 遵循仓库现有目录与文件约定…<br>
+              <span class="rs">【前端 TypeScript · React】</span><br>
+              1. 新组件一律函数组件 + Hooks…<br>
+              …（共 4 套规则 + 2 条自定义，约 1.2k token）
+            </div>
+          </div>
+        </div>
+
+        <!-- 弹窗底部 -->
+        <div class="modal-foot">
+          <button class="btn-cancel">取消</button>
+          <button class="btn-save">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

@@ -37,7 +37,7 @@ context-control** model:
    injected.
 4. **Command layer** — `@`-command dynamic scope.
 
-Layers 1-4 ship today; see [Changelog](./CHANGELOG.md).
+Layers 1-4 ship today; see [Changelog](./CHANGELOG.md) · [中文](./CHANGELOG.zh.md).
 
 ---
 

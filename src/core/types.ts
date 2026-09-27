@@ -114,6 +114,34 @@ export interface WorkspaceSnapshot {
   createdAt: number
 }
 
+/** 用户自建规范（可全局共享，也可仅属于某个工作空间）。 */
+export interface CustomStandard {
+  id: string
+  name: string
+  /** 技术栈分组键。 */
+  tech: string
+  /** 一句话说明。 */
+  summary: string
+  /** 规范正文（markdown 列表）。 */
+  body: string
+}
+
+/** 工作空间级的开发规范绑定。 */
+export interface WorkspaceStandards {
+  /** 应用到整个工作空间的规范 id。 */
+  global?: string[]
+  /** 逐目录规范：目录绝对路径 -> 规范 id 列表。 */
+  perDirectory?: Record<string, string[]>
+  /** 仅本工作空间的自建规范。 */
+  workspaceCustom?: CustomStandard[]
+  /** 仅本工作空间的覆盖正文：id -> body。 */
+  workspaceOverrides?: Record<string, string>
+  /** 注入预算（缺省 DEFAULT_STANDARDS_BUDGET）。 */
+  budget?: number
+  /** 是否按 projectType 自动匹配内置规范（缺省 true）。 */
+  autoMatch?: boolean
+}
+
 /** 一个自定义工作空间：独立关联一组项目目录（主从顺序由数组顺序表达）。 */
 export interface Workspace {
   /** 唯一标识。 */
@@ -146,6 +174,8 @@ export interface Workspace {
   codeIndexBudget?: number
   /** 功能摘要模式：off=不生成（缺省）；llm=调用模型生成一句话摘要并缓存。 */
   codeIndexSummary?: 'off' | 'llm'
+  /** 开发规范绑定（缺省不注入任何规范）。 */
+  standards?: WorkspaceStandards
 }
 
 /** 宿主持久化文件（~/.dsh/dsh-workspace-combiner.json）的磁盘形状。 */
@@ -185,4 +215,6 @@ export interface ContextStats {
   fileIndexTokens: number
   /** 目录清单 + 规则等固定开销估算 token 数。 */
   promptOverheadTokens: number
+  /** 开发规范区块估算 token 数。 */
+  standardsTokens: number
 }

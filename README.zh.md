@@ -265,7 +265,7 @@ pnpm watch         # 监视重建
 
 ## 变更日志
 
-见 [CHANGELOG.md](./CHANGELOG.md)。
+见 [CHANGELOG.zh.md](./CHANGELOG.zh.md)（[English](./CHANGELOG.md)）。
 
 ## 许可
 

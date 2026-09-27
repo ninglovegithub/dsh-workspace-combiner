@@ -24,7 +24,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-session'
-import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_TOKEN_BUDGET, PLUGIN_ID, SECTION_NAME, SECTION_ORDER } from '../invariant.ts'
+import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_STANDARDS_BUDGET, DEFAULT_TOKEN_BUDGET, PLUGIN_ID, SECTION_NAME, SECTION_ORDER } from '../invariant.ts'
 import { renderMultiWorkspacePrompt } from '../prompt.ts'
 import { makeRoutes } from '../routes.ts'
 import { WorkspaceCombinerStore } from '../store.ts'
@@ -33,6 +33,8 @@ import type { FileIndexEntry } from '../core/fileTree.ts'
 import { loadModeMaxDepth, type CodeIndexEntry, type LoadMode, type WorkspaceMode, type WorkspaceRef } from '../core/types.ts'
 import { CodeIndexCache } from './codeIndex.ts'
 import { FeatureSummaryCache, codeIndexSignature, summarizeFeatures } from './codeIndexSummary.ts'
+import { StandardsLibraryStore } from './standardsLibrary.ts'
+import { resolveStandardGroups, type StandardGroup } from '../core/standards.ts'
 
 /** 稳定的 cordis 插件名（编排行 id）。 */
 export const name = PLUGIN_ID
@@ -85,7 +87,8 @@ export function apply(ctx: Context, config: Config = {}): void {
   const fileIndexCache = new FileIndexCache()
   const codeIndexCache = new CodeIndexCache()
   const summaryCache = new FeatureSummaryCache()
-  const selectionBySession = new Map<string, { directories: readonly WorkspaceRef[]; mode: WorkspaceMode; loadMode: LoadMode; tokenBudget: number; entries: FileIndexEntry[]; codeEntries: CodeIndexEntry[]; codeIndexBudget: number }>()
+  const standardsLibrary = new StandardsLibraryStore()
+  const selectionBySession = new Map<string, { directories: readonly WorkspaceRef[]; mode: WorkspaceMode; loadMode: LoadMode; tokenBudget: number; entries: FileIndexEntry[]; codeEntries: CodeIndexEntry[]; codeIndexBudget: number; standardGroups: StandardGroup[]; standardsBudget: number }>()
   // 会话 id -> 归属的自定义工作空间 id（新建会话时的当前工作空间）。
   const sessionWorkspaceBySession = new Map<string, string>()
   // 会话 id -> 已渲染文本：同一快照对象直接复用，避免每个模型步重复拼串。
@@ -103,7 +106,17 @@ export function apply(ctx: Context, config: Config = {}): void {
         if (selected === undefined) return ''
         const cached = renderedBySession.get(session.id)
         if (cached !== undefined && cached.snapshot === selected) return cached.text
-        const text = renderMultiWorkspacePrompt(selected.directories, selected.mode, selected.loadMode, selected.entries, selected.tokenBudget, selected.codeEntries, selected.codeIndexBudget)
+        const text = renderMultiWorkspacePrompt({
+          workspaces: selected.directories,
+          mode: selected.mode,
+          loadMode: selected.loadMode,
+          entries: selected.entries,
+          tokenBudget: selected.tokenBudget,
+          codeEntries: selected.codeEntries,
+          codeIndexBudget: selected.codeIndexBudget,
+          standardGroups: selected.standardGroups,
+          standardsBudget: selected.standardsBudget,
+        })
         renderedBySession.set(session.id, { snapshot: selected, text })
         return text
       },
@@ -123,7 +136,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       const directories = ws.directories.map(directory => ({ ...directory }))
       const tokenBudget = ws.tokenBudget ?? DEFAULT_TOKEN_BUDGET
       const codeIndexBudget = ws.codeIndexBudget ?? DEFAULT_CODE_INDEX_BUDGET
-      selectionBySession.set(session.id, { directories, mode, loadMode, tokenBudget, entries: [], codeEntries: [], codeIndexBudget })
+      selectionBySession.set(session.id, { directories, mode, loadMode, tokenBudget, entries: [], codeEntries: [], codeIndexBudget, standardGroups: [], standardsBudget: ws.standards?.budget ?? DEFAULT_STANDARDS_BUDGET })
       sessionWorkspaceBySession.set(session.id, ws.id)
       void store.touchWorkspaceSession(ws.id)
 
@@ -141,9 +154,15 @@ export function apply(ctx: Context, config: Config = {}): void {
       const signature = codeIndexSignature(baseCodeEntries)
       const cachedSummaries = baseCodeEntries.length > 0 ? await summaryCache.get(signature) : undefined
       const codeEntries = withSummaries(baseCodeEntries, cachedSummaries)
+      // 开发规范：按工作空间绑定 + projectType 自动匹配解析出作用域分组。
+      const standardGroups = resolveStandardGroups(ws.standards, directories, await standardsLibrary.get())
       // 会话可能在扫描期间已被关闭；不要把过期快照重新放回 Map。
       if (sessionWorkspaceBySession.get(session.id) === ws.id) {
-        selectionBySession.set(session.id, { directories, mode, loadMode, tokenBudget, entries, codeEntries, codeIndexBudget })
+        selectionBySession.set(session.id, {
+          directories, mode, loadMode, tokenBudget, entries, codeEntries, codeIndexBudget,
+          standardGroups,
+          standardsBudget: ws.standards?.budget ?? DEFAULT_STANDARDS_BUDGET,
+        })
       }
       // AI 摘要在后台生成：不阻塞会话创建与首轮；完成后更新快照并失效渲染缓存。
       if (baseCodeEntries.length > 0 && (ws.codeIndexSummary ?? 'off') === 'llm' && cachedSummaries === undefined) {
@@ -168,7 +187,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   // 3) 路由族（client -> host：读写勾选与模板；勾选变化时联动沙盒）。
   ctx.effect(() => {
-    const disposers = makeRoutes(ctx, store, fileIndexCache, codeIndexCache, summaryCache).map(route => ctx.webServer.register(route))
+    const disposers = makeRoutes(ctx, store, fileIndexCache, codeIndexCache, summaryCache, standardsLibrary).map(route => ctx.webServer.register(route))
     return () => {
       for (const dispose of disposers) dispose()
     }

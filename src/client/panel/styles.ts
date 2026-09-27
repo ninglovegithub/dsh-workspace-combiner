@@ -306,6 +306,13 @@ const PANEL_CSS = String.raw`
   background:var(--dsw-alias-bg-layer-3,#1e2430);
   border:1px solid var(--wcb-line2);box-shadow:0 16px 48px rgba(0,0,0,.5)}
 .wcb-modal-wide{width:480px}
+.wcb-std-modal{width:min(760px,94vw)}
+.wcb-adv-modal{width:min(560px,92vw)}
+.wcb-budget-modal{width:min(620px,92vw)}
+.wcb-budget-body{max-height:64vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
+.wcb-adv-body{max-height:64vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+.wcb-preview-modal{width:min(760px,94vw)}
+.wcb-preview-body{max-height:64vh;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
 .wcb-modal-title{font-size:13px;font-weight:600}
 .wcb-modal-body{font-size:11.5px;line-height:1.6;color:var(--wcb-text2)}
 .wcb-modal-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:2px}
@@ -334,6 +341,29 @@ const PANEL_CSS = String.raw`
 .wcb-pathbox{flex:1;min-width:0;color:var(--wcb-dim);font-size:10px;font-family:var(--ds-font-family-code,monospace);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wcb-toolbar{display:flex;justify-content:flex-end}
+
+/* ---------- 开发规范弹窗 ---------- */
+.wcb-std-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.wcb-std-split{display:flex;gap:12px;min-height:0;flex:1 1 auto}
+.wcb-std-list{width:40%;min-width:190px;max-width:300px;flex:none;display:flex;flex-direction:column;gap:8px;
+  overflow-y:auto;max-height:48vh;scrollbar-width:thin}
+.wcb-std-group{display:flex;flex-direction:column;gap:2px}
+.wcb-std-group-title{font-size:9px;color:var(--wcb-dim);text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px}
+.wcb-std-item{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:5px;border:1px solid transparent}
+.wcb-std-item:hover{background:var(--wcb-surface)}
+.wcb-std-item-on{background:rgba(79,140,255,.1);border-color:rgba(79,140,255,.25)}
+.wcb-std-name{flex:1;min-width:0;text-align:left;border:none;background:transparent;color:var(--wcb-text2);
+  font:inherit;font-size:11px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0}
+.wcb-std-flag{margin-left:5px;font-size:8.5px;color:var(--wcb-warn);border:1px solid rgba(212,160,23,.35);border-radius:3px;padding:0 3px}
+.wcb-std-meta{flex:none;color:var(--wcb-dim);font-size:9px;font-variant-numeric:tabular-nums}
+.wcb-std-new{display:flex;gap:5px;align-items:center;padding-top:5px;border-top:1px solid var(--wcb-line)}
+.wcb-std-pane{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;min-height:0}
+.wcb-std-pane-head{display:flex;align-items:center;gap:8px}
+.wcb-std-pane-title{flex:1;min-width:0;font-size:11.5px;font-weight:600;color:var(--wcb-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wcb-std-editor{flex:1;min-height:230px;max-height:48vh;resize:vertical;background:var(--wcb-surface);
+  border:1px solid var(--wcb-line2);border-radius:6px;color:var(--wcb-text2);
+  font-family:var(--ds-font-family-code,monospace);font-size:11px;line-height:1.55;padding:8px 9px;outline:none}
+.wcb-std-editor:focus{border-color:var(--wcb-accent)}
 
 /* ---------- 项目类型徽标 ---------- */
 .wcb-type{flex:none;display:inline-flex;align-items:center;border-radius:999px;padding:1px 7px;font-size:9.5px;

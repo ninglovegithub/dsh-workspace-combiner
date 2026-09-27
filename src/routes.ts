@@ -10,11 +10,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { mkdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { API, DEFAULT_CODE_INDEX_BUDGET, DEFAULT_TOKEN_BUDGET, DEFAULT_WORKSPACE_NAME, MAX_JSON_BODY_BYTES } from './invariant.ts'
+import { API, DEFAULT_CODE_INDEX_BUDGET, DEFAULT_STANDARDS_BUDGET, DEFAULT_TOKEN_BUDGET, DEFAULT_WORKSPACE_NAME, MAX_JSON_BODY_BYTES } from './invariant.ts'
 import { scanDirectory } from './host/projectDetector.ts'
 import { FileIndexCache } from './host/fileIndex.ts'
 import { CodeIndexCache } from './host/codeIndex.ts'
 import { codeIndexSignature, type FeatureSummaryCache } from './host/codeIndexSummary.ts'
+import { StandardsLibraryStore, parseLibrary } from './host/standardsLibrary.ts'
+import { generateStandardDraft } from './host/standardsAi.ts'
+import { resolveStandardGroups } from './core/standards.ts'
 import { parseWorkspaceRefs } from './core/validate.ts'
 import { computeContextStats } from './host/contextStats.ts'
 import { getGitStatus } from './host/gitStatus.ts'
@@ -80,7 +83,7 @@ function sanitizeFolderName(name: string): string {
  * @param ctx - 宿主上下文（用于沙盒联动）。
  * @param store - 持久化存储。
  */
-export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileIndexCache: FileIndexCache, codeIndexCache: CodeIndexCache, summaryCache: FeatureSummaryCache): WebRoute[] {
+export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileIndexCache: FileIndexCache, codeIndexCache: CodeIndexCache, summaryCache: FeatureSummaryCache, standardsLibrary: StandardsLibraryStore): WebRoute[] {
   const guard = (req: IncomingMessage, res: ServerResponse, method: string): boolean => {
     if (!isLoopbackRequest(req)) {
       writeJson(res, 403, { error: 'forbidden: loopback-only' })
@@ -477,6 +480,87 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         }
       },
     },
+    // ---------------------------------------------------------- standards（全局规范库）
+    {
+      kind: 'exact',
+      path: API.standards,
+      handler: async (req, res) => {
+        if (req.method === 'GET') {
+          if (!guard(req, res, 'GET')) return
+          try {
+            writeJson(res, 200, { library: await standardsLibrary.get() })
+          } catch (error) {
+            fail(res, error)
+          }
+          return
+        }
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined || body.library === undefined) {
+          writeJson(res, 400, { error: 'library is required' })
+          return
+        }
+        try {
+          await standardsLibrary.replace(parseLibrary(body.library))
+          writeJson(res, 200, { ok: true })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    // ---------------------------------------------------------- workspace-standards（工作空间绑定）
+    {
+      kind: 'exact',
+      path: API.workspaceStandards,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const id = body === undefined ? '' : typeof body.id === 'string' ? body.id : ''
+        const standards = body === undefined ? undefined : body.standards
+        if (id === '' || standards === undefined || standards === null || typeof standards !== 'object') {
+          writeJson(res, 400, { error: 'id and standards are required' })
+          return
+        }
+        try {
+          await store.setWorkspaceStandards(id, standards as never)
+          writeJson(res, 200, { ok: true })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    // ---------------------------------------------------------- standards-ai（用模型起草规范正文）
+    {
+      kind: 'exact',
+      path: API.standardsAi,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const name = body === undefined ? '' : typeof body.name === 'string' ? body.name.trim() : ''
+        if (name === '') {
+          writeJson(res, 400, { error: 'name is required' })
+          return
+        }
+        const tech = body !== undefined && typeof body.tech === 'string' && body.tech !== '' ? body.tech : '通用'
+        const directory = body !== undefined && typeof body.directory === 'string' && body.directory !== '' ? body.directory : undefined
+        const hint = body !== undefined && typeof body.hint === 'string' && body.hint !== '' ? body.hint : undefined
+        try {
+          const outcome = await generateStandardDraft(ctx, {
+            name,
+            tech,
+            ...(directory === undefined ? {} : { directory }),
+            ...(hint === undefined ? {} : { hint }),
+          })
+          if (!outcome.ok) {
+            writeJson(res, 502, { error: outcome.error })
+            return
+          }
+          writeJson(res, 200, { body: outcome.text })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
     // ---------------------------------------------------------- context-stats
     {
       kind: 'exact',
@@ -486,15 +570,22 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         try {
           const ws = await store.getCurrentWorkspace()
           if (ws === undefined) {
-            writeJson(res, 200, { loadMode: 'summary', directories: [], totalFiles: 0, totalDirs: 0, fileIndexTokens: 0, promptOverheadTokens: 0 })
+            writeJson(res, 200, { loadMode: 'summary', directories: [], totalFiles: 0, totalDirs: 0, fileIndexTokens: 0, promptOverheadTokens: 0, standardsTokens: 0 })
             return
           }
           const codeIndexEnabled = ws.codeIndexEnabled ?? true
           const summaries = codeIndexEnabled ? await summaryCache.get(codeIndexSignature(await codeIndexCache.get(ws.directories))) : undefined
-          const stats = await computeContextStats(ws.directories, ws.mode ?? 'anchor', ws.loadMode ?? 'summary', fileIndexCache, ws.tokenBudget ?? DEFAULT_TOKEN_BUDGET, codeIndexCache, {
-            enabled: codeIndexEnabled,
-            budget: ws.codeIndexBudget ?? DEFAULT_CODE_INDEX_BUDGET,
-            ...(summaries === undefined ? {} : { summaries }),
+          const standardGroups = resolveStandardGroups(ws.standards, ws.directories, await standardsLibrary.get())
+          const stats = await computeContextStats({
+            directories: ws.directories,
+            mode: ws.mode ?? 'anchor',
+            loadMode: ws.loadMode ?? 'summary',
+            fileIndexCache,
+            tokenBudget: ws.tokenBudget ?? DEFAULT_TOKEN_BUDGET,
+            codeIndexCache,
+            codeConfig: { enabled: codeIndexEnabled, budget: ws.codeIndexBudget ?? DEFAULT_CODE_INDEX_BUDGET, ...(summaries === undefined ? {} : { summaries }) },
+            standardGroups,
+            standardsBudget: ws.standards?.budget ?? DEFAULT_STANDARDS_BUDGET,
           })
           writeJson(res, 200, stats)
         } catch (error) {

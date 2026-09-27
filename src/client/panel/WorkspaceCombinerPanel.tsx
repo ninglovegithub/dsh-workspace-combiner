@@ -12,6 +12,10 @@ import { useWorkspaceCombiner, DEFAULT_TOKEN_BUDGET } from './controller.ts'
 import { injectPanelStyles } from './styles.ts'
 import { tt } from '../locales.ts'
 import { NewWorkspaceWizard } from './NewWorkspaceWizard.tsx'
+import { StandardsModal } from './StandardsModal.tsx'
+import { AdvancedModal } from './AdvancedModal.tsx'
+import { PreviewModal } from './PreviewModal.tsx'
+import { BudgetModal } from './BudgetModal.tsx'
 
 /** 侧边栏图标：两个叠放的方块 + 连线，表达「多项目组合」。 */
 export function WorkspaceCombinerIcon({ size, active }: PanelIconProps): ReactElement {
@@ -36,11 +40,6 @@ function formatLastUsed(ts?: number): string {
   return tt('wsLastUsedDay', { n: Math.floor(hr / 24) })
 }
 
-/** 千分位 token 简写（36200 -> 36.2k）。 */
-function kmTokens(n: number): string {
-  if (n < 1000) return String(n)
-  return (n / 1000).toFixed(1) + 'k'
-}
 
 /** 目录分组 -> 胶囊样式类。 */
 const GROUP_CLASS: Record<string, string> = {
@@ -62,16 +61,6 @@ function dirTypeSquare(index: number, group: string | undefined, type: ProjectTy
   return { letter: 'P', cls: 'wcb-type-sq wcb-type-sq-other' }
 }
 
-/** 目录索引 -> 环形图/进度条颜色。 */
-function dirColor(index: number, group: string | undefined, type: ProjectType | undefined): string {
-  if (index === 0) return '#d4a017'
-  const g = group ?? ''
-  if (g === tt('groupBackend') || type === 'java' || type === 'python' || type === 'go') return '#8b5cf6'
-  if (g === tt('groupFrontend') || type === 'frontend' || type === 'frontend-vue' || type === 'frontend-react' || type === 'frontend-webpack' || type === 'frontend-next') return '#3b82f6'
-  if (g === tt('groupRef')) return '#2aa8b4'
-  if (g === tt('groupDoc')) return '#d4a017'
-  return '#888'
-}
 
 /** 访问状态 -> 胶囊样式类。 */
 const ACCESS_CLASS: Record<DirectoryAccess, string> = {
@@ -115,29 +104,6 @@ function GitBadge({ status }: { status: GitStatus | null | undefined }): ReactEl
   )
 }
 
-/** 环形进度图：SVG donut，中间显示百分比。 */
-function Donut({ percentage, size = 56, strokeWidth = 5, color = '#4f8cff' }: {
-  percentage: number; size?: number; strokeWidth?: number; color?: string;
-}): ReactElement {
-  const r = (size - strokeWidth) / 2
-  const circumference = 2 * Math.PI * r
-  const pct = Math.min(1, Math.max(0, percentage))
-  const offset = circumference * (1 - pct)
-  return (
-    <div className="wcb-donut" style={{ width: size, height: size }}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(255,255,255,.06)" strokeWidth={strokeWidth} />
-        {/* 进度为 0 时不渲染，否则 strokeLinecap="round" 会在起点留下一个孤立圆点 */}
-        {pct > 0.001 ? (
-          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={strokeWidth}
-            strokeLinecap={pct >= 0.999 ? "butt" : "round"}
-            strokeDasharray={circumference} strokeDashoffset={offset} transform={`rotate(-90 ${size / 2} ${size / 2})`} />
-        ) : null}
-      </svg>
-      <div className="wcb-donut-center" style={{ fontSize: Math.round(size * 0.22) }}>{Math.round(pct * 100)}%</div>
-    </div>
-  )
-}
 
 /** 弹窗公共外壳：Esc 关闭 + 点击遮罩关闭 + aria-modal。 */
 function Modal({ title, onClose, wide, children }: { title: string; onClose: () => void; wide?: boolean; children: ReactElement | ReactElement[] }): ReactElement {
@@ -218,50 +184,13 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [dirsOpen, setDirsOpen] = useState(true)
   const [advOpen, setAdvOpen] = useState(false)
+  const [standardsOpen, setStandardsOpen] = useState(false)
+  const [budgetOpen, setBudgetOpen] = useState(false)
   const [cmdkOpen, setCmdkOpen] = useState(false)
   const [cmdkQuery, setCmdkQuery] = useState('')
   const [cmdkIndex, setCmdkIndex] = useState(0)
   const [editingNotePath, setEditingNotePath] = useState<string | null>(null)
   const [ciQuery, setCiQuery] = useState('')
-  // 右栏 项目目录 : 上下文预算 的高度比例（默认 6:4），可拖拽调整并持久化。
-  const [splitRatio, setSplitRatio] = useState<number>(() => {
-    if (typeof localStorage === 'undefined') return 0.6
-    const saved = Number(localStorage.getItem('wcb.splitRatio'))
-    return Number.isFinite(saved) && saved > 0.05 && saved < 0.95 ? saved : 0.6
-  })
-  const rightColRef = useRef<HTMLDivElement | null>(null)
-  const draggingRef = useRef(false)
-
-  const onSplitMove = useCallback((clientY: number): void => {
-    const el = rightColRef.current
-    if (el === null) return
-    const rect = el.getBoundingClientRect()
-    if (rect.height <= 0) return
-    const next = Math.min(0.9, Math.max(0.1, (clientY - rect.top) / rect.height))
-    setSplitRatio(next)
-  }, [])
-
-  useEffect(() => {
-    const onMove = (event: MouseEvent): void => { if (draggingRef.current) onSplitMove(event.clientY) }
-    const onUp = (): void => {
-      if (!draggingRef.current) return
-      draggingRef.current = false
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      setSplitRatio(prev => { try { localStorage.setItem('wcb.splitRatio', String(prev)) } catch { /* 忽略隐私模式写入失败 */ } return prev })
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
-  }, [onSplitMove])
-
-  const startSplitDrag = useCallback((event: React.MouseEvent): void => {
-    event.preventDefault()
-    draggingRef.current = true
-    document.body.style.cursor = 'row-resize'
-    document.body.style.userSelect = 'none'
-  }, [])
-
   const currentWs = state.currentWorkspace
   const dirCount = state.dirs.length
 
@@ -270,10 +199,6 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
     if (path !== '') { state.addDirectory(path); state.setManualPath('') }
   }
 
-  const total = (state.contextStats?.fileIndexTokens ?? 0) + (state.contextStats?.promptOverheadTokens ?? 0)
-  const budget = state.tokenBudget
-  const ratio = budget > 0 ? total / budget : 0
-  const maxDirTokens = Math.max(1, ...(state.contextStats?.directories ?? []).map(d => d.tokens))
   const sandboxCount = state.dirs.filter(d => (d.access ?? 'readwrite') !== 'disabled').length
 
   const advSummary = tt('advancedSummary', {
@@ -380,7 +305,6 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
   }
 
   // 非禁用目录列表（用于分目录用量）
-  const activeDirs = (state.contextStats?.directories ?? []).filter(d => d.access !== 'disabled')
 
   return (
     <div className="wcb-root">
@@ -453,111 +377,59 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
             </div>
           </section>
 
-          {/* 高级配置（默认折叠） */}
+          {/* 开发规范：点击弹窗（位于高级配置上方） */}
           <section className="wcb-card">
-            <div className="wcb-card-head wcb-card-head-btn" role="button" tabIndex={0} aria-label={tt('advancedTitle')} aria-expanded={advOpen} onClick={() => setAdvOpen(v => !v)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setAdvOpen(v => !v) } }}>
-              <span className="wcb-caret" aria-hidden="true">{advOpen ? '▾' : '▸'}</span>
-              {tt('advancedTitle')}
-              {!advOpen ? <span className="wcb-badge" style={{ marginLeft: 2 }}>{advSummary}</span> : null}
+            <div
+              className="wcb-card-head wcb-card-head-btn"
+              role="button"
+              tabIndex={0}
+              aria-label={tt('standardsTitle')}
+              aria-expanded={standardsOpen}
+              onClick={() => setStandardsOpen(true)}
+              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setStandardsOpen(true) } }}
+            >
+              <span className="wcb-caret" aria-hidden="true">▸</span>
+              {tt('standardsTitle')}
+              <span className="wcb-badge" style={{ marginLeft: 2 }}>
+                {state.standardGroups.length > 0 ? tt('standardsGroups', { n: state.standardGroups.length }) : tt('standardsNone')}
+              </span>
+              {state.standardGroups.length > 0 ? <span className="wcb-label" style={{ margin: 0, marginLeft: 'auto' }}>{'~' + (state.contextStats?.standardsTokens ?? 0) + ' t'}</span> : null}
             </div>
-            {advOpen ? (
-              <div className="wcb-card-body">
-                <div>
-                  <div className="wcb-label">{tt('wsModeLabel')}</div>
-                  <div className="wcb-tabs" role="tablist" aria-label={tt('wsModeLabel')}>
-                    {([['anchor', tt('wsModeAnchor')], ['single', tt('wsModeSingle')]] as Array<[WorkspaceMode, string]>).map(([value, label]) => (
-                      <button key={value} type="button" role="tab" aria-selected={(currentWs?.mode ?? 'anchor') === value} aria-label={label} className={'wcb-tab' + ((currentWs?.mode ?? 'anchor') === value ? ' wcb-tab-on' : '')} onClick={() => state.setWorkspaceMode(value)}>{label}</button>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="wcb-label">{tt('loadModeLabel')}</div>
-                  <div className="wcb-tabs" role="tablist" aria-label={tt('loadModeLabel')}>
-                    {([['summary', tt('loadModeSummary')], ['tree', tt('loadModeTree')], ['full', tt('loadModeFull')]] as Array<[LoadMode, string]>).map(([value, label]) => (
-                      <button key={value} type="button" role="tab" aria-selected={(currentWs?.loadMode ?? 'summary') === value} aria-label={label} className={'wcb-tab' + ((currentWs?.loadMode ?? 'summary') === value ? ' wcb-tab-on' : '')} onClick={() => state.setLoadMode(value)}>{label}</button>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="wcb-label">{tt('snapshotSave')}</div>
-                  <div className="wcb-add-row" style={{ border: 'none', padding: 0, marginBottom: 6 }}>
-                    <input className="wcb-input" value={state.snapshotName} placeholder={tt('snapshotNamePlaceholder')} aria-label={tt('snapshotNamePlaceholder')} onChange={(event: ChangeEvent<HTMLInputElement>) => state.setSnapshotName(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === 'Enter') state.saveSnapshot() }} />
-                    <button type="button" className="wcb-btn" aria-label={tt('snapshotSave')} disabled={state.snapshotName.trim() === ''} onClick={state.saveSnapshot}>{tt('snapshotSave')}</button>
-                  </div>
-                  {state.snapshots.length > 0 ? (
-                    <div className="wcb-snap-list">
-                      {state.snapshots.map(s => (
-                        <div key={s.id} className="wcb-snap-item">
-                          <span className="wcb-snap-name" title={s.name}>{s.name}</span>
-                          <span className="wcb-snap-meta">{tt('snapshotDirCount', { n: s.directories.length })}</span>
-                          <button type="button" className="wcb-snap-restore" aria-label={tt('snapshotRestore')} onClick={() => state.restoreSnapshot(s.id)}>{tt('snapshotRestore')}</button>
-                          <button type="button" className="wcb-iconbtn wcb-iconbtn-danger" title={tt('snapshotDelete')} aria-label={tt('snapshotDelete')} onClick={() => state.deleteSnapshot(s.id)}>✕</button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-                {/* @指令速查卡 */}
-                <div className="wcb-sep-line" />
-                <div>
-                  <div className="wcb-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ color: 'var(--wcb-purple)', fontWeight: 600 }}>@</span>
-                    {tt('cmdRefTitle')}
-                    <span style={{ fontSize: '9.5px', color: 'var(--wcb-dim)' }}>{tt('cmdRefHint')}</span>
-                  </div>
-                  <div className="wcb-cmdref">
-                    {([
-                      ['@workspace', tt('cmdRefWorkspace')],
-                      ['@dir:路径', tt('cmdRefDir')],
-                      ['@files', tt('cmdRefFiles')],
-                      ['@snapshot:名', tt('cmdRefSnapshot')],
-                    ] as Array<[string, string]>).map(([code, desc]) => (
-                      <button
-                        key={code}
-                        type="button"
-                        className="wcb-cmdref-item"
-                        aria-label={code + ' ' + desc}
-                        onClick={() => state.copyText(code)}
-                      >
-                        <code className="wcb-cmdref-code">{code}</code>
-                        <span className="wcb-cmdref-desc">{desc}</span>
-                        <span className="wcb-cmdref-copy">{tt('previewCopy')}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ) : null}
           </section>
 
-          {/* prompt 预览 */}
+          {/* 高级配置：点击弹窗 */}
           <section className="wcb-card">
-            <div className="wcb-card-head wcb-card-head-btn" role="button" tabIndex={0} aria-label={tt('previewTitle')} aria-expanded={state.previewOpen} onClick={() => state.setPreviewOpen(!state.previewOpen)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); state.setPreviewOpen(!state.previewOpen) } }}>
-              <span className="wcb-caret" aria-hidden="true">{state.previewOpen ? '▾' : '▸'}</span>
+            <div className="wcb-card-head wcb-card-head-btn" role="button" tabIndex={0} aria-label={tt('advancedTitle')} aria-expanded={advOpen} onClick={() => setAdvOpen(true)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setAdvOpen(true) } }}>
+              <span className="wcb-caret" aria-hidden="true">▸</span>
+              {tt('advancedTitle')}
+              <span className="wcb-badge" style={{ marginLeft: 2 }}>{advSummary}</span>
+            </div>
+          </section>
+
+          {/* 注入 prompt 预览：点击弹窗 */}
+          <section className="wcb-card">
+            <div className="wcb-card-head wcb-card-head-btn" role="button" tabIndex={0} aria-label={tt('previewTitle')} aria-expanded={state.previewOpen} onClick={() => state.setPreviewOpen(true)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); state.setPreviewOpen(true) } }}>
+              <span className="wcb-caret" aria-hidden="true">▸</span>
               {tt('previewTitle')}
               <div className="wcb-head-actions">
-                {state.previewOpen ? <button type="button" className="wcb-linkbtn" aria-label={tt('previewCopy')} disabled={state.previewText === ''} onClick={(event) => { event.stopPropagation(); state.copyPreview() }}>{tt('previewCopy')}</button> : null}
+                <span className="wcb-label" style={{ margin: 0 }}>{tt('previewOpenHint')}</span>
               </div>
             </div>
-            {state.previewOpen ? (
-              <div className="wcb-card-body">
-                {state.previewText === '' ? (
-                  <div className="wcb-hint">{tt('previewEmpty')}</div>
-                ) : (
-                  <>
-                    {state.previewLoading ? <div className="wcb-hint">{tt('previewLoading')}</div> : null}
-                    <pre className="wcb-preview" tabIndex={0} aria-label={tt('previewTitle')}>{state.previewText}</pre>
-                  </>
-                )}
-              </div>
-            ) : null}
+          </section>
+          {/* 更多：上下文预算入口（点击弹窗） */}
+          <section className="wcb-card">
+            <div className="wcb-card-head wcb-card-head-btn" role="button" tabIndex={0} aria-label={tt('moreTitle')} aria-expanded={budgetOpen} onClick={() => setBudgetOpen(true)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setBudgetOpen(true) } }}>
+              <span className="wcb-caret" aria-hidden="true">▸</span>
+              {tt('moreTitle')}
+              <span className="wcb-badge" style={{ marginLeft: 2 }}>{tt('moreBudgetHint')}</span>
+            </div>
           </section>
         </div>
 
         {/* --- 右栏：项目目录 + 上下文预算（7:30 固定比例，可拖拽调整） --- */}
-        <div className="wcb-right-col" ref={rightColRef}>
+        <div className="wcb-right-col">
           {/* 项目目录区 */}
-          <section className="wcb-card wcb-card-grow" style={{ flex: splitRatio + ' 1 0' }}>
+          <section className="wcb-card wcb-card-grow">
             <div className="wcb-card-head wcb-card-head-btn" role="button" tabIndex={0} aria-label={tt('projectsTitle')} onClick={() => setDirsOpen(v => !v)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setDirsOpen(v => !v) } }}>
               <span className="wcb-caret" aria-hidden="true">{dirsOpen ? '▾' : '▸'}</span>
               {tt('projectsTitle')}
@@ -701,108 +573,6 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
             ) : null}
           </section>
 
-          {/* 可拖拽分隔条：调整「项目目录 : 上下文预算」高度比例 */}
-          <div
-            className="wcb-splitter"
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label={tt('splitterLabel')}
-            aria-valuenow={Math.round(splitRatio * 100)}
-            aria-valuemin={10}
-            aria-valuemax={90}
-            tabIndex={0}
-            title={tt('splitterHint')}
-            onMouseDown={startSplitDrag}
-            onDoubleClick={() => setSplitRatio(0.6)}
-            onKeyDown={(event) => {
-              const step = event.shiftKey ? 0.05 : 0.02
-              if (event.key === 'ArrowUp') { event.preventDefault(); setSplitRatio(v => Math.max(0.1, v - step)) }
-              else if (event.key === 'ArrowDown') { event.preventDefault(); setSplitRatio(v => Math.min(0.9, v + step)) }
-              else if (event.key === 'Home') { event.preventDefault(); setSplitRatio(0.6) }
-            }}
-          >
-            <span className="wcb-splitter-grip" aria-hidden="true" />
-          </div>
-          {/* 上下文预算（环形图 + 统计卡片 / 分目录用量柱状图） */}
-          <section className="wcb-card wcb-budget-card" style={{ flex: (1 - splitRatio) + ' 1 0' }}>
-            <div className="wcb-card-head">
-              {tt('budgetTitle')}
-              <div className="wcb-head-actions">
-                <span className="wcb-label" style={{ margin: 0 }}>{tt('budgetLimit')}</span>
-                <input
-                  className="wcb-budget-input"
-                  type="number"
-                  min={1}
-                  value={budget}
-                  aria-label={tt('budgetLimit')}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => state.setTokenBudget(Number(event.currentTarget.value))}
-                />
-                <button type="button" className="wcb-linkbtn" aria-label={tt('monitorRefresh')} onClick={state.refreshContextStats}>{'↻ ' + tt('monitorRefresh')}</button>
-              </div>
-            </div>
-            {state.contextStats === null ? (
-              <div className="wcb-card-body"><div className="wcb-hint">{tt('monitorLoading')}</div></div>
-            ) : (
-              <div className="wcb-budget-split">
-                {/* 左：环形图 + 总览 + 2x2统计卡片 */}
-                <div className="wcb-budget-left">
-                  <div className="wcb-budget-overview">
-                    <Donut percentage={ratio} size={44} strokeWidth={4} color={ratio > 1 ? '#f85149' : ratio > 0.8 ? '#d4a017' : '#4f8cff'} />
-                    <div className="wcb-budget-figures">
-                      <span className="wcb-budget-total">{kmTokens(total)}</span>
-                      <span className="wcb-budget-of">/ {kmTokens(budget)} token</span>
-                      {ratio <= 1 ? <span className="wcb-budget-remain">{tt('budgetRemain', { remain: kmTokens(Math.max(0, budget - total)) })}</span> : null}
-                    </div>
-                  </div>
-                  {ratio > 1 ? <div className="wcb-alert wcb-alert-over">{tt('budgetOver')}</div> : ratio > 0.8 ? <div className="wcb-alert">{tt('budgetWarn')}</div> : null}
-                  <div className="wcb-stat-grid">
-                    <div className="wcb-stat-card">
-                      <div className="wcb-stat-label">{tt('statFiles')}</div>
-                      <div className="wcb-stat-value">{state.contextStats.totalFiles}</div>
-                    </div>
-                    <div className="wcb-stat-card">
-                      <div className="wcb-stat-label">{tt('statDirs')}</div>
-                      <div className="wcb-stat-value">{state.contextStats.totalDirs}</div>
-                    </div>
-                    <div className="wcb-stat-card">
-                      <div className="wcb-stat-label">{tt('statIndex')}</div>
-                      <div className="wcb-stat-value-sm">{kmTokens(state.contextStats.fileIndexTokens)}</div>
-                    </div>
-                    <div className="wcb-stat-card">
-                      <div className="wcb-stat-label">{tt('statOverhead')}</div>
-                      <div className="wcb-stat-value-sm">{kmTokens(state.contextStats.promptOverheadTokens)}</div>
-                    </div>
-                  </div>
-                </div>
-                {/* 右：分目录用量柱状图 */}
-                <div className="wcb-budget-right">
-                  <div className="wcb-dir-usage-title">{tt('dirUsageTitle')}</div>
-                  {activeDirs.length === 0 ? <div className="wcb-hint">{tt('monitorLoading')}</div> : null}
-                  {activeDirs.length > 0 ? (
-                    <div className="wcb-bars" role="list" aria-label={tt('dirUsageTitle')}>
-                      {activeDirs.map(d => {
-                        const idx = state.dirs.findIndex(x => x.path === d.path)
-                        const ref = state.dirs.find(x => x.path === d.path)
-                        const color = dirColor(idx, ref?.group, ref?.projectType)
-                        const pct = maxDirTokens > 0 ? d.tokens / maxDirTokens : 0
-                        const w = d.tokens > 0 ? Math.max(3, Math.round(pct * 100)) : 1
-                        return (
-                          <div className="wcb-bar-row" role="listitem" key={d.path} title={d.name + ' · ' + d.tokens.toLocaleString() + ' ' + tt('monitorTokens')}>
-                            <span className="wcb-bar-name">{d.name}</span>
-                            <div className="wcb-bar-track-h">
-                              <div className="wcb-bar-fill-h" style={{ width: w + '%', background: color }} />
-                            </div>
-                            <span className="wcb-bar-val">{kmTokens(d.tokens)}</span>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            )}
-            <div className="wcb-hint" style={{ padding: '6px 12px 9px', borderTop: '1px solid var(--wcb-line)' }}>{tt('warning')}</div>
-          </section>
 
           {/* 功能/接口索引：端点 ↔ 服务端 ↔ 前端（点击复制 @功能名） */}
           <section className="wcb-card wcb-codeindex-card">
@@ -906,6 +676,33 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
       ) : null}
       {deleteTarget !== null ? (
         <DeleteWorkspaceModal ws={deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={() => { state.deleteWorkspace(deleteTarget.id); setDeleteTarget(null) }} />
+      ) : null}
+      {advOpen ? (
+        <AdvancedModal state={state} currentWs={currentWs} onClose={() => setAdvOpen(false)} />
+      ) : null}
+      {state.previewOpen ? (
+        <PreviewModal text={state.previewText} loading={state.previewLoading} onCopy={state.copyPreview} onClose={() => state.setPreviewOpen(false)} />
+      ) : null}
+      {budgetOpen ? (
+        <BudgetModal
+          stats={state.contextStats}
+          budget={state.tokenBudget}
+          dirs={state.dirs}
+          onBudget={state.setTokenBudget}
+          onRefresh={state.refreshContextStats}
+          onClose={() => setBudgetOpen(false)}
+        />
+      ) : null}
+      {standardsOpen ? (
+        <StandardsModal
+          standards={state.workspaceStandards ?? {}}
+          library={state.standardsLibrary}
+          directories={state.dirs}
+          onSaveWorkspace={state.setWorkspaceStandards}
+          onSaveLibrary={state.saveStandardsLibrary}
+          onGenerateDraft={state.generateStandard}
+          onClose={() => setStandardsOpen(false)}
+        />
       ) : null}
     </div>
   )

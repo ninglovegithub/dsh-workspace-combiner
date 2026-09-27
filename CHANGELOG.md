@@ -4,46 +4,128 @@ All notable changes to this project are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+English · [中文](./CHANGELOG.zh.md)
 
-## [0.4.0] - 2026-09-26
+## [0.5.0] - 2026-09-27
 
-### Added — 功能/接口索引与上下文优化
+### Added — preset coding standards
 
-- **功能/接口索引（新）** — 宿主确定性抽取 HTTP 端点，并联结服务端注册处与前端调用处的「文件:行号」；覆盖 TS/JS/TSX/JSX/Vue 与 Java/Kotlin/Go/Python/Ruby/C#；端点归一化（花括号参数 / 美元花括号模板 / 冒号参数视为同一端点），并过滤 value/path/url 等通用属性名避免误联。
-- **索引可配置化** — 工作空间级 codeIndexEnabled / codeIndexBudget / codeIndexSummary；面板新增「功能/接口索引」卡片（开关、预算、摘要模式、筛选、点击复制 @功能名）。
-- **@功能名 展开协议** — prompt 的 @指令新增一条：@功能名 指功能索引里的名字，展开即读取该项列出的服务端/前端文件；该规则仅在实际存在索引时注入。
-- **AI 功能摘要（可选）** — codeIndexSummary=llm 时按功能签名生成一句话摘要；后台异步生成（不阻塞会话创建与首轮）、并发去重、失败静默降级。
-- **落盘持久化** — 功能索引与 AI 摘要分别落盘到 ~/.dsh/dsh-workspace-combiner-code-index.json 与 ~/.dsh/dsh-workspace-combiner-feature-summaries.json（原子写 0600、TTL），跨重启复用，避免重复扫描与重复花 token。
+- **Built-in standards library (7 presets)** — general/team, Java & Spring, Vue 3, React,
+  Python, Go, and an API-contract preset. Each is an original bullet-point digest (no verbatim
+  copy of any copyrighted style guide).
+- **Auto-match by tech stack** — with `autoMatch` on (default), each directory's detected
+  `projectType` pulls in the matching preset (java → Java/Spring, vue → Vue 3, go → Go, …);
+  any match can be unchecked individually.
+- **Per-workspace binding** — `global` presets for the whole workspace plus
+  `perDirectory` presets, a per-workspace token budget and an enable switch.
+- **Editable and restorable** — built-in text can be edited globally or only for the current
+  workspace; "Reset" clears both. Custom standards can be created (global or workspace-scoped),
+  edited, deleted, and copied out for sharing.
+- **Injected as its own prompt block** — `# Coding standards (scoped, mandatory)` sits
+  between the directory list and the file index, grouped by scope (for example
+  `Java / Spring (applies to: example-backend)`), with its own token budget (default 800)
+  and a truncation notice.
+- **Panel entry** — a "Coding standards" card in the left column opens a two-pane modal
+  (library + editor) with per-item and total token estimates.
 
-### Changed — 上下文与 token 优化
+### Added — optional AI drafting
 
-- 摘要计数改为**递归真实总数**（此前只数顶层，体量失真）。
-- 文件索引预算改为**按目录配额 + 余量回填**，避免大目录挤掉后续代码项目。
-- **低信号优先截断** — 测试 / 夹具 / 快照 / 锁文件 / 生成物排最后。
-- tokenBudget **真正生效**（此前仅展示）。
-- 同会话 **渲染结果缓存**，不再每个模型步重拼。
-- 默认忽略目录新增 .pnpm-store / .next / .nuxt / .turbo / .venv / __pycache__ / .gradle。
+- **"Generate with AI"** in the standards modal drafts a 12–18 bullet standard for the
+  selected name/tech stack using the host's default model, then drops it into the editor for
+  review. Nothing is generated automatically, and no token is spent unless you click.
+- **Shared LLM helper** (`host/llmText.ts`) now backs both the feature summaries and the
+  standards draft.
+- LLM stream failures — which arrive as a terminal `finish` chunk, not an exception — are
+  now detected and surfaced as a readable reason in the UI toast.
 
-### Changed — 性能
+### Changed — panel layout
 
-- 建会话按目录**并行扫描**；文件树同级目录**有界并发**下钻。
-- 新增轻量 **/stat** 路由，目录失效检测不再构建整棵文件树。
-- **loadModeMaxDepth()** 统一深度映射；**/file-index** 接收 loadMode，预览与注入深度一致并复用缓存。
-- FileIndexCache 增加 30s TTL 兜底。
+- **Advanced config**, **injected-prompt preview**, and **context budget** each became a
+  click-to-open modal (Esc / scrim to close) instead of an inline expanding card; the left
+  column is now a stack of compact entry cards.
+- **The context budget moved out of the right column** into a left-column "More" entry. The
+  resizable splitter that divided "project directories : context budget" was removed, and the
+  directory card now uses the full column height.
+- Budget compacted further: single-line header, one-line overview, label+value on one line per
+  stat card, donut at 44; per-directory usage is a horizontal, scrollable bar list; a
+  "Standards" figure was added to the stats.
 
-### Changed — 面板 UI
+### Added — Chinese documentation
 
-- 上下文预算卡压缩：卡片头单行、总览一行、统计卡「标题 + 数值」同一行、环形图缩小到 44。
-- 逐目录用量由**竖向柱状图**改为**横向可滚动条形图**。
-- 功能索引卡固定高度内滚动；预算卡滚动改用显式类名（修正原 :last-child 失效）。
+- `README.zh.md` (a full Chinese README, cross-linked with the English one) and this
+  `CHANGELOG.zh.md`; the npm tarball now ships `README.zh.md`.
 
 ### Fixed
 
-- 功能索引 summary 模式漏标截断、注释 / 正则源码被误当端点、@功能名 规则在无索引时悬空。
+- Feature-index `summary` mode did not mark truncation; comment/regex source lines could be
+  mistaken for endpoints; the §B@@feature` rule was injected even when no index existed.
+- `ContextStats.standardsTokens` added so the monitor total matches what is actually injected.
+
+## [0.4.0] - 2026-09-26
+
+### Added — feature/API index and context tuning
+
+- **Feature/API index (new).** The host deterministically extracts HTTP endpoints and links the
+  server registration site to the client call site as `file:line`; covers
+  TS/JS/TSX/JSX/Vue plus Java/Kotlin/Go/Python/Ruby/C#. Endpoints are normalized
+  (`{id}` / `$${id}` / `:id` collapse to one placeholder) and generic property names such as
+  value/path/url are filtered out to avoid false joins.
+- **Configurable index.** Per-workspace `codeIndexEnabled` / `codeIndexBudget` /
+  `codeIndexSummary`, plus a panel card with toggle, budget, summary mode, filter and
+  click-to-copy §B@@feature`.
+- **§B@@feature` expansion protocol.** The §B@@`-command prompt section gained a rule mapping a
+  feature name from the index to the server/client files it lists; the rule is injected only
+  when an index actually exists.
+- **Optional AI feature summaries.** With `codeIndexSummary=llm`, one summary line per feature
+  is generated by signature, in the background (never blocking session creation or the first
+  turn), de-duplicated, and silently degraded on failure.
+- **Disk persistence.** The index and the summaries persist to
+  `~/.dsh/dsh-workspace-combiner-code-index.json` and
+  `~/.dsh/dsh-workspace-combiner-feature-summaries.json` (atomic write, 0600, TTL), so
+  restarts reuse them instead of rescanning and re-spending tokens.
+
+### Changed — context and token economy
+
+- Summary counts are now **recursive totals** (previously top-level only, which understated the
+  real size).
+- The file-index budget is now a **per-directory quota with leftover backfill**, so one huge
+  directory can no longer starve the code projects that follow it.
+- **Low-signal-first truncation** — tests, fixtures, snapshots, lock files and generated
+  artifacts are dropped first.
+- `tokenBudget` now actually takes effect (it was display-only before).
+- The prompt section reuses a **per-session rendered string** instead of rebuilding it on every
+  model step.
+- Default ignores extended with .pnpm-store / .next / .nuxt / .turbo / .venv / __pycache__ /
+  .gradle.
+
+### Changed — performance
+
+- Session creation scans directories **in parallel**; the tree walk descends sibling directories
+  with bounded concurrency.
+- A lightweight **`/stat`** route replaced full-tree builds for missing-directory detection.
+- **`loadModeMaxDepth()`** is the single source of truth for summary/tree/full → 1/3/4, and
+  **`/file-index`** accepts `loadMode` so the preview matches the injection depth and shares the
+  same cache.
+- `FileIndexCache` gained a 30s TTL backstop.
+
+### Changed — panel UI
+
+- Compact context budget card: single-line header, one-line overview, label+value on one line
+  per stat card, donut reduced to 44.
+- Per-directory usage switched from a **column chart** to a **horizontal scrollable bar list**.
+- The feature-index card scrolls inside a fixed height; the budget card's scroll rule moved to
+  an explicit class (fixing a broken `:last-child` selector).
+
+### Fixed
+
+- Feature-index summary mode failed to mark truncation; comment/regex source lines were mistaken
+  for endpoints; the §B@@feature` rule dangled when no index existed.
 
 ### Docs
 
-- 新增中文 README（README.zh.md），并与英文版互相链接。
+- Added `README.zh.md` (a Chinese README), cross-linked with the English one.
+
+
 
 ## [0.3.0] - 2026-09-26
 

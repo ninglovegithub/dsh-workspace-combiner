@@ -12,7 +12,8 @@ import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { emptyStore, type LoadMode, type StoreShape, type Workspace, type WorkspaceMode, type WorkspaceRef, type WorkspaceSnapshot } from './core/types.ts'
+import { emptyStore, type CustomStandard, type LoadMode, type StoreShape, type Workspace, type WorkspaceMode, type WorkspaceRef, type WorkspaceSnapshot, type WorkspaceStandards } from './core/types.ts'
+import { parseCustomStandard } from './core/standards.ts'
 import { parseWorkspaceRef } from './core/validate.ts'
 import { STORE_FILE } from './invariant.ts'
 
@@ -53,6 +54,40 @@ function parseSnapshot(raw: unknown): WorkspaceSnapshot | undefined {
   return { id: s.id, name: s.name, directories: dirs, createdAt: typeof s.createdAt === 'number' ? s.createdAt : Date.now() }
 }
 
+/** 校验并规范化工作空间级的规范绑定。 */
+function parseStandards(raw: unknown): WorkspaceStandards | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const record = raw as Record<string, unknown>
+  const asIds = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item !== '') : []
+  const global = asIds(record.global)
+  const perDirectory: Record<string, string[]> = {}
+  if (record.perDirectory !== null && typeof record.perDirectory === 'object' && !Array.isArray(record.perDirectory)) {
+    for (const [key, value] of Object.entries(record.perDirectory as Record<string, unknown>)) {
+      const ids = asIds(value)
+      if (ids.length > 0) perDirectory[key] = ids
+    }
+  }
+  const workspaceOverrides: Record<string, string> = {}
+  if (record.workspaceOverrides !== null && typeof record.workspaceOverrides === 'object' && !Array.isArray(record.workspaceOverrides)) {
+    for (const [key, value] of Object.entries(record.workspaceOverrides as Record<string, unknown>)) {
+      if (typeof value === 'string' && value.trim() !== '') workspaceOverrides[key] = value
+    }
+  }
+  const workspaceCustom = Array.isArray(record.workspaceCustom)
+    ? record.workspaceCustom.map(parseCustomStandard).filter((item): item is CustomStandard => item !== undefined)
+    : []
+  const result: WorkspaceStandards = {
+    ...(global.length > 0 ? { global } : {}),
+    ...(Object.keys(perDirectory).length > 0 ? { perDirectory } : {}),
+    ...(workspaceCustom.length > 0 ? { workspaceCustom } : {}),
+    ...(Object.keys(workspaceOverrides).length > 0 ? { workspaceOverrides } : {}),
+    ...(typeof record.budget === 'number' && Number.isFinite(record.budget) && record.budget > 0 ? { budget: Math.round(record.budget) } : {}),
+    ...(typeof record.autoMatch === 'boolean' ? { autoMatch: record.autoMatch } : {}),
+  }
+  return Object.keys(result).length > 0 ? result : undefined
+}
+
 /** 校验并规范化一个 Workspace。 */
 function parseWorkspace(raw: unknown): Workspace | undefined {
   if (raw === null || typeof raw !== 'object') return undefined
@@ -78,6 +113,7 @@ function parseWorkspace(raw: unknown): Workspace | undefined {
     ...(typeof ws.codeIndexEnabled === 'boolean' ? { codeIndexEnabled: ws.codeIndexEnabled } : {}),
     ...(typeof ws.codeIndexBudget === 'number' && Number.isFinite(ws.codeIndexBudget) && ws.codeIndexBudget > 0 ? { codeIndexBudget: Math.round(ws.codeIndexBudget) } : {}),
     ...(ws.codeIndexSummary === 'off' || ws.codeIndexSummary === 'llm' ? { codeIndexSummary: ws.codeIndexSummary } : {}),
+    ...(parseStandards(ws.standards) !== undefined ? { standards: parseStandards(ws.standards) as WorkspaceStandards } : {}),
   }
 }
 
@@ -201,6 +237,21 @@ export class WorkspaceCombinerStore {
       this.shape = {
         ...this.shape,
         workspaces: this.shape.workspaces.map(w => w.id === id ? { ...w, mode, updatedAt: Date.now() } : w),
+      }
+    })
+  }
+
+  /** 覆盖某工作空间的开发规范绑定。 */
+  async setWorkspaceStandards(id: string, standards: WorkspaceStandards): Promise<void> {
+    await this.ready
+    await this.mutate(() => {
+      if (!this.shape.workspaces.some(w => w.id === id)) return
+      const parsed = parseStandards(standards)
+      this.shape = {
+        ...this.shape,
+        workspaces: this.shape.workspaces.map(w => w.id === id
+          ? { ...w, ...(parsed === undefined ? { standards: undefined } : { standards: parsed }), updatedAt: Date.now() }
+          : w),
       }
     })
   }

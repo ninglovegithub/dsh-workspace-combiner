@@ -5,9 +5,10 @@
 
 import { loadModeMaxDepth, type CodeIndexEntry, type ContextStats, type DirectoryContextStat, type LoadMode, type WorkspaceMode, type WorkspaceRef } from '../core/types.ts'
 import { estimateTokens, type FileIndexEntry } from '../core/fileTree.ts'
+import type { StandardGroup } from '../core/standards.ts'
 import type { FileIndexCache } from './fileIndex.ts'
 import type { CodeIndexCache } from './codeIndex.ts'
-import { renderFileIndex, renderMultiWorkspacePrompt } from '../prompt.ts'
+import { renderFileIndex, renderMultiWorkspacePrompt, renderStandards } from '../prompt.ts'
 
 /** 功能索引在统计中的配置（与宿主注入保持一致）。 */
 export interface CodeIndexStatsConfig {
@@ -17,19 +18,37 @@ export interface CodeIndexStatsConfig {
   summaries?: Map<string, string>
 }
 
+/** 计算上下文统计所需的全部输入。 */
+export interface ContextStatsInput {
+  directories: readonly WorkspaceRef[]
+  mode: WorkspaceMode
+  loadMode: LoadMode
+  fileIndexCache: FileIndexCache
+  /** 与注入 prompt 使用同一预算，保证统计值与实际注入一致。 */
+  tokenBudget?: number
+  codeIndexCache?: CodeIndexCache
+  codeConfig?: CodeIndexStatsConfig
+  /** 生效的开发规范分组。 */
+  standardGroups?: readonly StandardGroup[]
+  standardsBudget?: number
+}
+
 /**
  * 计算当前工作区的上下文统计（文件树走 mtime 缓存）。
- * @param tokenBudget - 与注入 prompt 使用同一预算，保证统计值与实际注入一致。
+ * @param input - 工作空间目录、加载模式、各区块缓存与预算。
  */
-export async function computeContextStats(
-  directories: readonly WorkspaceRef[],
-  mode: WorkspaceMode,
-  loadMode: LoadMode,
-  fileIndexCache: FileIndexCache,
-  tokenBudget = 0,
-  codeIndexCache?: CodeIndexCache,
-  codeConfig?: CodeIndexStatsConfig,
-): Promise<ContextStats> {
+export async function computeContextStats(input: ContextStatsInput): Promise<ContextStats> {
+  const {
+    directories,
+    mode,
+    loadMode,
+    fileIndexCache,
+    tokenBudget = 0,
+    codeIndexCache,
+    codeConfig,
+    standardGroups = [],
+    standardsBudget = 0,
+  } = input
   // 各目录并行统计（顺序由 Promise.all 保持）；计数走递归 countTree，只有 tree/full 才建树。
   const stats = await Promise.all(directories
     .filter(dir => (dir.access ?? 'readwrite') !== 'disabled')
@@ -59,6 +78,15 @@ export async function computeContextStats(
       codeEntries.push(summaries !== undefined && summaries.has(entry.feature) ? { ...entry, summary: summaries.get(entry.feature) } : entry)
     }
   }
-  const promptOverheadTokens = estimateTokens(renderMultiWorkspacePrompt(directories, mode, loadMode, [], 0, codeEntries, codeConfig?.budget))
-  return { loadMode, directories: stats, totalFiles, totalDirs, fileIndexTokens, promptOverheadTokens }
+  const standardsTokens = estimateTokens(renderStandards(standardGroups, standardsBudget))
+  const promptOverheadTokens = estimateTokens(renderMultiWorkspacePrompt({
+    workspaces: directories,
+    mode,
+    loadMode,
+    entries: [],
+    tokenBudget: 0,
+    codeEntries,
+    ...(codeConfig?.budget === undefined ? {} : { codeIndexBudget: codeConfig.budget }),
+  }))
+  return { loadMode, directories: stats, totalFiles, totalDirs, fileIndexTokens, promptOverheadTokens, standardsTokens }
 }
