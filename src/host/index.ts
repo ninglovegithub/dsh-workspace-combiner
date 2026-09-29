@@ -31,7 +31,7 @@ import { WorkspaceCombinerStore } from '../store.ts'
 import { FileIndexCache } from './fileIndex.ts'
 import type { FileIndexEntry } from '../core/fileTree.ts'
 import { loadModeMaxDepth, type CodeIndexEntry, type LoadMode, type WorkspaceMode, type WorkspaceRef } from '../core/types.ts'
-import { CodeIndexCache } from './codeIndex.ts'
+import { CodeIndexCache, codeIndexTextFile } from './codeIndex.ts'
 import { FeatureSummaryCache, codeIndexSignature, summarizeFeatures } from './codeIndexSummary.ts'
 import { StandardsLibraryStore } from './standardsLibrary.ts'
 import { TokenUsageTracker, type TrackedEvent, type TrackedSession } from './tokenUsage.ts'
@@ -116,6 +116,8 @@ export function apply(ctx: Context, config: Config = {}): void {
           tokenBudget: selected.tokenBudget,
           codeEntries: selected.codeEntries,
           codeIndexBudget: selected.codeIndexBudget,
+          // 预算 <=0 = 不常驻：改给一条按需查询线索（索引空说明功能索引未启用，则不给）。
+          ...(selected.codeIndexBudget <= 0 && selected.codeEntries.length > 0 ? { codeIndexPath: codeIndexTextFile() } : {}),
           standardGroups: selected.standardGroups,
           standardsBudget: selected.standardsBudget,
         })

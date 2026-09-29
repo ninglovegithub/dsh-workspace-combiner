@@ -13,6 +13,7 @@
 import { chmod, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, sep } from 'node:path'
 import { isIgnored, loadGitignore } from './fileIndex.ts'
+import { renderCodeIndexText } from '../prompt.ts'
 import { dshHome } from '../store.ts'
 import type { CodeIndexEntry, CodeIndexLoc, EndpointImpact, WorkspaceRef } from '../core/types.ts'
 
@@ -356,6 +357,14 @@ export function codeIndexFile(): string {
   return join(dshHome(), 'dsh-workspace-combiner-code-index.json')
 }
 
+/**
+ * 功能索引的按需查询文件：每行一条端点，便于 grep。
+ * 缓存 JSON 是单行且字符串被转义，grep 它只会吐出整行，所以另存一份纯文本。
+ */
+export function codeIndexTextFile(): string {
+  return join(dshHome(), 'dsh-workspace-combiner-code-index.txt')
+}
+
 /** 落盘形状。 */
 interface PersistedCodeIndex {
   signature: string
@@ -456,6 +465,10 @@ export class CodeIndexCache {
       await writeFile(tmp, JSON.stringify(payload), { mode: 0o600 })
       await rename(tmp, this.file)
       await chmod(this.file, 0o600).catch(() => {})
+      // 按需查询文件：不常驻上下文，只在需要定位端点时 grep。
+      const textTmp = tmp + '.txt'
+      await writeFile(textTmp, renderCodeIndexText(payload.entries), { mode: 0o600 })
+      await rename(textTmp, codeIndexTextFile())
     } catch {
       // 落盘失败不影响内存索引；下次照常重建。
     }

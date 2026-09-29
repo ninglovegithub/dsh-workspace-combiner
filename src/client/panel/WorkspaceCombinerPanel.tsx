@@ -631,7 +631,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                   {tt('codeIndexToggle')}
                 </label>
                 <span className="wcb-label" style={{ margin: 0 }}>{tt('codeIndexBudget')}</span>
-                <input className="wcb-budget-input" type="number" min={1} value={state.codeIndexBudget} disabled={!state.codeIndexEnabled} aria-label={tt('codeIndexBudget')} onChange={(event: ChangeEvent<HTMLInputElement>) => state.setCodeIndexBudget(Number(event.currentTarget.value))} />
+                <input className="wcb-budget-input" type="number" min={0} title={tt('codeIndexBudgetHint')} value={state.codeIndexBudget} disabled={!state.codeIndexEnabled} aria-label={tt('codeIndexBudgetHint')} onChange={(event: ChangeEvent<HTMLInputElement>) => state.setCodeIndexBudget(Number(event.currentTarget.value))} />
                 <span className="wcb-label" style={{ margin: 0 }}>{tt('codeIndexSummaryLabel')}</span>
                 <select className="wcb-input" style={{ width: 'auto' }} value={state.codeIndexSummary} disabled={!state.codeIndexEnabled} aria-label={tt('codeIndexSummaryLabel')} onChange={(event: ChangeEvent<HTMLSelectElement>) => state.setCodeIndexSummary(event.currentTarget.value === 'llm' ? 'llm' : 'off')}>
                   <option value="off">{tt('codeIndexSummaryOff')}</option>

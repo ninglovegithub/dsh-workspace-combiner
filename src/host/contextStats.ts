@@ -7,7 +7,7 @@ import { loadModeMaxDepth, type CodeIndexEntry, type ContextStats, type Director
 import { estimateTokens, type FileIndexEntry } from '../core/fileTree.ts'
 import type { StandardGroup } from '../core/standards.ts'
 import type { FileIndexCache } from './fileIndex.ts'
-import type { CodeIndexCache } from './codeIndex.ts'
+import { codeIndexTextFile, type CodeIndexCache } from './codeIndex.ts'
 import { renderCodeIndex, renderCommands, renderFileIndex, renderMultiWorkspacePrompt, renderStandards } from '../prompt.ts'
 import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_COMMANDS_BUDGET } from '../invariant.ts'
 
@@ -104,6 +104,7 @@ export async function computeContextStats(input: ContextStatsInput): Promise<Con
     tokenBudget,
     codeEntries,
     codeIndexBudget,
+    ...(codeIndexBudget <= 0 && codeEntries.length > 0 ? { codeIndexPath: codeIndexTextFile() } : {}),
     standardGroups,
     standardsBudget,
     commandsBudget: commandsBudgetResolved,

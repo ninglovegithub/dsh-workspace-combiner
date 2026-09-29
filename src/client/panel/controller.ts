@@ -569,7 +569,7 @@ export function useWorkspaceCombiner(
   }, [showToast])
   const setCodeIndexEnabled = useCallback((enabled: boolean): void => { patchCodeIndex({ codeIndexEnabled: enabled }) }, [patchCodeIndex])
   const setCodeIndexBudget = useCallback((value: number): void => {
-    patchCodeIndex({ codeIndexBudget: Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_CODE_INDEX_BUDGET })
+    patchCodeIndex({ codeIndexBudget: Number.isFinite(value) && value >= 0 ? Math.round(value) : DEFAULT_CODE_INDEX_BUDGET })
   }, [patchCodeIndex])
   const setCodeIndexSummary = useCallback((mode: 'off' | 'llm'): void => { patchCodeIndex({ codeIndexSummary: mode }) }, [patchCodeIndex])
 

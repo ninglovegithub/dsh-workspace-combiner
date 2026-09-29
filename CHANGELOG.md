@@ -29,6 +29,16 @@ English · [中文](./CHANGELOG.zh.md)
 - Entries that have both sides sort first: the previous alphabetical cut kept only 7 of 353
   matched pairs at a 120 entry cap, while all 353 fit under 600.
 
+### Changed — the feature/endpoint index can be loaded on demand
+
+- A code index budget of `0` used to mean "no limit", so a hand-edited config could inject the whole
+  index (about 29k tokens on a multi-module workspace). `0` now means "do not inject the block at
+  all"; the budget field accepts it and the panel list keeps working either way.
+- The index is also persisted next to its cache as a grep friendly text file (one endpoint per line,
+  `@功能名 → endpoint | 服务端 file:line | 前端 file:line`). When the block is not injected the prompt
+  carries a single line pointing at that file, so an endpoint is looked up only when one is needed:
+  942 → 579 prompt tokens on this workspace.
+
 ## [0.6.0] - 2026-09-27
 
 ### Added — real token usage (provider-reported)

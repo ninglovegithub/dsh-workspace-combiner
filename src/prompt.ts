@@ -12,29 +12,47 @@ import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_COMMANDS_BUDGET, DEFAULT_STANDARDS_B
 export const CODE_INDEX_TOKEN_BUDGET = DEFAULT_CODE_INDEX_BUDGET
 
 /**
+ * 单条索引条目的文本行：常驻区块与按需查询文件共用同一格式。
+ * @param entry - 索引条目。
+ * @returns 形如 '- @功能名 → 端点 | 服务端 文件:行 | 前端 文件:行' 的一行。
+ */
+export function renderCodeIndexLine(entry: CodeIndexEntry): string {
+  const parts = ['@' + entry.feature + ' → ' + entry.endpoint]
+  if (entry.summary !== undefined && entry.summary !== '') parts.push(entry.summary)
+  if (entry.server !== undefined) parts.push('服务端 ' + entry.server.file + ':' + entry.server.line)
+  if (entry.client !== undefined) parts.push('前端 ' + entry.client.file + ':' + entry.client.line)
+  return '- ' + parts.join(' | ')
+}
+
+/**
  * 渲染功能/接口索引区块（自动抽取，供快速定位前后端落点）。
- * @param tokenBudget - >0 时限制该区块的 token 上限（0/缺省 = 不限制）。
+ * @param tokenBudget - >0 时限制该区块的 token 上限；<=0 表示完全不注入（改为按需查索引文件）。
  */
 export function renderCodeIndex(entries: readonly CodeIndexEntry[], tokenBudget = CODE_INDEX_TOKEN_BUDGET): string {
-  if (entries.length === 0) return ''
+  if (entries.length === 0 || tokenBudget <= 0) return ''
   const header = '# 功能/接口索引（自动抽取，用于定位；以实际代码为准）'
   const lines: string[] = [header]
-  const budget = tokenBudget > 0 ? tokenBudget : Number.POSITIVE_INFINITY
   let used = estimateTokens(header)
   let truncated = false
   for (const entry of entries) {
-    const parts = ['@' + entry.feature + ' → ' + entry.endpoint]
-    if (entry.summary !== undefined && entry.summary !== '') parts.push(entry.summary)
-    if (entry.server !== undefined) parts.push('服务端 ' + entry.server.file + ':' + entry.server.line)
-    if (entry.client !== undefined) parts.push('前端 ' + entry.client.file + ':' + entry.client.line)
-    const line = '- ' + parts.join(' | ')
+    const line = renderCodeIndexLine(entry)
     const cost = estimateTokens(line) + 1
-    if (used + cost > budget) { truncated = true; break }
+    if (used + cost > tokenBudget) { truncated = true; break }
     lines.push(line)
     used += cost
   }
   if (truncated) lines.push('…（功能索引已达上限，可直接 @ 相关文件）')
   return lines.join('\n')
+}
+
+/**
+ * 按需查询文件的内容：每行一条端点，grep 关键词即可命中（缓存 JSON 是单行且转义过，grep 无用）。
+ * 不受 token 预算限制——它不常驻上下文，只在需要定位端点时读。
+ * @param entries - 索引条目（已按配对优先排序）。
+ * @returns 可 grep 的纯文本。
+ */
+export function renderCodeIndexText(entries: readonly CodeIndexEntry[]): string {
+  return ['# 功能/接口索引（按需查询：每行一条，grep 关键词即可）', ...entries.map(renderCodeIndexLine), ''].join('\n')
 }
 
 /** 目录被配额截断时的块内标注。 */
@@ -177,6 +195,8 @@ export interface MultiWorkspacePromptInput {
   tokenBudget?: number
   codeEntries?: readonly CodeIndexEntry[]
   codeIndexBudget?: number
+  /** 按需查询文件路径：功能索引不常驻上下文时，给模型一条「需要时去查」的线索。 */
+  codeIndexPath?: string
   /** 生效的开发规范分组（按作用域）。 */
   standardGroups?: readonly StandardGroup[]
   standardsBudget?: number
@@ -199,6 +219,7 @@ export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): st
     tokenBudget = 0,
     codeEntries = [],
     codeIndexBudget = CODE_INDEX_TOKEN_BUDGET,
+    codeIndexPath,
     standardGroups = [],
     standardsBudget = DEFAULT_STANDARDS_BUDGET,
     commandsBudget = DEFAULT_COMMANDS_BUDGET,
@@ -224,6 +245,12 @@ export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): st
   const fileIndex = renderFileIndex(entries, loadMode, tokenBudget)
   const codeIndex = renderCodeIndex(codeEntries, codeIndexBudget)
   const commands = renderCommands(active, commandsBudget)
+  // 常驻时用「@功能名」定位；改为按需（预算 <=0）时给一条查询线索，否则模型不知道有这份索引。
+  const codeIndexUsage = codeIndex !== ''
+    ? '- @功能名（如 @workspaceCreate）：指上方「功能/接口索引」里的名字，展开即读取该项列出的服务端/前端文件，用于快速定位。'
+    : codeIndexPath !== undefined && codeIndexPath !== ''
+      ? '- 功能/接口索引（端点 ↔ 前后端落点）未常驻上下文：需要定位端点时先 grep ' + codeIndexPath + '（每行一条：@功能名 → 端点 | 服务端 文件:行 | 前端 文件:行），不必为此通读仓库。'
+      : ''
   return [
     '# 多工作区联合开发模式生效',
     `当前会话加载【${active.length}】个项目目录：`,
@@ -238,7 +265,7 @@ export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): st
     '- @结尾带 / 的是目录：需要其内容时列出其目录树（ls / read）。',
     '- 其它是文件：需要其内容时先用 read 读取，禁止未读就声称已检查。',
     '- 含空格的路径用 @"路径 with spaces" 包裹。',
-    ...(codeIndex !== '' ? ['- @功能名（如 @workspaceCreate）：指上方「功能/接口索引」里的名字，展开即读取该项列出的服务端/前端文件，用于快速定位。'] : []),
+    ...(codeIndexUsage !== '' ? [codeIndexUsage] : []),
     '- 被 @ 引用的文件/目录应优先纳入本次处理范围；不在上方文件索引里的路径同样可直接 read（沙盒读不受限）。',
     '',
     '开发强制规则：',
