@@ -26,8 +26,12 @@ English · [中文](./CHANGELOG.zh.md)
   endpoints instead of spending the budget on whatever the walk happened to reach first.
 - `venv`, `site-packages` and Maven `target` are ignored, which removes bogus endpoints extracted
   from installed Python packages.
-- Entries that have both sides sort first: the previous alphabetical cut kept only 7 of 353
-  matched pairs at a 120 entry cap, while all 353 fit under 600.
+- Entries that have both sides sort first, then entries with only a front-end call site, so a
+  truncating cap cannot drop the pairs or the front-end calls; server-only routes fill the rest.
+- The client side is detected per language: backend files matched the crude `.get(` pattern
+  everywhere (`map.get(...)`, `list.get(0)`), so a controller's own internal calls were reported as
+  the front-end landing point of 315 of 353 "paired" entries. Backend files now need a real HTTP
+  client token (`RestTemplate`, `WebClient`, `HttpClient`, `FeignClient`, `requests.get`, `http.Get`, …).
 
 ### Changed — the feature/endpoint index can be loaded on demand
 

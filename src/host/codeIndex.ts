@@ -82,6 +82,10 @@ function joinRoute(prefix: string, path: string): string {
 
 /** 客户端调用线索（含 vue-router 页面路由）。 */
 const CLIENT_HINT = /\b(fetch|axios|request|http|got|ky)\s*\(|\.(get|post|put|patch|delete)\s*\(|url\s*:|createRouter\s*\(|component\s*:/
+/** 后端语言里真正发起 HTTP 调用的线索：Java 的 map.get()/list.get(0) 会让 CLIENT_HINT 到处命中。 */
+const HTTP_CLIENT_HINT = /\b(RestTemplate|WebClient|HttpClient|OkHttpClient|okhttp3|FeignClient|HttpURLConnection|WebRequest|Net::HTTP|requests\.(get|post|put|patch|delete)|httpx\.|urllib\.request|http\.(Get|Post|Put|Delete|NewRequest)\s*\()/
+/** 后端扩展名：这些文件的 client 侧用 HTTP_CLIENT_HINT 判定，其余用 CLIENT_HINT。 */
+const BACKEND_EXT = /\.(java|kt|go|rb|cs|py)$/i
 /** 服务端注册/处理线索（含 Java 注解与 Go/gin 的大写方法）。 */
 const SERVER_HINT = /kind\s*:\s*['"]exact['"]|handler\s*:|@(Get|Post|Put|Patch|Delete|Request)Mapping|(?:router|app|server|mux|bp)\.(?:get|post|put|patch|delete|route)\s*\(|\.(?:GET|POST|PUT|PATCH|DELETE)\s*\(/
 /** 路由/控制器落点路径线索：命中者优先读取，读预算不够时也不会把控制器排出队列。 */
@@ -149,9 +153,11 @@ function touch(map: FileEndpointMap, abs: string, key: string): void {
   else set.add(key)
 }
 
-/** 排序优先级：前后端都配上的条目排最前，其余交给功能名排序。 */
+/** 排序优先级：配对的 > 只有前端调用的 > 只有服务端注册的；同档内交给功能名排序。 */
 function pairingRank(entry: CodeIndexEntry): number {
-  return entry.server !== undefined && entry.client !== undefined ? 0 : 1
+  if (entry.server !== undefined && entry.client !== undefined) return 0
+  // 只有前端落点的排在只有服务端之前：服务端端点数量大得多，截断时前端调用点更值得留在列表里。
+  return entry.client !== undefined ? 1 : 2
 }
 
 /** 路由/控制器文件排前面（0 = 优先），其余次之；与目录顺序无关，保证大仓也能联上落点。 */
@@ -241,7 +247,9 @@ export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<Cod
         content,
         lines: content.split('\n'),
         server: SERVER_HINT.test(content),
-        client: CLIENT_HINT.test(content),
+        // 后端文件里 `.get(` 遍地都是（map.get/list.get），只有真正的 HTTP 客户端才算 client 侧，
+        // 否则「前端落点」会指向 Java 控制器自己。
+        client: BACKEND_EXT.test(abs) ? HTTP_CLIENT_HINT.test(content) : CLIENT_HINT.test(content),
       })
     }
   }
