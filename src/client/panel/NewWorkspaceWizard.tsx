@@ -1,6 +1,6 @@
 /**
  * 新建工作空间三步向导：① 名称 + 主目录保存位置（base 路径）→ ② 选择文件夹自动识别
- * 项目（多选）→ ③ 完成。保存时在 base 路径下创建与名称同名的文件夹作为主目录，
+ * 项目（可多选、可多次选择累加）→ ③ 完成。保存时在 base 路径下创建与名称同名的文件夹作为主目录，
  * 第二步选中的项目作为代码项目加入工作空间。
  * @module dsh-workspace-combiner/client/panel/NewWorkspaceWizard
  */
@@ -30,6 +30,9 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
   const [projects, setProjects] = useState<readonly DetectedProject[]>([])
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const [mode, setMode] = useState<WorkspaceMode>('anchor')
+  // 第二步支持多次添加：跨多次扫描按 root 去重，新识别到的项目自动勾选并追加到列表。
+  const knownRootsRef = useRef<Set<string>>(new Set())
+  const [scanNote, setScanNote] = useState<{ added: number; dup: number } | null>(null)
 
   // Esc 关闭弹窗。
   useEffect(() => {
@@ -48,14 +51,22 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
     const api = apiRef.current
     if (api === null) return
     setScanning(true)
-    setProjects([])
-    setChecked(new Set())
     void api.scan(path)
       .then(list => {
-        setProjects(list)
-        setChecked(new Set(list.map(p => p.root)))
+        // 只追加此前没出现过的项目：重复扫描同一文件夹不会再产生重复条目。
+        const fresh = list.filter(p => !knownRootsRef.current.has(p.root))
+        for (const p of fresh) knownRootsRef.current.add(p.root)
+        if (fresh.length > 0) {
+          setProjects(prev => [...prev, ...fresh])
+          setChecked(prev => {
+            const next = new Set(prev)
+            for (const p of fresh) next.add(p.root)
+            return next
+          })
+        }
+        setScanNote({ added: fresh.length, dup: list.length - fresh.length })
       })
-      .catch(() => {})
+      .catch(() => setScanNote(null))
       .finally(() => setScanning(false))
   }
 
@@ -136,10 +147,18 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
         {step === 2 ? (
           <div className="wcb-wizard-body">
             <div className="wcb-add-row">
-              <button type="button" className="wcb-btn" disabled={scanning} onClick={pickScan}>{tt('wizardPickFolder')}</button>
+              <button type="button" className="wcb-btn" disabled={scanning} onClick={pickScan}>{projects.length > 0 ? tt('wizardPickMore') : tt('wizardPickFolder')}</button>
               <div className="wcb-pathbox">{scanPath === '' ? tt('wizardScanFolderEmpty') : scanPath}</div>
             </div>
+            <div className="wcb-hint">{tt('wizardMultiHint')}</div>
             {scanning ? <div className="wcb-hint">{tt('wizardScanning')}</div> : null}
+            {!scanning && scanNote !== null ? (
+              <div className="wcb-hint">
+                {scanNote.added > 0
+                  ? tt('wizardScanAdded', { n: scanNote.added, total: projects.length })
+                  : scanNote.dup > 0 ? tt('wizardScanDup', { n: scanNote.dup }) : tt('wizardNoProject')}
+              </div>
+            ) : null}
             {!scanning && projects.length > 0 ? (
               <>
                 <div className="wcb-toolbar">
@@ -159,7 +178,6 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
                 </ul>
               </>
             ) : null}
-            {!scanning && projects.length === 0 && scanPath !== '' ? <div className="wcb-hint">{tt('wizardNoProject')}</div> : null}
           </div>
         ) : null}
 

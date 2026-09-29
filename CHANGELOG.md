@@ -8,6 +8,14 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+### Added — the new-workspace wizard accepts projects in several rounds
+
+- Step 2 ("Add projects") no longer replaces the previous scan when you pick another folder:
+  newly detected projects are appended (deduplicated by path) and checked, so one workspace can be
+  assembled from folders that live in different places. Unchecking a row still keeps it out, each
+  scan reports what it added, and the pick button turns into "Add another folder" once the list is
+  non-empty.
+
 ## [0.6.0] - 2026-09-27
 
 ### Added — real token usage (provider-reported)
