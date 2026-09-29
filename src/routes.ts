@@ -84,6 +84,8 @@ export interface TokenUsageDeps {
   tokenUsage: TokenUsageTracker
   /** 某工作空间关联的会话 id 列表（会话 -> 工作空间绑定在 session/created 时确定）。 */
   sessionsOfWorkspace(workspaceId: string): readonly string[]
+  /** 工作空间配置变化后刷新其在跑会话的上下文快照（新增项目立即可用，无需新建会话）。 */
+  refreshSessions(workspaceId: string): void
 }
 
 /**
@@ -275,6 +277,8 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         try {
           await store.setWorkspaceDirectories(id, directories)
           if (id === (await store.getCurrentWorkspaceId())) await syncCurrent()
+          // 增删项目后刷新在跑的会话：下一个模型步就能看到新目录，不必新建会话。
+          usage.refreshSessions(id)
           writeJson(res, 200, { ok: true })
         } catch (error) {
           fail(res, error)
@@ -320,7 +324,8 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         const color = body !== undefined && typeof body.color === 'string' && body.color !== '' ? body.color : undefined
         const tokenBudget = body !== undefined && typeof body.tokenBudget === 'number' && Number.isFinite(body.tokenBudget) && body.tokenBudget > 0 ? body.tokenBudget : undefined
         const codeIndexEnabled = body !== undefined && typeof body.codeIndexEnabled === 'boolean' ? body.codeIndexEnabled : undefined
-        const codeIndexBudget = body !== undefined && typeof body.codeIndexBudget === 'number' && Number.isFinite(body.codeIndexBudget) && body.codeIndexBudget > 0 ? body.codeIndexBudget : undefined
+        // 0 = 不注入上下文（改为按需查索引文件），必须放行；只有非法值才落回 undefined。
+        const codeIndexBudget = body !== undefined && typeof body.codeIndexBudget === 'number' && Number.isFinite(body.codeIndexBudget) && body.codeIndexBudget >= 0 ? body.codeIndexBudget : undefined
         const codeIndexSummary = body !== undefined && (body.codeIndexSummary === 'off' || body.codeIndexSummary === 'llm') ? body.codeIndexSummary : undefined
         try {
           if (mode !== '') await store.setWorkspaceMode(id, mode)
@@ -335,6 +340,8 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
               ...(codeIndexSummary !== undefined ? { codeIndexSummary } : {}),
             })
           }
+          // 模式/加载模式/预算/功能索引都会改变注入内容，同样立刻刷新在跑的会话。
+          usage.refreshSessions(id)
           writeJson(res, 200, { ok: true })
         } catch (error) {
           fail(res, error)
@@ -532,6 +539,8 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         }
         try {
           await store.setWorkspaceStandards(id, standards as never)
+          // 开发规范也是注入内容的一部分，改了同样刷新在跑的会话。
+          usage.refreshSessions(id)
           writeJson(res, 200, { ok: true })
         } catch (error) {
           fail(res, error)

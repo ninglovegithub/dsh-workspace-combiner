@@ -111,7 +111,7 @@ function parseWorkspace(raw: unknown): Workspace | undefined {
     ...(typeof ws.pinned === 'boolean' ? { pinned: ws.pinned } : {}),
     ...(typeof ws.color === 'string' && ws.color !== '' ? { color: ws.color } : {}),
     ...(typeof ws.codeIndexEnabled === 'boolean' ? { codeIndexEnabled: ws.codeIndexEnabled } : {}),
-    ...(typeof ws.codeIndexBudget === 'number' && Number.isFinite(ws.codeIndexBudget) && ws.codeIndexBudget > 0 ? { codeIndexBudget: Math.round(ws.codeIndexBudget) } : {}),
+    ...(typeof ws.codeIndexBudget === 'number' && Number.isFinite(ws.codeIndexBudget) && ws.codeIndexBudget >= 0 ? { codeIndexBudget: Math.round(ws.codeIndexBudget) } : {}),
     ...(ws.codeIndexSummary === 'off' || ws.codeIndexSummary === 'llm' ? { codeIndexSummary: ws.codeIndexSummary } : {}),
     ...(parseStandards(ws.standards) !== undefined ? { standards: parseStandards(ws.standards) as WorkspaceStandards } : {}),
   }
@@ -282,7 +282,8 @@ export class WorkspaceCombinerStore {
               ...(patch.color !== undefined ? { color: patch.color } : {}),
               ...(patch.tokenBudget !== undefined ? { tokenBudget: Math.max(1, Math.round(patch.tokenBudget)) } : {}),
               ...(patch.codeIndexEnabled !== undefined ? { codeIndexEnabled: patch.codeIndexEnabled } : {}),
-              ...(patch.codeIndexBudget !== undefined ? { codeIndexBudget: Math.max(1, Math.round(patch.codeIndexBudget)) } : {}),
+              // 0 = 不注入上下文（按需查索引文件），不是「未设置」，别 clamp 成 1。
+              ...(patch.codeIndexBudget !== undefined ? { codeIndexBudget: Math.max(0, Math.round(patch.codeIndexBudget)) } : {}),
               ...(patch.codeIndexSummary !== undefined ? { codeIndexSummary: patch.codeIndexSummary } : {}),
               updatedAt: Date.now(),
             }

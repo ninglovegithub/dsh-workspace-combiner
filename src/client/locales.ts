@@ -7,7 +7,7 @@
 const zh = {
   "title": "工作区组合器",
   "subtitle": "把多个项目目录组合成一个会话",
-  "warning": "项目只对「新建会话」生效，已打开的会话不会自动刷新",
+  "warning": "项目改动会立即刷新已打开的会话（下一轮请求生效），无需新建会话",
   "workspaces": "工作空间",
   "newWorkspace": "新建工作空间",
   "wsCurrent": "当前",
@@ -275,7 +275,7 @@ const zh = {
 const en: Record<keyof typeof zh, string> = {
   "title": "Workspace Combiner",
   "subtitle": "Combine multiple project directories into one session",
-  "warning": "Projects only apply to NEW sessions; already-open sessions are not refreshed",
+  "warning": "Project changes also refresh already-open sessions (from the next request); a new session is not required",
   "workspaces": "Workspaces",
   "newWorkspace": "New workspace",
   "wsCurrent": "Current",

@@ -30,7 +30,7 @@ import { makeRoutes } from '../routes.ts'
 import { WorkspaceCombinerStore } from '../store.ts'
 import { FileIndexCache } from './fileIndex.ts'
 import type { FileIndexEntry } from '../core/fileTree.ts'
-import { loadModeMaxDepth, type CodeIndexEntry, type LoadMode, type WorkspaceMode, type WorkspaceRef } from '../core/types.ts'
+import { loadModeMaxDepth, type CodeIndexEntry, type LoadMode, type Workspace, type WorkspaceMode, type WorkspaceRef } from '../core/types.ts'
 import { CodeIndexCache, codeIndexTextFile } from './codeIndex.ts'
 import { FeatureSummaryCache, codeIndexSignature, summarizeFeatures } from './codeIndexSummary.ts'
 import { StandardsLibraryStore } from './standardsLibrary.ts'
@@ -127,22 +127,22 @@ export function apply(ctx: Context, config: Config = {}): void {
     }), 'dsh-workspace-combiner: prompt section')
   }
 
-  // 2) 会话生命周期：新建会话时快照勾选，销毁时清理。
-  ctx.on('session/created', (session: SessionLike) => {
-    // 只对顶层新建会话生效：子代理/分支会话带 parentSession，不注入。
-    if (session.header?.parentSession !== undefined) return
+  /**
+   * 把工作空间的当前配置写成某会话的上下文快照：先绑定目录，再异步补文件树与功能索引。
+   * 会话创建与「工作空间改动后刷新在跑会话」共用这一条路径，避免两处行为漂移。
+   * @param sessionId - 目标会话 id。
+   * @param ws - 工作空间记录。
+   */
+  const selectWorkspace = (sessionId: string, ws: Workspace): void => {
+    const loadMode = ws.loadMode ?? 'summary'
+    const mode = ws.mode ?? 'anchor'
+    const directories = ws.directories.map(directory => ({ ...directory }))
+    const tokenBudget = ws.tokenBudget ?? DEFAULT_TOKEN_BUDGET
+    const codeIndexBudget = ws.codeIndexBudget ?? DEFAULT_CODE_INDEX_BUDGET
     // 先绑定目录快照，再异步补充文件树。此前在文件树扫描之后才写入 Map：大型
     // 仓库扫描期间 system prompt 可能已被组装，导致首轮请求完全没有多工作区上下文。
-    void store.getCurrentWorkspace().then(async ws => {
-      if (ws === undefined) return
-      const loadMode = ws.loadMode ?? 'summary'
-      const mode = ws.mode ?? 'anchor'
-      const directories = ws.directories.map(directory => ({ ...directory }))
-      const tokenBudget = ws.tokenBudget ?? DEFAULT_TOKEN_BUDGET
-      const codeIndexBudget = ws.codeIndexBudget ?? DEFAULT_CODE_INDEX_BUDGET
-      selectionBySession.set(session.id, { directories, mode, loadMode, tokenBudget, entries: [], codeEntries: [], codeIndexBudget, standardGroups: [], standardsBudget: ws.standards?.budget ?? DEFAULT_STANDARDS_BUDGET })
-      sessionWorkspaceBySession.set(session.id, ws.id)
-      void store.touchWorkspaceSession(ws.id)
+    selectionBySession.set(sessionId, { directories, mode, loadMode, tokenBudget, entries: [], codeEntries: [], codeIndexBudget, standardGroups: [], standardsBudget: ws.standards?.budget ?? DEFAULT_STANDARDS_BUDGET })
+    void (async () => {
 
       // 各目录并行扫描（顺序由 Promise.all 保持）；summary 只注入递归计数、不建树。
       const entries = await Promise.all(directories
@@ -161,8 +161,8 @@ export function apply(ctx: Context, config: Config = {}): void {
       // 开发规范：按工作空间绑定 + projectType 自动匹配解析出作用域分组。
       const standardGroups = resolveStandardGroups(ws.standards, directories, await standardsLibrary.get())
       // 会话可能在扫描期间已被关闭；不要把过期快照重新放回 Map。
-      if (sessionWorkspaceBySession.get(session.id) === ws.id) {
-        selectionBySession.set(session.id, {
+      if (sessionWorkspaceBySession.get(sessionId) === ws.id) {
+        selectionBySession.set(sessionId, {
           directories, mode, loadMode, tokenBudget, entries, codeEntries, codeIndexBudget,
           standardGroups,
           standardsBudget: ws.standards?.budget ?? DEFAULT_STANDARDS_BUDGET,
@@ -171,17 +171,48 @@ export function apply(ctx: Context, config: Config = {}): void {
       // AI 摘要在后台生成：不阻塞会话创建与首轮；完成后更新快照并失效渲染缓存。
       if (baseCodeEntries.length > 0 && (ws.codeIndexSummary ?? 'off') === 'llm' && cachedSummaries === undefined) {
         void (async () => {
-          const generated = await summaryCache.ensure(signature, () => summarizeFeatures(ctx, session.id, baseCodeEntries))
+          const generated = await summaryCache.ensure(signature, () => summarizeFeatures(ctx, sessionId, baseCodeEntries))
           if (generated.size === 0) return
-          if (sessionWorkspaceBySession.get(session.id) !== ws.id) return
-          const current = selectionBySession.get(session.id)
+          if (sessionWorkspaceBySession.get(sessionId) !== ws.id) return
+          const current = selectionBySession.get(sessionId)
           if (current === undefined || current.codeEntries !== codeEntries) return
-          selectionBySession.set(session.id, { ...current, codeEntries: withSummaries(baseCodeEntries, generated) })
-          renderedBySession.delete(session.id)
+          selectionBySession.set(sessionId, { ...current, codeEntries: withSummaries(baseCodeEntries, generated) })
+          renderedBySession.delete(sessionId)
         })()
       }
+    })()
+  }
+
+  // 3) 会话生命周期：新建会话时快照勾选，销毁时清理。
+  ctx.on('session/created', (session: SessionLike) => {
+    // 只对顶层新建会话生效：子代理/分支会话带 parentSession，不注入。
+    if (session.header?.parentSession !== undefined) return
+    void store.getCurrentWorkspace().then(ws => {
+      if (ws === undefined) return
+      // 绑定必须早于 selectWorkspace：其中的守卫按这个绑定判断快照是否已被接替。
+      sessionWorkspaceBySession.set(session.id, ws.id)
+      void store.touchWorkspaceSession(ws.id)
+      selectWorkspace(session.id, ws)
     })
   }, { global: true })
+
+  /**
+   * 工作空间配置变化（新增项目、改加载模式/预算/规范等）后刷新绑定它的活动会话：
+   * 下一个模型步就用上新目录，不必新建会话（此前这些改动只对新建会话生效）。
+   * @param workspaceId - 发生变化的工作空间 id。
+   */
+  const refreshWorkspaceSessions = (workspaceId: string): void => {
+    const sessionIds = [...sessionWorkspaceBySession].filter(([, id]) => id === workspaceId).map(([sessionId]) => sessionId)
+    if (sessionIds.length === 0) return
+    void store.getWorkspaces().then(workspaces => {
+      const ws = workspaces.find(item => item.id === workspaceId)
+      if (ws === undefined) return
+      for (const sessionId of sessionIds) {
+        // 刷新期间会话可能已关闭或切到别的工作空间：逐个再确认一次绑定。
+        if (sessionWorkspaceBySession.get(sessionId) === workspaceId) selectWorkspace(sessionId, ws)
+      }
+    }).catch(() => {})
+  }
 
   ctx.on('session/disposed', (session: SessionLike) => {
     selectionBySession.delete(session.id)
@@ -203,6 +234,8 @@ export function apply(ctx: Context, config: Config = {}): void {
       // 用量按工作空间聚合：会话 -> 工作空间的绑定在 session/created 时确定。
       sessionsOfWorkspace: (workspaceId: string) =>
         [...sessionWorkspaceBySession].filter(([, id]) => id === workspaceId).map(([sessionId]) => sessionId),
+      // 工作空间改动后立刻刷新在跑的会话（见 refreshWorkspaceSessions）。
+      refreshSessions: refreshWorkspaceSessions,
     }).map(route => ctx.webServer.register(route))
     return () => {
       for (const dispose of disposers) dispose()

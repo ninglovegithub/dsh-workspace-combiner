@@ -43,6 +43,15 @@ English · [中文](./CHANGELOG.zh.md)
   carries a single line pointing at that file, so an endpoint is looked up only when one is needed:
   942 → 579 prompt tokens on this workspace.
 
+### Changed — project changes now reach sessions that are already open
+
+- Adding (or removing) a project directory, or changing the mode, load mode, budgets, code index
+  settings or standards, re-selects every live session bound to that workspace, so the next request
+  already carries the new directory list, file index, endpoint index and standards. A new session is
+  no longer required, and the panel hint no longer claims otherwise.
+- Fixed the on-demand mode being impossible to save: the workspace patch route rejected a code index
+  budget of `0`, the store clamped it up to `1`, and a stored `0` was dropped on load.
+
 ## [0.6.0] - 2026-09-27
 
 ### Added — real token usage (provider-reported)
