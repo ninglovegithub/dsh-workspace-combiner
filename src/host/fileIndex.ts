@@ -25,6 +25,8 @@ export interface FileIndexOptions {
 const DEFAULT_IGNORES = [
   '.git', 'node_modules', 'dist', 'build', 'coverage', '.DS_Store',
   '.pnpm-store', '.next', '.nuxt', '.turbo', '.venv', '__pycache__', '.gradle',
+  // Python 虚拟环境与 Maven 构建产物：不排掉会把预算和索引条目浪费在 site-packages 上。
+  'venv', 'site-packages', 'target',
 ]
 
 /** 需要转义的正则特殊字符。 */

@@ -16,6 +16,19 @@ English · [中文](./CHANGELOG.zh.md)
   scan reports what it added, and the pick button turns into "Add another folder" once the list is
   non-empty.
 
+### Fixed — the feature/endpoint index now matches server-side landing points
+
+- The scan walked at most 8 directory levels, but a standard multi-module Java/Go layout
+  (`<repo>/<module>/src/main/java/com/<org>/<pkg>/controller/…`) puts controllers at level 9, so
+  the whole `controller` tree was pruned: every entry had a front-end call site and none had a
+  server one. Depth is now 16, and the read budget went from 800 files / 8 MB to 5000 / 24 MB.
+- Route/controller files are read first, so a repository that exceeds the budget still links its
+  endpoints instead of spending the budget on whatever the walk happened to reach first.
+- `venv`, `site-packages` and Maven `target` are ignored, which removes bogus endpoints extracted
+  from installed Python packages.
+- Entries that have both sides sort first: the previous alphabetical cut kept only 7 of 353
+  matched pairs at a 120 entry cap, while all 353 fit under 600.
+
 ## [0.6.0] - 2026-09-27
 
 ### Added — real token usage (provider-reported)

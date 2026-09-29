@@ -20,12 +20,19 @@ export type { CodeIndexEntry, CodeIndexLoc, EndpointImpact }
 
 /** 参与扫描的代码扩展名（含常见后端语言，便于跨前后端联结）。 */
 const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.java', '.kt', '.go', '.py', '.rb', '.cs'])
-/** 单次扫描上限，防止大仓库拖慢会话创建。 */
-const MAX_FILES = 800
-const MAX_DEPTH = 8
+/** 真正读取内容的文件数上限（候选收集另有 MAX_CANDIDATES），防止大仓库拖慢会话创建。 */
+const MAX_FILES = 5000
+/**
+ * 目录递归深度：Java/Go 多模块仓的控制器路径 <repo>/<module>/src/main/java/com/<org>/<pkg>/controller/
+ * 本身就有 9 层，8 层会把整棵 controller 目录剪掉，索引里一条服务端落点都匹配不上。
+ */
+const MAX_DEPTH = 16
 const MAX_FILE_BYTES = 256 * 1024
-const MAX_TOTAL_BYTES = 8 * 1024 * 1024
-const MAX_ENTRIES = 120
+const MAX_TOTAL_BYTES = 24 * 1024 * 1024
+/** 候选文件收集上限：只走目录不读内容，先收全再按优先级排序，预算才花在刀刃上。 */
+const MAX_CANDIDATES = 20000
+/** 条目上限：调高后仍不影响 prompt 体积（renderCodeIndex 另有 token 预算截断），但截断会吃掉已经配好前后端落点的条目。 */
+const MAX_ENTRIES = 600
 
 /** 端点字面量：引号内的 /path 形式。 */
 const ENDPOINT_LITERAL = /['"`](\/[A-Za-z0-9._~\-/{}$:]+)['"`]/g
@@ -76,6 +83,9 @@ function joinRoute(prefix: string, path: string): string {
 const CLIENT_HINT = /\b(fetch|axios|request|http|got|ky)\s*\(|\.(get|post|put|patch|delete)\s*\(|url\s*:|createRouter\s*\(|component\s*:/
 /** 服务端注册/处理线索（含 Java 注解与 Go/gin 的大写方法）。 */
 const SERVER_HINT = /kind\s*:\s*['"]exact['"]|handler\s*:|@(Get|Post|Put|Patch|Delete|Request)Mapping|(?:router|app|server|mux|bp)\.(?:get|post|put|patch|delete|route)\s*\(|\.(?:GET|POST|PUT|PATCH|DELETE)\s*\(/
+/** 路由/控制器落点路径线索：命中者优先读取，读预算不够时也不会把控制器排出队列。 */
+const ROUTE_PATH = /(?:^|\/)(?:controllers?|resources?|apis?|routes?|routers?|handlers?|urls?|endpoints?|servlets?)(?:\/|$)/i
+const ROUTE_FILE = /(?:Controller|Resource|Servlet)\.\w+$/i
 /** 通用属性名：不做端点常量名，避免 names 映射被 value/path/url 之类污染。 */
 const NAME_DENYLIST = new Set([
   'value', 'values', 'path', 'paths', 'url', 'uri', 'name', 'key', 'pattern', 'endpoint', 'base', 'baseUrl', 'baseURL',
@@ -138,11 +148,21 @@ function touch(map: FileEndpointMap, abs: string, key: string): void {
   else set.add(key)
 }
 
+/** 排序优先级：前后端都配上的条目排最前，其余交给功能名排序。 */
+function pairingRank(entry: CodeIndexEntry): number {
+  return entry.server !== undefined && entry.client !== undefined ? 0 : 1
+}
+
+/** 路由/控制器文件排前面（0 = 优先），其余次之；与目录顺序无关，保证大仓也能联上落点。 */
+function routeRank(abs: string): number {
+  return ROUTE_PATH.test(abs) || ROUTE_FILE.test(abs) ? 0 : 1
+}
+
 /** 递归收集代码文件（复用文件索引的忽略规则）。 */
 async function collectCodeFiles(root: string, patterns: RegExp[]): Promise<string[]> {
   const out: string[] = []
   const walk = async (dir: string, depth: number): Promise<void> => {
-    if (depth > MAX_DEPTH || out.length >= MAX_FILES) return
+    if (depth > MAX_DEPTH || out.length >= MAX_CANDIDATES) return
     let entries
     try {
       entries = await readdir(dir, { withFileTypes: true })
@@ -150,7 +170,7 @@ async function collectCodeFiles(root: string, patterns: RegExp[]): Promise<strin
       return
     }
     for (const ent of entries) {
-      if (out.length >= MAX_FILES) return
+      if (out.length >= MAX_CANDIDATES) return
       const abs = join(dir, ent.name)
       const rel = relative(root, abs).split(sep).join('/')
       if (isIgnored(rel, ent.isDirectory(), patterns)) continue
@@ -164,7 +184,8 @@ async function collectCodeFiles(root: string, patterns: RegExp[]): Promise<strin
     }
   }
   await walk(root, 1)
-  return out
+  // 按优先级排序后再读内容：大仓里「先遍历到的先读」会让 controller 目录排在预算之外。
+  return out.sort((a, b) => routeRank(a) - routeRank(b))
 }
 
 /** 功能索引构建结果：端点条目 + 文件级反向索引。 */
@@ -196,11 +217,12 @@ export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<Cod
     return acc
   }
 
+  let readFiles = 0
   for (const dir of dirs) {
     if ((dir.access ?? 'readwrite') === 'disabled') continue
     const patterns = await loadGitignore(dir.path)
     for (const abs of await collectCodeFiles(dir.path, patterns)) {
-      if (totalBytes >= MAX_TOTAL_BYTES) break
+      if (readFiles >= MAX_FILES || totalBytes >= MAX_TOTAL_BYTES) break
       let content = ''
       try {
         const info = await stat(abs)
@@ -210,6 +232,7 @@ export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<Cod
         continue
       }
       totalBytes += content.length
+      readFiles++
       files.push({
         abs,
         dir: dir.path,
@@ -272,7 +295,9 @@ export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<Cod
 
   const entries = [...byEndpoint.values()]
     .filter(entry => entry.server !== undefined || entry.client !== undefined)
-    .sort((a, b) => a.feature.localeCompare(b.feature) || a.endpoint.localeCompare(b.endpoint))
+    // 前后端都配上的排最前：条目受 MAX_ENTRIES 截断、prompt 注入也按顺序取，
+    // 按功能名平铺会把已经配对好的条目挤掉（实测 600 条上限下只剩 163/353 组）。
+    .sort((a, b) => pairingRank(a) - pairingRank(b) || a.feature.localeCompare(b.feature) || a.endpoint.localeCompare(b.endpoint))
     .slice(0, MAX_ENTRIES)
   // 只保留最终存在条目的键，避免反向索引指向被 MAX_ENTRIES 截断掉的端点。
   const kept = new Set(entries.map(entry => matchKey(entry.endpoint)))
