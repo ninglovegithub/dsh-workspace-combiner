@@ -5,7 +5,7 @@
  * @module dsh-workspace-combiner/client/panel/WorkspaceCombinerPanel
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type ReactElement } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type ReactElement } from 'react'
 import type { PanelIconProps, WorkspaceCombinerPanelProps } from '../types.ts'
 import type { DirectoryAccess, GitStatus, LoadMode, ProjectType, Workspace, WorkspaceMode } from '../../core/types.ts'
 import { useWorkspaceCombiner, DEFAULT_TOKEN_BUDGET } from './controller.ts'
@@ -353,26 +353,57 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
             </div>
             <div className="wcb-card-body">
               <div className="wcb-ws-list">
-                {state.filteredWorkspaces.map(ws => (
-                  <div
-                    key={ws.id}
-                    className={'wcb-ws-item' + (ws.id === state.currentWorkspaceId ? ' wcb-ws-active' : '')}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={ws.name}
-                    onClick={() => state.switchWorkspace(ws.id)}
-                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); state.switchWorkspace(ws.id) } }}
-                  >
-                    <span className="wcb-ws-dot" aria-hidden="true">●</span>
-                    <span className="wcb-ws-name" title={ws.name}>{ws.name}</span>
-                    {ws.id === state.currentWorkspaceId ? <span className="wcb-pill wcb-pill-current">{tt('wsCurrent')}</span> : null}
-                    <span className="wcb-ws-time">{formatLastUsed(ws.lastSessionAt)}</span>
-                    <span className="wcb-ws-tools">
-                      <button type="button" className="wcb-iconbtn" title={tt('wsRename')} aria-label={tt('wsRename')} onClick={(event) => { event.stopPropagation(); setRenameTarget(ws) }}>✎</button>
-                      <button type="button" className="wcb-iconbtn wcb-iconbtn-danger" title={tt('wsDelete')} aria-label={tt('wsDelete')} onClick={(event) => { event.stopPropagation(); setDeleteTarget(ws) }}>✕</button>
-                    </span>
-                  </div>
-                ))}
+                {state.filteredWorkspaces.map(ws => {
+                  const sessions = state.sessionsByWorkspace[ws.id] ?? []
+                  const sessionsOpen = state.sessionsOpenId === ws.id
+                  return (
+                    <Fragment key={ws.id}>
+                      <div
+                        className={'wcb-ws-item' + (ws.id === state.currentWorkspaceId ? ' wcb-ws-active' : '')}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={ws.name}
+                        aria-expanded={sessionsOpen}
+                        onClick={() => state.pickWorkspace(ws.id)}
+                        onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); state.pickWorkspace(ws.id) } }}
+                      >
+                        <span className="wcb-ws-caret" aria-hidden="true">{sessionsOpen ? '▾' : '▸'}</span>
+                        <span className="wcb-ws-dot" aria-hidden="true">●</span>
+                        <span className="wcb-ws-name" title={ws.name}>{ws.name}</span>
+                        {ws.id === state.currentWorkspaceId ? <span className="wcb-pill wcb-pill-current">{tt('wsCurrent')}</span> : null}
+                        <span className="wcb-ws-time">{formatLastUsed(ws.lastSessionAt)}</span>
+                        <span className="wcb-ws-tools">
+                          <button type="button" className="wcb-iconbtn" title={tt('wsRename')} aria-label={tt('wsRename')} onClick={(event) => { event.stopPropagation(); setRenameTarget(ws) }}>✎</button>
+                          <button type="button" className="wcb-iconbtn wcb-iconbtn-danger" title={tt('wsDelete')} aria-label={tt('wsDelete')} onClick={(event) => { event.stopPropagation(); setDeleteTarget(ws) }}>✕</button>
+                        </span>
+                      </div>
+                      {sessionsOpen ? (
+                        <div className="wcb-ws-sessions">
+                          <div className="wcb-ws-sessions-head">
+                            {tt('sessionsTitle')}
+                            <span className="wcb-badge">{sessions.length}</span>
+                            <button type="button" className="wcb-linkbtn" onClick={() => state.reloadWorkspaceSessions(ws.id)}>{tt('sessionsReload')}</button>
+                          </div>
+                          {sessions.length === 0 ? <div className="wcb-session-empty">{tt('sessionsEmpty')}</div> : null}
+                          {sessions.map(sessionId => (
+                            <div className="wcb-session-item" key={sessionId}>
+                              <span className="wcb-session-name" title={sessionId}>{props.sessionTitle?.(sessionId) || sessionId.slice(0, 8)}</span>
+                              <button
+                                type="button"
+                                className="wcb-linkbtn"
+                                title={tt('sessionRefreshHint')}
+                                disabled={state.refreshingSessionId === sessionId}
+                                onClick={(event) => { event.stopPropagation(); state.refreshSession(sessionId) }}
+                              >
+                                {state.refreshingSessionId === sessionId ? tt('sessionRefreshing') : tt('sessionRefresh')}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </Fragment>
+                  )
+                })}
                 {state.filteredWorkspaces.length === 0 ? <div className="wcb-hint">{tt('cmdkEmpty')}</div> : null}
               </div>
             </div>

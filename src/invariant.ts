@@ -60,6 +60,8 @@ export const API = {
   standardsAi: '/api/dsh-workspace-combiner/standards-ai',
   tokenUsage: '/api/dsh-workspace-combiner/token-usage',
   endpointImpact: '/api/dsh-workspace-combiner/endpoint-impact',
+  workspaceSessions: '/api/dsh-workspace-combiner/workspace-sessions',
+  sessionRefresh: '/api/dsh-workspace-combiner/session-refresh',
 } as const
 
 /** 请求体上限（1 MiB），超出直接拒绝。 */

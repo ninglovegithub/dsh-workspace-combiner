@@ -179,6 +179,17 @@ export class WorkspaceCombinerApi {
     return await request<TokenUsageReport>(API.tokenUsage, { method: 'GET' })
   }
 
+  /** 读取某工作空间已加载（绑定）的会话 id；只有本进程加载过的会话才可刷新。 */
+  async workspaceSessions(id: string): Promise<string[]> {
+    const body = await request<{ sessions: string[] }>(API.workspaceSessions + '?id=' + encodeURIComponent(id), { method: 'GET' })
+    return body.sessions
+  }
+
+  /** 把工作空间的最新配置刷新进某个已加载的会话（下一轮请求生效）。 */
+  async refreshSession(sessionId: string): Promise<void> {
+    await request<{ ok: boolean }>(API.sessionRefresh, { method: 'POST', body: JSON.stringify({ sessionId }) })
+  }
+
   /** 由改动文件反查受影响的前后端端点（不传 files 时用 git 工作区变更）。 */
   async endpointImpact(files?: readonly string[]): Promise<{ impact: EndpointImpact[]; changedFiles: number }> {
     return await request<{ impact: EndpointImpact[]; changedFiles: number }>(API.endpointImpact, {

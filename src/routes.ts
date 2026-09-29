@@ -55,6 +55,15 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
+/** 读取 GET 路由的查询参数（缺失或 URL 非法时返回空串）。 */
+function queryParam(request: IncomingMessage, name: string): string {
+  try {
+    return new URL(request.url ?? '/', 'http://127.0.0.1').searchParams.get(name)?.trim() ?? ''
+  } catch {
+    return ''
+  }
+}
+
 /** 读取 JSON 请求体（过大或不可解析返回 undefined）。 */
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | undefined> {
   const chunks: Buffer[] = []
@@ -86,6 +95,8 @@ export interface TokenUsageDeps {
   sessionsOfWorkspace(workspaceId: string): readonly string[]
   /** 工作空间配置变化后刷新其在跑会话的上下文快照（新增项目立即可用，无需新建会话）。 */
   refreshSessions(workspaceId: string): void
+  /** 刷新单个会话的上下文快照；返回它绑定的工作空间 id，未绑定返回 undefined。 */
+  refreshSession(sessionId: string): string | undefined
 }
 
 /**
@@ -300,6 +311,8 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         }
         try {
           await store.setWorkspaceMode(id, mode)
+          // 模式会改变注入内容（锚点/单项目），同样刷新在跑的会话。
+          usage.refreshSessions(id)
           writeJson(res, 200, { ok: true })
         } catch (error) {
           fail(res, error)
@@ -363,6 +376,8 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         }
         try {
           await store.setLoadMode(id, loadMode)
+          // 加载模式决定文件索引深度，同样刷新在跑的会话。
+          usage.refreshSessions(id)
           writeJson(res, 200, { ok: true })
         } catch (error) {
           fail(res, error)
@@ -392,6 +407,8 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
             if (snapshotId === '') { writeJson(res, 400, { error: 'snapshotId is required' }); return }
             await store.restoreSnapshot(id, snapshotId)
             if (id === (await store.getCurrentWorkspaceId())) await syncCurrent()
+            // 还快照换的是目录列表，同样刷新在跑的会话。
+            usage.refreshSessions(id)
           } else if (action === 'delete') {
             if (snapshotId === '') { writeJson(res, 400, { error: 'snapshotId is required' }); return }
             await store.deleteSnapshot(id, snapshotId)
@@ -632,6 +649,48 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
             totals: usage.tokenUsage.summarize(sessionIds),
             latest: info === null ? null : { sessionId: latestId, ...info },
           })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    // ---------------------------------------------------------- workspace-sessions（该项目已加载的会话）
+    {
+      kind: 'exact',
+      path: API.workspaceSessions,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        try {
+          const id = queryParam(req, 'id')
+          if (id === '') {
+            writeJson(res, 400, { error: 'id is required' })
+            return
+          }
+          writeJson(res, 200, { sessions: usage.sessionsOfWorkspace(id) })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    // ---------------------------------------------------------- session-refresh（把最新配置刷进某个会话）
+    {
+      kind: 'exact',
+      path: API.sessionRefresh,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        try {
+          const body = await readJsonBody(req)
+          const sessionId = body === undefined ? '' : typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+          if (sessionId === '') {
+            writeJson(res, 400, { error: 'sessionId is required' })
+            return
+          }
+          const workspaceId = usage.refreshSession(sessionId)
+          if (workspaceId === undefined) {
+            writeJson(res, 404, { error: 'session is not loaded in this process' })
+            return
+          }
+          writeJson(res, 200, { ok: true, workspaceId })
         } catch (error) {
           fail(res, error)
         }

@@ -121,6 +121,17 @@ const PANEL_CSS = String.raw`
   padding:2px 6px;color:var(--wcb-text2);font:inherit;font-size:10.5px;outline:none;text-transform:none;letter-spacing:0;font-weight:400}
 .wcb-search:focus{border-color:var(--wcb-accent)}
 
+/* ---------- 工作空间行下的会话列表 ---------- */
+.wcb-ws-caret{flex:none;width:8px;text-align:center;color:var(--wcb-dim);font-size:8px}
+.wcb-ws-sessions{margin:0 0 4px 8px;border:1px solid var(--wcb-line2);border-radius:5px;background:var(--wcb-surface);
+  padding:3px 0;display:flex;flex-direction:column;gap:1px}
+.wcb-ws-sessions-head{display:flex;align-items:center;gap:5px;padding:2px 8px 3px;color:var(--wcb-muted);font-size:10px}
+.wcb-ws-sessions-head .wcb-linkbtn{margin-left:auto}
+.wcb-session-empty{color:var(--wcb-muted);font-size:10px;padding:2px 8px 4px;line-height:1.4}
+.wcb-session-item{display:flex;align-items:center;gap:6px;padding:2px 8px 2px 10px}
+.wcb-session-name{flex:1 1 auto;min-width:0;font-size:10.5px;color:var(--wcb-text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wcb-session-item .wcb-linkbtn:disabled{opacity:.45;cursor:default}
+
 /* ---------- 目录区 ---------- */
 .wcb-add-row{display:flex;gap:6px;align-items:center;padding:5px 12px 7px;flex:none}
 .wcb-dir-list{list-style:none;margin:0;padding:0 8px 4px;flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:1px}

@@ -180,7 +180,10 @@ export function apply(ctx: Context, config: Config = {}): void {
           renderedBySession.delete(sessionId)
         })()
       }
-    })()
+    })().catch(error => {
+      // 构建失败（目录不可读/被删等）不能让会话停在半空快照上：面板的「刷新会话」可重试。
+      ctx.logger?.warn('[dsh-workspace-combiner] 构建会话上下文快照失败:', error)
+    })
   }
 
   // 3) 会话生命周期：新建会话时快照勾选，销毁时清理。
@@ -197,21 +200,31 @@ export function apply(ctx: Context, config: Config = {}): void {
   }, { global: true })
 
   /**
+   * 刷新单个会话的上下文快照（面板会话列表里的「刷新会话」按钮）。
+   * @param sessionId - 会话 id。
+   * @returns 该会话绑定的工作空间 id；不是本进程加载的会话则返回 undefined。
+   */
+  const refreshSession = (sessionId: string): string | undefined => {
+    const workspaceId = sessionWorkspaceBySession.get(sessionId)
+    if (workspaceId === undefined) return undefined
+    void store.getWorkspaces().then(workspaces => {
+      const ws = workspaces.find(item => item.id === workspaceId)
+      if (ws === undefined) return
+      // 刷新期间会话可能已关闭或切到别的工作空间：再确认一次绑定。
+      if (sessionWorkspaceBySession.get(sessionId) === workspaceId) selectWorkspace(sessionId, ws)
+    }).catch(() => {})
+    return workspaceId
+  }
+
+  /**
    * 工作空间配置变化（新增项目、改加载模式/预算/规范等）后刷新绑定它的活动会话：
    * 下一个模型步就用上新目录，不必新建会话（此前这些改动只对新建会话生效）。
    * @param workspaceId - 发生变化的工作空间 id。
    */
   const refreshWorkspaceSessions = (workspaceId: string): void => {
-    const sessionIds = [...sessionWorkspaceBySession].filter(([, id]) => id === workspaceId).map(([sessionId]) => sessionId)
-    if (sessionIds.length === 0) return
-    void store.getWorkspaces().then(workspaces => {
-      const ws = workspaces.find(item => item.id === workspaceId)
-      if (ws === undefined) return
-      for (const sessionId of sessionIds) {
-        // 刷新期间会话可能已关闭或切到别的工作空间：逐个再确认一次绑定。
-        if (sessionWorkspaceBySession.get(sessionId) === workspaceId) selectWorkspace(sessionId, ws)
-      }
-    }).catch(() => {})
+    for (const [sessionId, id] of sessionWorkspaceBySession) {
+      if (id === workspaceId) refreshSession(sessionId)
+    }
   }
 
   ctx.on('session/disposed', (session: SessionLike) => {
@@ -236,6 +249,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         [...sessionWorkspaceBySession].filter(([, id]) => id === workspaceId).map(([sessionId]) => sessionId),
       // 工作空间改动后立刻刷新在跑的会话（见 refreshWorkspaceSessions）。
       refreshSessions: refreshWorkspaceSessions,
+      refreshSession,
     }).map(route => ctx.webServer.register(route))
     return () => {
       for (const dispose of disposers) dispose()

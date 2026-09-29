@@ -22,6 +22,8 @@ export interface WorkspaceCombinerPanelProps {
   registerDshWorkspace: (path: string) => Promise<void>
   /** 当前使用会话数（由 client 入口读取 sessions 快照后注入；缺省 0）。 */
   sessionCount?: number
+  /** 会话标题查询（面板会话列表用；取不到返回空串，由面板回退短 id）。 */
+  sessionTitle?: (id: string) => string
 }
 
 /** client 动态上下文的极小子集。 */

@@ -8,6 +8,17 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+### Added — per-project session list with a one-click refresh
+
+- Clicking a project in the panel expands the sessions that have it loaded (the ones this DSH
+  process bound), each with a **Refresh session** button that re-seeds that session's context
+  snapshot from the workspace's current config, so the next request already carries the new
+  directory list, file index, endpoint index and standards. Sessions this process never loaded are
+  not listed — they cannot be refreshed.
+- Mode, load-mode and snapshot-restore changes now refresh live sessions too (they were left out of
+  the earlier refresh path), and a failed snapshot build is logged instead of leaving the session
+  quietly stuck on an empty index.
+
 ## [0.7.0] - 2026-09-29
 
 ### Added — the new-workspace wizard accepts projects in several rounds

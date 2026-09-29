@@ -105,9 +105,19 @@ export function apply(ctx: ClientCtx): void {
     }
   }
 
+  // 会话标题查询（面板的会话列表展示用；读取失败返回空串，由面板回退短 id）。
+  const sessionTitle = (id: string): string => {
+    try {
+      const title = ctx.sessions.list.getSnapshot().byId[id]?.title
+      return typeof title === 'string' ? title : ''
+    } catch {
+      return ''
+    }
+  }
+
   // 中心列面板 body：main（keyed 插槽）——选中图标时由布局以 entryKey 渲染。
   ctx.slots.inject('main', () => ctx.slots.register(
     { name: 'main', key: PANEL_ID },
-    () => WorkspaceCombinerPanel({ startSession, pickDirectory, registerDshWorkspace, sessionCount: sessionCount() }),
+    () => WorkspaceCombinerPanel({ startSession, pickDirectory, registerDshWorkspace, sessionCount: sessionCount(), sessionTitle }),
   ))
 }

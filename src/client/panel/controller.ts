@@ -113,12 +113,24 @@ export interface WorkspaceCombinerState {
   generateStandard(request: { name: string; tech?: string; directory?: string; hint?: string }): Promise<string>
   /** 当前工作空间的会话占用数（props 注入；缺省 0）。 */
   sessionCount: number
+  /** 各工作空间已加载的会话 id（展开时懒加载；缺省 = 未读取）。 */
+  sessionsByWorkspace: Readonly<Record<string, readonly string[]>>
+  /** 展开会话列表的工作空间 id（null = 收起）。 */
+  sessionsOpenId: string | null
+  /** 正在刷新配置的会话 id（按钮禁用用）。 */
+  refreshingSessionId: string | null
   setManualPath(path: string): void
   setSnapshotName(name: string): void
   setSearch(value: string): void
   setTokenBudget(value: number): void
   setPreviewOpen(open: boolean): void
   switchWorkspace(id: string): void
+  /** 点击工作空间行：切为当前并展开它的会话列表；已是当前且已展开时收起。 */
+  pickWorkspace(id: string): void
+  /** 重新读取某工作空间的已加载会话列表。 */
+  reloadWorkspaceSessions(id: string): void
+  /** 把最新配置刷新进某个会话（下一轮请求生效）。 */
+  refreshSession(sessionId: string): void
   createWorkspace(name: string, basePath: string, directories: readonly WorkspaceRef[], mode?: WorkspaceMode, loadMode?: LoadMode): void
   renameWorkspace(id: string, name: string): void
   deleteWorkspace(id: string): void
@@ -204,8 +216,13 @@ export function useWorkspaceCombiner(
   const [endpointImpactLoading, setEndpointImpactLoading] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [budgetOverride, setBudgetOverride] = useState<number | null>(null)
+  const [sessionsByWorkspace, setSessionsByWorkspace] = useState<Readonly<Record<string, readonly string[]>>>({})
+  const [sessionsOpenId, setSessionsOpenId] = useState<string | null>(null)
+  const [refreshingSessionId, setRefreshingSessionId] = useState<string | null>(null)
   const currentWsIdRef = useRef('')
   currentWsIdRef.current = currentWorkspaceId
+  const sessionsOpenIdRef = useRef<string | null>(null)
+  sessionsOpenIdRef.current = sessionsOpenId
   const toastSeq = useRef(0)
 
   const showToast = useCallback((text: string, kind: 'ok' | 'error' = 'ok'): void => {
@@ -370,10 +387,46 @@ export function useWorkspaceCombiner(
     const api = apiRef.current
     if (api === null) return
     setSelectedDirs(new Set())
+    setSessionsOpenId(null)
     void api.switchWorkspace(id)
       .then(() => setCurrentWorkspaceId(id))
       .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
   }, [showToast])
+
+  // 会话列表：某工作空间在本进程内加载过的会话（宿主内存读，展开时才拉取）。
+  const reloadWorkspaceSessions = useCallback((id: string): void => {
+    const api = apiRef.current
+    if (api === null) return
+    void api.workspaceSessions(id)
+      .then(ids => setSessionsByWorkspace(prev => ({ ...prev, [id]: ids })))
+      .catch(() => setSessionsByWorkspace(prev => ({ ...prev, [id]: [] })))
+  }, [])
+
+  // 点击工作空间行：切为当前并展开它的会话列表；已是当前且已展开时收起。
+  const pickWorkspace = useCallback((id: string): void => {
+    if (currentWsIdRef.current === id && sessionsOpenIdRef.current === id) {
+      setSessionsOpenId(null)
+      return
+    }
+    switchWorkspace(id)
+    setSessionsOpenId(id)
+    reloadWorkspaceSessions(id)
+  }, [switchWorkspace, reloadWorkspaceSessions])
+
+  // 刷新单个会话：宿主重建它的上下文快照，下一轮请求即带上最新配置。
+  const refreshSession = useCallback((sessionId: string): void => {
+    const api = apiRef.current
+    if (api === null) return
+    setRefreshingSessionId(sessionId)
+    void api.refreshSession(sessionId)
+      .then(() => {
+        showToast(tt('sessionRefreshed'))
+        const open = sessionsOpenIdRef.current
+        if (open !== null) reloadWorkspaceSessions(open)
+      })
+      .catch(error => showToast(tt('sessionRefreshFailed', { error: errText(error) }), 'error'))
+      .finally(() => setRefreshingSessionId(null))
+  }, [showToast, reloadWorkspaceSessions])
 
   // 新建工作空间：宿主在 basePath 下创建同名文件夹作为主目录，其余目录作为代码项目。
   const createWorkspace = useCallback((name: string, basePath: string, directories: readonly WorkspaceRef[], mode: WorkspaceMode = 'anchor', loadMode: LoadMode = 'summary'): void => {
@@ -800,6 +853,12 @@ export function useWorkspaceCombiner(
     previewLoading,
     previewText,
     sessionCount,
+    sessionsByWorkspace,
+    sessionsOpenId,
+    refreshingSessionId,
+    pickWorkspace,
+    reloadWorkspaceSessions,
+    refreshSession,
     setManualPath,
     setSnapshotName,
     setSearch,
