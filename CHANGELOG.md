@@ -8,6 +8,8 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-29
+
 ### Added — the new-workspace wizard accepts projects in several rounds
 
 - Step 2 ("Add projects") no longer replaces the previous scan when you pick another folder:
