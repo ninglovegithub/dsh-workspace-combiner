@@ -1,7 +1,7 @@
 {
   "name": "dsh-workspace-combiner",
   "description": "DSH 工作区组合器：管理主目录与多个代码项目，自动识别 Java/Vue/React/Python/Go 及 pnpm/Turbo/Nx/Maven/Gradle Monorepo，把项目和内部包绝对路径注入会话并联动沙盒白名单。",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "engines": {

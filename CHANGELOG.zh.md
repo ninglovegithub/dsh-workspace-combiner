@@ -10,6 +10,8 @@
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-09-30
+
 ### 新增 —— Monorepo 支持
 
 - 自动识别 pnpm/npm/yarn/bun workspaces、Turbo、Nx、Lerna、Maven modules 和 Gradle multi-project，并在新建向导中显示工作区类型与内部包数量。

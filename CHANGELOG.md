@@ -8,6 +8,8 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-09-30
+
 ### Added — Monorepo support
 
 - Detects pnpm/npm/yarn/bun workspaces, Turbo, Nx, Lerna, Maven modules, and Gradle multi-project builds, showing the workspace kind and package count in the creation wizard.
