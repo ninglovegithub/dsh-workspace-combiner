@@ -219,7 +219,7 @@ export function StandardsModal({ standards, library, directories, onSaveWorkspac
           </label>
           <div className="wcb-head-actions">
             <span className="wcb-label" style={{ margin: 0 }}>{tt('standardsBudget')}</span>
-            <input className="wcb-budget-input" type="number" min={1} value={budget} aria-label={tt('standardsBudget')} onChange={(event: ChangeEvent<HTMLInputElement>) => setDraftWs(prev => ({ ...prev, budget: Number(event.currentTarget.value) }))} />
+            <input className="wcb-budget-input" type="number" min={0} value={budget} aria-label={tt('standardsBudget')} onChange={(event: ChangeEvent<HTMLInputElement>) => setDraftWs(prev => ({ ...prev, budget: Number(event.currentTarget.value) }))} />
           </div>
         </div>
 

@@ -8,6 +8,15 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+### Changed — context-heavy blocks default to on-demand
+
+- Development standards and per-project commands now default to on-demand files in ~/.dsh, with
+  only one lookup hint in the session prompt. Set a positive standards budget to inline them again.
+- The feature/API index default budget is now 0, so new and existing workspaces keep the endpoint
+  lookup file available without keeping the index body resident in every model turn.
+- Context statistics count only the resident prompt text; on-demand file bodies no longer inflate the
+  standards/commands/code-index token buckets.
+
 ## [0.8.1] - 2026-09-30
 
 ### Improved — automatic grouping and smart defaults

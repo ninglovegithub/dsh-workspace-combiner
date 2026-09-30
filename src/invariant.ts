@@ -25,14 +25,14 @@ export const DEFAULT_WORKSPACE_NAME = '未命名工作空间'
 /** 注入 prompt 的文件索引 token 预算默认值（工作空间未配置时生效）。 */
 export const DEFAULT_TOKEN_BUDGET = 60000
 
-/** 功能/接口索引的 token 预算默认值（独立于文件索引，避免互相挤占）。 */
-export const DEFAULT_CODE_INDEX_BUDGET = 400
+/** 功能/接口索引默认不常驻；0 表示只给按需查询线索。 */
+export const DEFAULT_CODE_INDEX_BUDGET = 0
 
-/** 开发规范区块的 token 预算默认值（独立预算，避免把文件索引挤掉）。 */
-export const DEFAULT_STANDARDS_BUDGET = 800
+/** 开发规范默认不常驻；0 表示只给按需查询线索。 */
+export const DEFAULT_STANDARDS_BUDGET = 0
 
-/** 各项目常用命令区块的 token 预算默认值。 */
-export const DEFAULT_COMMANDS_BUDGET = 400
+/** 各项目常用命令默认不常驻；0 表示只给按需查询线索。 */
+export const DEFAULT_COMMANDS_BUDGET = 0
 
 /** 宿主持久化文件名（相对 $DSH_HOME / ~/.dsh）。 */
 export const STORE_FILE = 'dsh-workspace-combiner.json'

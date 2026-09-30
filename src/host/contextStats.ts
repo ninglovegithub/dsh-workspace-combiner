@@ -8,8 +8,9 @@ import { estimateTokens, type FileIndexEntry } from '../core/fileTree.ts'
 import type { StandardGroup } from '../core/standards.ts'
 import type { FileIndexCache } from './fileIndex.ts'
 import { codeIndexTextFile, type CodeIndexCache } from './codeIndex.ts'
-import { renderCodeIndex, renderCommands, renderFileIndex, renderMultiWorkspacePrompt, renderStandards } from '../prompt.ts'
+import { renderCodeIndex, renderCommands, renderCommandsText, renderFileIndex, renderMultiWorkspacePrompt, renderStandards, renderStandardsText } from '../prompt.ts'
 import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_COMMANDS_BUDGET } from '../invariant.ts'
+import { commandsTextFile, standardsTextFile } from './onDemandContext.ts'
 
 /** 功能索引在统计中的配置（与宿主注入保持一致）。 */
 export interface CodeIndexStatsConfig {
@@ -92,6 +93,8 @@ export async function computeContextStats(input: ContextStatsInput): Promise<Con
   const codeIndexBudget = codeConfig?.budget ?? DEFAULT_CODE_INDEX_BUDGET
   const commandsBudgetResolved = commandsBudget > 0 ? commandsBudget : DEFAULT_COMMANDS_BUDGET
   // 各区块分别计费：面板才能显示「谁在吃预算」，而不是只知道一个总数。
+  const standardsText = renderStandardsText(standardGroups)
+  const commandsText = renderCommandsText(directories)
   const standardsTokens = estimateTokens(renderStandards(standardGroups, standardsBudget))
   const codeIndexTokens = estimateTokens(renderCodeIndex(codeEntries, codeIndexBudget))
   const commandsTokens = estimateTokens(renderCommands(directories, commandsBudgetResolved))
@@ -107,7 +110,9 @@ export async function computeContextStats(input: ContextStatsInput): Promise<Con
     ...(codeIndexBudget <= 0 && codeEntries.length > 0 ? { codeIndexPath: codeIndexTextFile() } : {}),
     standardGroups,
     standardsBudget,
+    ...(standardsBudget <= 0 && standardsText !== '' ? { standardsPath: standardsTextFile() } : {}),
     commandsBudget: commandsBudgetResolved,
+    ...(commandsBudgetResolved <= 0 && commandsText !== '' ? { commandsPath: commandsTextFile() } : {}),
   }))
   const promptOverheadTokens = Math.max(0, totalTokens - fileIndexTokens - codeIndexTokens - standardsTokens - commandsTokens)
   return { loadMode, directories: stats, totalFiles, totalDirs, fileIndexTokens, promptOverheadTokens, standardsTokens, codeIndexTokens, commandsTokens }

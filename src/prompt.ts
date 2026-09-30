@@ -66,8 +66,8 @@ const QUOTA_NOTE = '  …（本目录已达配额，可调高预算或改用摘�
  * @param directories - 工作空间的目录列表。
  * @param tokenBudget - >0 时限制该区块的 token 上限。
  */
-export function renderCommands(directories: readonly WorkspaceRef[], tokenBudget = DEFAULT_COMMANDS_BUDGET): string {
-  const rows = directories
+function commandRows(directories: readonly WorkspaceRef[]): string[] {
+  return directories
     .filter(dir => (dir.access ?? 'readwrite') !== 'disabled')
     .map(dir => {
       const commands = dir.commands
@@ -80,9 +80,19 @@ export function renderCommands(directories: readonly WorkspaceRef[], tokenBudget
       return parts.length === 0 ? undefined : '- ' + dir.name + '（' + dir.path + '）: ' + parts.join(' | ')
     })
     .filter((row): row is string => row !== undefined)
+}
+
+export function renderCommandsText(directories: readonly WorkspaceRef[]): string {
+  const rows = commandRows(directories)
+  return rows.length === 0 ? '' : ['# 各项目常用命令（按需查询）', ...rows, ''].join('\n')
+}
+
+export function renderCommands(directories: readonly WorkspaceRef[], tokenBudget = DEFAULT_COMMANDS_BUDGET): string {
+  if (tokenBudget <= 0) return ''
+  const rows = commandRows(directories)
   if (rows.length === 0) return ''
   const header = '# 各项目常用命令（必须在对应绝对路径下执行；用于自启与自证）'
-  const budget = tokenBudget > 0 ? tokenBudget : Number.POSITIVE_INFINITY
+  const budget = tokenBudget
   const lines: string[] = [header]
   let used = estimateTokens(header)
   for (const row of rows) {
@@ -167,11 +177,20 @@ export function renderFileIndex(entries: readonly FileIndexEntry[], loadMode: Lo
  * @param groups - 生效的规范分组。
  * @param tokenBudget - >0 时限制该区块的 token 上限（0/缺省 = 不限制）。
  */
-export function renderStandards(groups: readonly StandardGroup[], tokenBudget = DEFAULT_STANDARDS_BUDGET): string {
+export function renderStandardsText(groups: readonly StandardGroup[]): string {
   if (groups.length === 0) return ''
+  return [
+    '# 开发规范（按需查询）',
+    ...groups.flatMap(group => ['## ' + group.title, ...group.body.split('\n')]),
+    '',
+  ].join('\n')
+}
+
+export function renderStandards(groups: readonly StandardGroup[], tokenBudget = DEFAULT_STANDARDS_BUDGET): string {
+  if (groups.length === 0 || tokenBudget <= 0) return ''
   const header = '# 开发规范（按作用域生效，务必遵守；与其他说明冲突时以本区块为准）'
   const lines: string[] = [header]
-  const budget = tokenBudget > 0 ? tokenBudget : Number.POSITIVE_INFINITY
+  const budget = tokenBudget
   let used = estimateTokens(header)
   let truncated = false
   for (const group of groups) {
@@ -202,8 +221,12 @@ export interface MultiWorkspacePromptInput {
   /** 生效的开发规范分组（按作用域）。 */
   standardGroups?: readonly StandardGroup[]
   standardsBudget?: number
+  /** 按需查询文件路径：开发规范不常驻上下文时，给模型一条「写代码前去查」的线索。 */
+  standardsPath?: string
   /** 各项目常用命令区块预算。 */
   commandsBudget?: number
+  /** 按需查询文件路径：常用命令不常驻上下文时，给模型一条「运行前去查」的线索。 */
+  commandsPath?: string
   /** 仅属于当前会话的一次性任务目标与范围。 */
   task?: SessionTask
 }
@@ -243,7 +266,9 @@ export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): st
     codeIndexPath,
     standardGroups = [],
     standardsBudget = DEFAULT_STANDARDS_BUDGET,
+    standardsPath,
     commandsBudget = DEFAULT_COMMANDS_BUDGET,
+    commandsPath,
     task,
   } = input
   // 剔除「禁用」目录（不注入上下文）；主项目（第 0 项）恒保留。
@@ -268,6 +293,16 @@ export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): st
   const codeIndex = renderCodeIndex(codeEntries, codeIndexBudget)
   const commands = renderCommands(active, commandsBudget)
   const taskBlock = task === undefined ? '' : renderTask(task, active)
+  const standardsUsage = standards !== ''
+    ? ''
+    : standardsPath !== undefined && standardsPath !== ''
+      ? '- 开发规范未常驻上下文：写入/修改项目文件前，先按目录或技术栈 grep/read ' + standardsPath + ' 的相关小节；不要为此整份通读。'
+      : ''
+  const commandsUsage = commands !== ''
+    ? ''
+    : commandsPath !== undefined && commandsPath !== ''
+      ? '- 各项目启动/测试/构建命令未常驻上下文：运行命令前先 grep/read ' + commandsPath + ' 中对应项目；仍必须在项目绝对路径下执行。'
+      : ''
   // 常驻时用「@功能名」定位；改为按需（预算 <=0）时给一条查询线索，否则模型不知道有这份索引。
   const codeIndexUsage = codeIndex !== ''
     ? '- @功能名（如 @workspaceCreate）：指上方「功能/接口索引」里的名字，展开即读取该项列出的服务端/前端文件，用于快速定位。'
@@ -289,6 +324,8 @@ export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): st
     '- @结尾带 / 的是目录：需要其内容时列出其目录树（ls / read）。',
     '- 其它是文件：需要其内容时先用 read 读取，禁止未读就声称已检查。',
     '- 含空格的路径用 @"路径 with spaces" 包裹。',
+    ...(standardsUsage !== '' ? [standardsUsage] : []),
+    ...(commandsUsage !== '' ? [commandsUsage] : []),
     ...(codeIndexUsage !== '' ? [codeIndexUsage] : []),
     '- 被 @ 引用的文件/目录应优先纳入本次处理范围；不在上方文件索引里的路径同样可直接 read（沙盒读不受限）。',
     '',

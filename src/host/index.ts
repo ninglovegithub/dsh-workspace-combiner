@@ -34,6 +34,7 @@ import { loadModeMaxDepth, type CodeIndexEntry, type LoadMode, type Workspace, t
 import { CodeIndexCache, codeIndexTextFile } from './codeIndex.ts'
 import { FeatureSummaryCache, codeIndexSignature, summarizeFeatures } from './codeIndexSummary.ts'
 import { StandardsLibraryStore } from './standardsLibrary.ts'
+import { persistOnDemandContext } from './onDemandContext.ts'
 import { TokenUsageTracker, type TrackedEvent, type TrackedSession } from './tokenUsage.ts'
 import type { SessionTask } from '../core/task.ts'
 import { resolveStandardGroups, type StandardGroup } from '../core/standards.ts'
@@ -74,6 +75,9 @@ interface SessionSelection {
   codeIndexBudget: number
   standardGroups: StandardGroup[]
   standardsBudget: number
+  standardsPath?: string
+  commandsBudget: number
+  commandsPath?: string
   task?: SessionTask
 }
 
@@ -136,6 +140,9 @@ export function apply(ctx: Context, config: Config = {}): void {
           ...(selected.codeIndexBudget <= 0 && selected.codeEntries.length > 0 ? { codeIndexPath: codeIndexTextFile() } : {}),
           standardGroups: selected.standardGroups,
           standardsBudget: selected.standardsBudget,
+          ...(selected.standardsBudget <= 0 && selected.standardsPath !== undefined ? { standardsPath: selected.standardsPath } : {}),
+          commandsBudget: selected.commandsBudget,
+          ...(selected.commandsBudget <= 0 && selected.commandsPath !== undefined ? { commandsPath: selected.commandsPath } : {}),
           task: selected.task,
         })
         renderedBySession.set(session.id, { snapshot: selected, text })
@@ -163,11 +170,13 @@ export function apply(ctx: Context, config: Config = {}): void {
       }))
     const tokenBudget = ws.tokenBudget ?? DEFAULT_TOKEN_BUDGET
     const codeIndexBudget = task?.includeCodeIndex === false ? 0 : ws.codeIndexBudget ?? DEFAULT_CODE_INDEX_BUDGET
+    const standardsBudget = ws.standards?.budget ?? DEFAULT_STANDARDS_BUDGET
+    const commandsBudget = 0
     const nonce = (selectionNonceBySession.get(sessionId) ?? 0) + 1
     selectionNonceBySession.set(sessionId, nonce)
     // 先绑定目录快照，再异步补充文件树。此前在文件树扫描之后才写入 Map：大型
     // 仓库扫描期间 system prompt 可能已被组装，导致首轮请求完全没有多工作区上下文。
-    selectionBySession.set(sessionId, { directories, mode, loadMode, tokenBudget, entries: [], codeEntries: [], codeIndexBudget, standardGroups: [], standardsBudget: ws.standards?.budget ?? DEFAULT_STANDARDS_BUDGET, ...(task === undefined ? {} : { task }) })
+    selectionBySession.set(sessionId, { directories, mode, loadMode, tokenBudget, entries: [], codeEntries: [], codeIndexBudget, standardGroups: [], standardsBudget, commandsBudget, ...(task === undefined ? {} : { task }) })
     void (async () => {
 
       // 各目录并行扫描（顺序由 Promise.all 保持）；summary 只注入递归计数、不建树。
@@ -186,12 +195,16 @@ export function apply(ctx: Context, config: Config = {}): void {
       const codeEntries = withSummaries(baseCodeEntries, cachedSummaries)
       // 开发规范：按工作空间绑定 + projectType 自动匹配解析出作用域分组。
       const standardGroups = resolveStandardGroups(ws.standards, directories, await standardsLibrary.get())
+      const onDemand = await persistOnDemandContext(directories, standardGroups)
       // 会话可能在扫描期间已被关闭；不要把过期快照重新放回 Map。
       if (sessionWorkspaceBySession.get(sessionId) === ws.id && selectionNonceBySession.get(sessionId) === nonce) {
         selectionBySession.set(sessionId, {
           directories, mode, loadMode, tokenBudget, entries, codeEntries, codeIndexBudget,
           standardGroups,
-          standardsBudget: ws.standards?.budget ?? DEFAULT_STANDARDS_BUDGET,
+          standardsBudget,
+          ...(standardsBudget <= 0 ? { standardsPath: onDemand.standardsPath } : {}),
+          commandsBudget,
+          ...(commandsBudget <= 0 ? { commandsPath: onDemand.commandsPath } : {}),
           ...(task === undefined ? {} : { task }),
         })
       }
