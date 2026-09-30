@@ -8,6 +8,8 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-09-30
+
 ### Added — unified diagnostics center
 
 - Added 13 checks covering project directories, sandbox dependency and writable roots, required DSH services, linked sessions and configuration freshness, file/feature index caches, token estimate variance, project commands, large directories, the store file, and version metadata.
