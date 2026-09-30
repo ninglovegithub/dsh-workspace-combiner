@@ -8,6 +8,26 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+### Improved — confidence-aware task scope recommendations
+
+- Start Task narrows the project scope only when an Exact/Normalized endpoint has a complete
+  server-client pair. Inferred, one-sided, and legacy-cache matches remain hints and keep every
+  enabled project selected, preventing uncertain evidence from excluding a required repository.
+- The wizard explains whether it used trusted narrowing, a weak-match safety fallback, or the
+  default full scope, and labels recommended projects with their matching `@feature` names.
+- Bare feature-name matching now uses token boundaries, so `user` no longer matches `superuser`.
+
+### Added — explainable confidence for the feature/API index
+
+- Each endpoint now carries an Exact / Normalized / Inferred / One-sided confidence level.
+  A compact panel badge exposes server/client sources, evidence, index time, and the dynamic
+  route caveat on hover.
+- The scanner records API-prefix and parameter normalization, composed Spring routes, client
+  literals, and named endpoint references. Legacy disk caches remain readable and conservatively
+  fall back to inferred confidence when their evidence is unavailable.
+- The persistent prompt marks only inferred and one-sided rows, keeping detailed evidence out
+  of the token budget and replacing the previous absolute “no false positives” claim.
+
 ### Added — task-scoped cross-repository sessions
 
 - The primary action is now a three-step Start task wizard: enter the goal and task type,

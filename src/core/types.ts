@@ -83,6 +83,9 @@ export interface CodeIndexLoc {
   line: number
 }
 
+/** 功能索引配对结果的可信等级。 */
+export type CodeIndexConfidence = 'exact' | 'normalized' | 'heuristic' | 'unpaired'
+
 /** 功能角度代码索引条目：一个端点的前后端落点（自动抽取，可能有噪声）。 */
 export interface CodeIndexEntry {
   /** 功能名（优先端点常量名，否则取路径首段）。 */
@@ -101,6 +104,12 @@ export interface CodeIndexEntry {
   refs: number
   /** 可选的一句话功能摘要（codeIndexSummary='llm' 时生成并缓存）。 */
   summary?: string
+  /** 配对可信等级：精确、归一化后匹配、启发式推断或单边落点。 */
+  confidence?: CodeIndexConfidence
+  /** 形成该等级的机器可读原因，供界面解释而不挤占常驻 prompt。 */
+  reasons?: string[]
+  /** 本条索引生成时间。 */
+  indexedAt?: number
 }
 
 /** 目录项：工作空间里的一条项目目录引用（与 WorkspaceRef 同构，语义别名）。 */

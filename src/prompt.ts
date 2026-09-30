@@ -18,7 +18,8 @@ export const CODE_INDEX_TOKEN_BUDGET = DEFAULT_CODE_INDEX_BUDGET
  * @returns 形如 '- @功能名 → 端点 | 服务端 文件:行 | 前端 文件:行' 的一行。
  */
 export function renderCodeIndexLine(entry: CodeIndexEntry): string {
-  const parts = ['@' + entry.feature + ' → ' + entry.endpoint]
+  const confidence = entry.confidence === 'heuristic' ? '【推断】' : entry.confidence === 'unpaired' ? '【单边】' : ''
+  const parts = [confidence + '@' + entry.feature + ' → ' + entry.endpoint]
   if (entry.summary !== undefined && entry.summary !== '') parts.push(entry.summary)
   if (entry.server !== undefined) parts.push('服务端 ' + entry.server.file + ':' + entry.server.line)
   if (entry.client !== undefined) parts.push('前端 ' + entry.client.file + ':' + entry.client.line)

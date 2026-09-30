@@ -52,7 +52,9 @@
   "scripts": {
     "build": "tsdown",
     "watch": "tsdown --watch",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "smoke:code-index": "node --experimental-strip-types scripts/code-index-smoke.ts",
+    "smoke:task-recommendation": "node --experimental-strip-types scripts/task-recommendation-smoke.ts"
   },
   "peerDependencies": {
     "@chaoset/sandbox-extra-roots": "^0.4.12",

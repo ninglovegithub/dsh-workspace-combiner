@@ -7,7 +7,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type ReactElement } from 'react'
 import type { PanelIconProps, WorkspaceCombinerPanelProps } from '../types.ts'
-import type { DirectoryAccess, GitStatus, LoadMode, ProjectType, Workspace, WorkspaceMode } from '../../core/types.ts'
+import type { CodeIndexConfidence, CodeIndexEntry, DirectoryAccess, GitStatus, LoadMode, ProjectType, Workspace, WorkspaceMode } from '../../core/types.ts'
 import { useWorkspaceCombiner, DEFAULT_TOKEN_BUDGET } from './controller.ts'
 import { injectPanelStyles } from './styles.ts'
 import { tt } from '../locales.ts'
@@ -40,6 +40,46 @@ function formatLastUsed(ts?: number): string {
   const hr = Math.floor(min / 60)
   if (hr < 24) return tt('wsLastUsedHour', { n: hr })
   return tt('wsLastUsedDay', { n: Math.floor(hr / 24) })
+}
+
+function codeIndexConfidence(entry: CodeIndexEntry): CodeIndexConfidence {
+  if (entry.confidence !== undefined) return entry.confidence
+  return entry.server === undefined || entry.client === undefined ? 'unpaired' : 'heuristic'
+}
+
+function confidenceLabel(confidence: CodeIndexConfidence): string {
+  if (confidence === 'exact') return tt('codeIndexConfidenceExact')
+  if (confidence === 'normalized') return tt('codeIndexConfidenceNormalized')
+  if (confidence === 'heuristic') return tt('codeIndexConfidenceHeuristic')
+  return tt('codeIndexConfidenceUnpaired')
+}
+
+function reasonLabel(reason: string): string {
+  if (reason === 'method-and-path') return tt('codeIndexReasonMethodPath')
+  if (reason === 'normalized-api-prefix') return tt('codeIndexReasonApiPrefix')
+  if (reason === 'normalized-parameter') return tt('codeIndexReasonParameter')
+  if (reason === 'class-and-method-route') return tt('codeIndexReasonClassRoute')
+  if (reason === 'client-literal-call') return tt('codeIndexReasonClientLiteral')
+  if (reason === 'named-endpoint-reference') return tt('codeIndexReasonNamedReference')
+  if (reason === 'missing-counterpart') return tt('codeIndexReasonMissingCounterpart')
+  if (reason === 'legacy-cache') return tt('codeIndexReasonLegacyCache')
+  return reason
+}
+
+function codeIndexDetail(entry: CodeIndexEntry): string {
+  const missing = tt('codeIndexDetailMissing')
+  const server = entry.server === undefined ? missing : entry.server.file + ':' + entry.server.line
+  const client = entry.client === undefined ? missing : entry.client.file + ':' + entry.client.line
+  const reasons = entry.reasons?.map(reasonLabel).join('、') || missing
+  const indexedAt = entry.indexedAt === undefined ? missing : new Date(entry.indexedAt).toLocaleString()
+  return [
+    confidenceLabel(codeIndexConfidence(entry)),
+    tt('codeIndexDetailServer') + ': ' + server,
+    tt('codeIndexDetailClient') + ': ' + client,
+    tt('codeIndexDetailReasons') + ': ' + reasons,
+    tt('codeIndexDetailIndexedAt') + ': ' + indexedAt,
+    tt('codeIndexDetailCaveat'),
+  ].join('\n')
 }
 
 
@@ -731,6 +771,13 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                     >
                       <span style={{ color: 'var(--wcb-purple)', fontWeight: 600, flex: 'none' }}>{'@' + entry.feature}</span>
                       <span style={{ color: 'var(--wcb-text2)', flex: 'none', fontFamily: 'var(--ds-font-family-code,monospace)' }}>{entry.endpoint}</span>
+                      <span
+                        className={'wcb-confidence wcb-confidence-' + codeIndexConfidence(entry)}
+                        title={codeIndexDetail(entry)}
+                        aria-label={codeIndexDetail(entry)}
+                      >
+                        {confidenceLabel(codeIndexConfidence(entry))}
+                      </span>
                       {entry.server !== undefined ? <span style={{ color: 'var(--wcb-muted)', flex: 'none' }}>{tt('codeIndexServer') + ' ' + entry.server.file + ':' + entry.server.line}</span> : null}
                       {entry.client !== undefined ? <span style={{ color: 'var(--wcb-muted)', flex: 'none' }}>{tt('codeIndexClient') + ' ' + entry.client.file + ':' + entry.client.line}</span> : null}
                       {entry.summary !== undefined && entry.summary !== '' ? <span style={{ color: 'var(--wcb-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.summary}</span> : null}

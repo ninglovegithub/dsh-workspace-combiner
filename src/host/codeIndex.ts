@@ -15,7 +15,7 @@ import { dirname, join, relative, sep } from 'node:path'
 import { isIgnored, loadGitignore } from './fileIndex.ts'
 import { renderCodeIndexText } from '../prompt.ts'
 import { dshHome } from '../store.ts'
-import type { CodeIndexEntry, CodeIndexLoc, EndpointImpact, WorkspaceRef } from '../core/types.ts'
+import type { CodeIndexConfidence, CodeIndexEntry, CodeIndexLoc, EndpointImpact, WorkspaceRef } from '../core/types.ts'
 
 export type { CodeIndexEntry, CodeIndexLoc, EndpointImpact }
 
@@ -132,15 +132,62 @@ function deriveFeature(endpoint: string): string {
   return segs[0] ?? endpoint
 }
 
-/** 累积一条端点的两侧落点（含所属目录，供跨目录配对展示）。 */
-function applyLoc(acc: CodeIndexEntry, file: string, line: number, server: boolean, client: boolean, dir: string): void {
+type EvidenceSource = 'literal' | 'named-reference'
+
+interface PairEvidence {
+  serverEndpoint?: string
+  clientEndpoint?: string
+  serverSource?: EvidenceSource
+  clientSource?: EvidenceSource
+  reasons: Set<string>
+}
+
+/** 累积一条端点的两侧落点，并保留用于解释置信度的来源证据。 */
+function applyLoc(
+  acc: CodeIndexEntry,
+  evidence: PairEvidence,
+  file: string,
+  line: number,
+  server: boolean,
+  client: boolean,
+  dir: string,
+  source: EvidenceSource,
+  endpoint: string | undefined,
+  reasons: readonly string[],
+): void {
   if (server && acc.server === undefined) {
     acc.server = { file, line }
     acc.serverDir = dir
+    evidence.serverSource = source
+    if (endpoint !== undefined) evidence.serverEndpoint = endpoint
+    reasons.forEach(reason => evidence.reasons.add(reason))
   } else if (client && acc.client === undefined) {
     acc.client = { file, line }
     acc.clientDir = dir
+    evidence.clientSource = source
+    if (endpoint !== undefined) evidence.clientEndpoint = endpoint
+    reasons.forEach(reason => evidence.reasons.add(reason))
   } else acc.refs++
+}
+
+/** 由实际采用的前后端落点证据给出保守置信度。 */
+function classifyConfidence(entry: CodeIndexEntry, evidence: PairEvidence): CodeIndexConfidence {
+  if (entry.server === undefined || entry.client === undefined) return 'unpaired'
+  if (evidence.serverSource !== 'literal' || evidence.clientSource !== 'literal') return 'heuristic'
+  const serverEndpoint = evidence.serverEndpoint
+  const clientEndpoint = evidence.clientEndpoint
+  if (serverEndpoint === undefined || clientEndpoint === undefined) return 'heuristic'
+  const transformed = normalizeEndpoint(serverEndpoint) !== serverEndpoint
+    || normalizeEndpoint(clientEndpoint) !== clientEndpoint
+    || matchKey(serverEndpoint) !== normalizeEndpoint(serverEndpoint)
+    || matchKey(clientEndpoint) !== normalizeEndpoint(clientEndpoint)
+  return serverEndpoint === clientEndpoint && !transformed ? 'exact' : 'normalized'
+}
+
+function finalizeEntry(entry: CodeIndexEntry, evidence: PairEvidence, indexedAt: number): CodeIndexEntry {
+  const confidence = classifyConfidence(entry, evidence)
+  if (confidence === 'unpaired') evidence.reasons.add('missing-counterpart')
+  return { ...entry, confidence, reasons: [...evidence.reasons], indexedAt }
 }
 
 /** 文件级反向索引：绝对文件路径 -> 该文件涉及端点的匹配键集合。 */
@@ -210,6 +257,7 @@ export interface CodeIndexResult {
 export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<CodeIndexResult> {
   const names = new Map<string, string>()
   const byEndpoint = new Map<string, CodeIndexEntry>()
+  const evidenceByEndpoint = new Map<string, PairEvidence>()
   const touched: FileEndpointMap = new Map()
   const files: { abs: string; dir: string; rel: string; content: string; lines: string[]; server: boolean; client: boolean }[] = []
   let totalBytes = 0
@@ -220,6 +268,7 @@ export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<Cod
     if (acc === undefined) {
       acc = { feature, endpoint: display, refs: 0 }
       byEndpoint.set(key, acc)
+      evidenceByEndpoint.set(key, { reasons: new Set() })
     }
     return acc
   }
@@ -278,7 +327,14 @@ export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<Cod
         const name = rawName !== undefined && !NAME_DENYLIST.has(rawName) ? rawName : undefined
         if (name !== undefined) names.set(name, key)
         touch(touched, f.abs, key)
-        applyLoc(upsert(key, effective, name ?? deriveFeature(effective)), f.rel, i + 1, f.server, f.client, f.dir)
+        const reasons: string[] = []
+        if (f.server) reasons.push('method-and-path')
+        if (f.client) reasons.push('client-literal-call')
+        if (methodMapping) reasons.push('class-and-method-route')
+        if (normalizeEndpoint(effective) !== effective) reasons.push('normalized-parameter')
+        if (matchKey(effective) !== normalizeEndpoint(effective)) reasons.push('normalized-api-prefix')
+        const entry = upsert(key, effective, name ?? deriveFeature(effective))
+        applyLoc(entry, evidenceByEndpoint.get(key)!, f.rel, i + 1, f.server, f.client, f.dir, 'literal', effective, reasons)
       }
     }
   }
@@ -296,13 +352,16 @@ export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<Cod
           const key = names.get(name)
           if (key === undefined) continue
           touch(touched, f.abs, key)
-          applyLoc(upsert(key, name, name), f.rel, i + 1, f.server, f.client, f.dir)
+          const entry = upsert(key, name, name)
+          applyLoc(entry, evidenceByEndpoint.get(key)!, f.rel, i + 1, f.server, f.client, f.dir, 'named-reference', undefined, ['named-endpoint-reference'])
         }
       }
     }
   }
 
-  const entries = [...byEndpoint.values()]
+  const indexedAt = Date.now()
+  const entries = [...byEndpoint.entries()]
+    .map(([key, entry]) => finalizeEntry(entry, evidenceByEndpoint.get(key)!, indexedAt))
     .filter(entry => entry.server !== undefined || entry.client !== undefined)
     // 前后端都配上的排最前：条目受 MAX_ENTRIES 截断、prompt 注入也按顺序取，
     // 按功能名平铺会把已经配对好的条目挤掉（实测 600 条上限下只剩 163/353 组）。
@@ -399,6 +458,47 @@ function parseFileEndpoints(raw: unknown): Record<string, string[]> {
   return out
 }
 
+function parseLoc(raw: unknown): CodeIndexLoc | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const loc = raw as Record<string, unknown>
+  return typeof loc.file === 'string' && typeof loc.line === 'number' && Number.isFinite(loc.line)
+    ? { file: loc.file, line: loc.line }
+    : undefined
+}
+
+function isConfidence(value: unknown): value is CodeIndexConfidence {
+  return value === 'exact' || value === 'normalized' || value === 'heuristic' || value === 'unpaired'
+}
+
+/** 读取新旧缓存形状；旧条目没有证据时保守标为推断/单边。 */
+function parsePersistedEntry(raw: unknown, cacheAt: number): CodeIndexEntry | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const entry = raw as Record<string, unknown>
+  if (typeof entry.feature !== 'string' || typeof entry.endpoint !== 'string') return undefined
+  const server = parseLoc(entry.server)
+  const client = parseLoc(entry.client)
+  const confidence = isConfidence(entry.confidence)
+    ? entry.confidence
+    : server === undefined || client === undefined ? 'unpaired' : 'heuristic'
+  const reasons = Array.isArray(entry.reasons)
+    ? entry.reasons.filter((reason): reason is string => typeof reason === 'string' && reason !== '')
+    : []
+  if (reasons.length === 0) reasons.push(confidence === 'unpaired' ? 'missing-counterpart' : 'legacy-cache')
+  return {
+    feature: entry.feature,
+    endpoint: entry.endpoint,
+    ...(server === undefined ? {} : { server }),
+    ...(client === undefined ? {} : { client }),
+    ...(typeof entry.serverDir === 'string' ? { serverDir: entry.serverDir } : {}),
+    ...(typeof entry.clientDir === 'string' ? { clientDir: entry.clientDir } : {}),
+    refs: typeof entry.refs === 'number' && Number.isFinite(entry.refs) ? entry.refs : 0,
+    ...(typeof entry.summary === 'string' ? { summary: entry.summary } : {}),
+    confidence,
+    reasons,
+    indexedAt: typeof entry.indexedAt === 'number' && Number.isFinite(entry.indexedAt) ? entry.indexedAt : cacheAt,
+  }
+}
+
 /**
  * 索引缓存：目录签名（路径 + 根 mtime）未变且未过期则复用。
  * 查找顺序 = 进程内存 → 磁盘（跨重启）→ 重新扫描；重建后异步落盘（失败静默）。
@@ -455,11 +555,9 @@ export class CodeIndexCache {
       if (parsed === null || typeof parsed !== 'object') return undefined
       const record = parsed as Record<string, unknown>
       if (typeof record.signature !== 'string' || typeof record.at !== 'number' || !Array.isArray(record.entries)) return undefined
-      const entries = record.entries.filter((item): item is CodeIndexEntry => {
-        if (item === null || typeof item !== 'object') return false
-        const entry = item as Record<string, unknown>
-        return typeof entry.feature === 'string' && typeof entry.endpoint === 'string'
-      })
+      const entries = record.entries
+        .map(item => parsePersistedEntry(item, record.at as number))
+        .filter((item): item is CodeIndexEntry => item !== undefined)
       return { signature: record.signature, at: record.at, entries, fileEndpoints: parseFileEndpoints(record.fileEndpoints) }
     } catch {
       return undefined

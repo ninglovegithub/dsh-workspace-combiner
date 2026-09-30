@@ -6,7 +6,7 @@
 
 import { useEffect, useState, type ChangeEvent, type ReactElement } from 'react'
 import type { CodeIndexEntry, LoadMode, WorkspaceRef } from '../../core/types.ts'
-import { recommendTask, type SessionTask, type TaskType } from '../../core/task.ts'
+import { recommendTask, type SessionTask, type TaskRecommendation, type TaskType } from '../../core/task.ts'
 import { tt } from '../locales.ts'
 
 interface StartTaskWizardProps {
@@ -29,12 +29,20 @@ function typeLabel(type: TaskType): string {
   }
 }
 
+function recommendationLabel(recommendation: TaskRecommendation): string {
+  if (recommendation.mode === 'trusted-match') {
+    return tt('taskTrustedScope', { n: recommendation.trustedEndpoints.length, dirs: recommendation.task.directoryPaths.length })
+  }
+  if (recommendation.mode === 'weak-match') return tt('taskWeakScope', { n: recommendation.weakEndpoints.length })
+  return tt('taskDefaultScope')
+}
+
 export function StartTaskWizard({ directories, codeEntries, onCreate, onClose }: StartTaskWizardProps): ReactElement {
   const [step, setStep] = useState<1 | 2 | 3>(1)
   const [description, setDescription] = useState('')
   const [type, setType] = useState<TaskType>('feature')
-  const [task, setTask] = useState<SessionTask>(() => recommendTask('feature', 'new feature', directories, codeEntries).task)
-  const [matchedCount, setMatchedCount] = useState(0)
+  const [recommendation, setRecommendation] = useState<TaskRecommendation>(() => recommendTask('feature', 'new feature', directories, codeEntries))
+  const [task, setTask] = useState<SessionTask>(() => recommendation.task)
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') onClose() }
@@ -45,7 +53,7 @@ export function StartTaskWizard({ directories, codeEntries, onCreate, onClose }:
   const prepareRecommendation = (): void => {
     const recommendation = recommendTask(type, description, directories, codeEntries)
     setTask(recommendation.task)
-    setMatchedCount(recommendation.matchedEndpoints.length)
+    setRecommendation(recommendation)
     setStep(2)
   }
 
@@ -92,14 +100,21 @@ export function StartTaskWizard({ directories, codeEntries, onCreate, onClose }:
         {step === 2 ? (
           <div className="wcb-wizard-body">
             <div className="wcb-task-recommendation">
-              <strong>{matchedCount > 0 ? tt('taskMatchedEndpoints', { n: matchedCount }) : tt('taskDefaultScope')}</strong>
-              <span>{tt('taskRecommendationScope')}</span>
+              <strong>{recommendationLabel(recommendation)}</strong>
+              <span>{recommendation.mode === 'weak-match' ? tt('taskWeakScopeHint') : tt('taskRecommendationScope')}</span>
             </div>
             <div className="wcb-task-dir-list">
               {enabledDirectories.map((directory, index) => (
                 <label className="wcb-task-dir" key={directory.path}>
                   <input type="checkbox" checked={task.directoryPaths.includes(directory.path)} disabled={index === 0} onChange={() => toggleDirectory(directory.path)} />
-                  <span><strong>{directory.name}</strong><small title={directory.path}>{directory.path}</small></span>
+                  <span>
+                    <strong>{directory.name}</strong>
+                    <small title={directory.path}>{directory.path}</small>
+                    {index === 0 ? <em>{tt('taskPrimaryRequired')}</em> : null}
+                    {(recommendation.directoryFeatures[directory.path]?.length ?? 0) > 0 ? (
+                      <em>{tt('taskDirectoryMatched', { features: recommendation.directoryFeatures[directory.path]!.slice(0, 3).map(feature => '@' + feature).join(' · ') })}</em>
+                    ) : null}
+                  </span>
                 </label>
               ))}
             </div>
@@ -122,6 +137,7 @@ export function StartTaskWizard({ directories, codeEntries, onCreate, onClose }:
               <div><span>{tt('taskType')}</span><strong>{typeLabel(task.type)}</strong></div>
               <div><span>{tt('taskDescription')}</span><strong>{task.description}</strong></div>
               <div><span>{tt('taskScope')}</span><strong>{tt('taskDirectoryCount', { n: task.directoryPaths.length })}</strong></div>
+              <div><span>{tt('taskScopeReason')}</span><strong>{recommendationLabel(recommendation)}</strong></div>
               <div><span>{tt('loadModeLabel')}</span><strong>{task.loadMode}</strong></div>
               <div><span>{tt('taskVerification')}</span><strong>{task.verification.length > 0 ? task.verification.join(' · ') : tt('taskVerificationNone')}</strong></div>
             </div>

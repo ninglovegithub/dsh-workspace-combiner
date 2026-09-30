@@ -241,6 +241,7 @@ const PANEL_CSS = String.raw`
 .wcb-task-dir>span{display:flex;flex-direction:column;min-width:0;flex:1}
 .wcb-task-dir strong{font-size:10.5px;color:var(--wcb-text2)}
 .wcb-task-dir small{font-size:9px;color:var(--wcb-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wcb-task-dir em{font-size:9px;color:var(--wcb-accent);font-style:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wcb-check-row{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--wcb-text2)}
 .wcb-task-summary{display:flex;flex-direction:column;gap:6px}
 .wcb-task-summary>div{display:grid;grid-template-columns:90px 1fr;gap:8px;border-bottom:1px solid var(--wcb-line);padding-bottom:5px}
@@ -470,6 +471,11 @@ const PANEL_CSS = String.raw`
 .wcb-budget-card{display:flex;flex-direction:column;overflow:hidden}
 .wcb-codeindex-card{display:flex;flex-direction:column;overflow:hidden;flex:0 0 auto;max-height:320px}
 .wcb-codeindex-card .wcb-card-body{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin}
+.wcb-confidence{flex:none;padding:1px 4px;border-radius:8px;border:1px solid transparent;font-size:8.5px;line-height:1.2;font-weight:600;cursor:help}
+.wcb-confidence-exact{color:#54b987;background:rgba(84,185,135,.1);border-color:rgba(84,185,135,.22)}
+.wcb-confidence-normalized{color:var(--wcb-accent);background:rgba(79,140,255,.1);border-color:rgba(79,140,255,.22)}
+.wcb-confidence-heuristic{color:var(--wcb-warn);background:rgba(229,169,59,.1);border-color:rgba(229,169,59,.24)}
+.wcb-confidence-unpaired{color:var(--wcb-muted);background:var(--wcb-surface2);border-color:var(--wcb-line2)}
 /* 卡片底部固定说明行：放在滚动容器 body 之外，所以列表再长它也钉在卡片底部，卡片高度仍受 max-height 限制 */
 .wcb-codeindex-footer{flex:none;margin:5px 12px 7px}
 .wcb-budget-card .wcb-budget-split{flex:1;min-height:0;overflow-y:auto}

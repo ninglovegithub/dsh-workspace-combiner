@@ -50,9 +50,9 @@ Layers 1-4 ship today; see [Changelog](./CHANGELOG.md) · [中文](./CHANGELOG.z
   endpoints, project commands, context budget, and attached sessions. Open it for
   blocking issues and actionable suggestions.
 - **Start-task wizard** — describe a feature, API change, bug fix, code review,
-  cross-repository refactor, or custom task. The endpoint index recommends a per-session
-  directory scope, load mode, code-index policy, and verification checklist without
-  changing the saved workspace.
+  cross-repository refactor, or custom task. Only complete Exact/Normalized endpoint pairs narrow
+  the directory scope; inferred or one-sided matches retain the safe full scope. Each recommended
+  project shows its matching `@feature`, and the session-only recommendation remains editable.
 - **New-workspace wizard** — pick a name + base path; the host creates the primary folder
   and a scan detects Java / Vue / React / Python / Go projects for multi-select.
 - **Three ways to add a directory** — select from native DSH workspaces, open the host
@@ -68,13 +68,15 @@ Layers 1-4 ship today; see [Changelog](./CHANGELOG.md) · [中文](./CHANGELOG.z
   re-syncs the sandbox immediately.
 - **File index + load modes** — gitignore-aware bounded file-tree scan with an mtime
   cache; a per-workspace load mode controls injected detail.
-- **Code/API index** — deterministic HTTP-endpoint extraction that links the server
-  registration site to the client call site as `file:line` across TS/JS/TSX/JSX/Vue and
-  Java/Kotlin/Go/Python/Ruby/C#. Toggleable, budgeted, and copyable as `@featureName`.
-- **Deterministic endpoint correlation** — each endpoint records which directory each side
-  lives in; `/api/user/detail` and `/user/detail` join up (one optional `/api`, optionally
-  followed by `/vN`), and Spring's class-level `@RequestMapping("/user")` is composed with
-  method mappings into `/user/list`. **No semantic guessing, so no false positives.**
+- **Code/API index** — extracts HTTP endpoints and links the server registration site to the
+  client call site as `file:line` across TS/JS/TSX/JSX/Vue and Java/Kotlin/Go/Python/Ruby/C#.
+  Every row exposes an Exact / Normalized / Inferred / One-sided confidence badge; hover it
+  to inspect sources, evidence, and index time.
+- **Explainable endpoint correlation** — deterministic-first, normalized matching, heuristic
+  fallback, and visible evidence. `/api/user/detail` and `/user/detail` can join after one
+  optional `/api` or `/api/vN` normalization; Spring class and method routes are composed;
+  named endpoint references are explicitly marked inferred. Dynamic/generated routes still
+  need source-code verification.
 - **Endpoints touched by these changes** — a deterministic reverse lookup from the git
   working tree, through the file→endpoint map built during the same scan, to the endpoints
   those files declare or call, with the counterpart file on the other side.

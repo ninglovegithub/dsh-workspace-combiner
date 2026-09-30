@@ -15,6 +15,10 @@ export interface SessionTask {
 export interface TaskRecommendation {
   task: SessionTask
   matchedEndpoints: readonly CodeIndexEntry[]
+  trustedEndpoints: readonly CodeIndexEntry[]
+  weakEndpoints: readonly CodeIndexEntry[]
+  mode: 'trusted-match' | 'weak-match' | 'default'
+  directoryFeatures: Readonly<Record<string, readonly string[]>>
 }
 
 const TASK_TYPES = new Set<TaskType>(['feature', 'api-change', 'bugfix', 'review', 'refactor', 'custom'])
@@ -49,7 +53,18 @@ function matchesEntry(description: string, entry: CodeIndexEntry): boolean {
   const text = description.toLowerCase()
   const endpoint = entry.endpoint.toLowerCase()
   const feature = entry.feature.toLowerCase()
-  return (endpoint.length > 1 && text.includes(endpoint)) || (feature.length > 2 && (text.includes('@' + feature) || text.includes(feature)))
+  if (endpoint.length > 1 && text.includes(endpoint)) return true
+  if (feature.length <= 2) return false
+  if (text.includes('@' + feature)) return true
+  if (!/^[a-z0-9_$-]+$/.test(feature)) return text.includes(feature)
+  const escaped = feature.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp('(^|[^a-z0-9_$-])' + escaped + '([^a-z0-9_$-]|$)').test(text)
+}
+
+function isTrustedMatch(entry: CodeIndexEntry): boolean {
+  return (entry.confidence === 'exact' || entry.confidence === 'normalized')
+    && entry.server !== undefined
+    && entry.client !== undefined
 }
 
 function defaults(type: TaskType): { loadMode: LoadMode; includeCodeIndex: boolean; verification: TaskVerification[] } {
@@ -66,17 +81,32 @@ function defaults(type: TaskType): { loadMode: LoadMode; includeCodeIndex: boole
 export function recommendTask(type: TaskType, description: string, directories: readonly WorkspaceRef[], entries: readonly CodeIndexEntry[]): TaskRecommendation {
   const enabled = directories.filter(directory => (directory.access ?? 'readwrite') !== 'disabled')
   const matchedEndpoints = entries.filter(entry => matchesEntry(description, entry))
+  const trustedEndpoints = matchedEndpoints.filter(isTrustedMatch)
+  const weakEndpoints = matchedEndpoints.filter(entry => !isTrustedMatch(entry))
   const matchedPaths = new Set<string>()
-  for (const entry of matchedEndpoints) {
+  const featuresByPath = new Map<string, Set<string>>()
+  for (const entry of trustedEndpoints) {
     if (entry.serverDir !== undefined) matchedPaths.add(entry.serverDir)
     if (entry.clientDir !== undefined) matchedPaths.add(entry.clientDir)
+    for (const path of [entry.serverDir, entry.clientDir]) {
+      if (path === undefined) continue
+      const features = featuresByPath.get(path)
+      if (features === undefined) featuresByPath.set(path, new Set([entry.feature]))
+      else features.add(entry.feature)
+    }
   }
   const primary = enabled[0]
   if (primary !== undefined) matchedPaths.add(primary.path)
   const hasMatchedProject = enabled.some((directory, index) => index > 0 && matchedPaths.has(directory.path))
-  const selected = matchedEndpoints.length > 0 && hasMatchedProject
+  const selected = trustedEndpoints.length > 0 && hasMatchedProject
     ? enabled.filter(directory => matchedPaths.has(directory.path))
     : enabled
+  const mode = trustedEndpoints.length > 0 && hasMatchedProject
+    ? 'trusted-match'
+    : weakEndpoints.length > 0 ? 'weak-match' : 'default'
+  const directoryFeatures = Object.fromEntries(
+    [...featuresByPath].map(([path, features]) => [path, [...features]]),
+  )
   const config = defaults(type)
   return {
     task: {
@@ -88,6 +118,10 @@ export function recommendTask(type: TaskType, description: string, directories: 
       verification: config.verification,
     },
     matchedEndpoints,
+    trustedEndpoints,
+    weakEndpoints,
+    mode,
+    directoryFeatures,
   }
 }
 
