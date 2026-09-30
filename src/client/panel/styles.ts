@@ -375,6 +375,30 @@ const PANEL_CSS = String.raw`
 .wcb-std-modal{width:min(760px,94vw)}
 .wcb-adv-modal{width:min(560px,92vw)}
 .wcb-budget-modal{width:min(620px,92vw)}
+.wcb-diagnostics-modal{width:min(700px,94vw)}
+.wcb-diagnostics-body{max-height:64vh;overflow-y:auto;display:flex;flex-direction:column;gap:9px}
+.wcb-diagnostics-summary{display:flex;gap:8px;flex-wrap:wrap;padding:7px 9px;border:1px solid var(--wcb-line);border-radius:6px;background:var(--wcb-surface);font-size:10px}
+.wcb-diagnostic-ok{color:var(--wcb-ok)}
+.wcb-diagnostic-warning{color:var(--wcb-warn)}
+.wcb-diagnostic-error{color:var(--wcb-danger)}
+.wcb-diagnostics-list{display:flex;flex-direction:column;gap:6px}
+.wcb-diagnostic-item{border:1px solid var(--wcb-line);border-left:3px solid var(--wcb-dim);border-radius:6px;padding:7px 9px;background:var(--wcb-surface);display:flex;flex-direction:column;gap:4px;color:var(--wcb-text2)}
+.wcb-diagnostic-item.wcb-diagnostic-ok{border-left-color:var(--wcb-ok)}
+.wcb-diagnostic-item.wcb-diagnostic-warning{border-left-color:var(--wcb-warn)}
+.wcb-diagnostic-item.wcb-diagnostic-error{border-left-color:var(--wcb-danger)}
+.wcb-diagnostic-head{display:flex;align-items:center;gap:6px;color:var(--wcb-text)}
+.wcb-diagnostic-head .wcb-badge{margin-left:auto}
+.wcb-diagnostic-dot{width:7px;height:7px;border-radius:50%;background:var(--wcb-dim);flex:none}
+.wcb-diagnostic-ok .wcb-diagnostic-dot{background:var(--wcb-ok)}
+.wcb-diagnostic-warning .wcb-diagnostic-dot{background:var(--wcb-warn)}
+.wcb-diagnostic-error .wcb-diagnostic-dot{background:var(--wcb-danger)}
+.wcb-diagnostic-paths{display:flex;flex-direction:column;gap:2px}
+.wcb-diagnostic-paths code{font-size:9.5px;color:var(--wcb-muted);word-break:break-all}
+.wcb-more-list{display:flex;flex-direction:column;gap:7px}
+.wcb-more-item{border:1px solid var(--wcb-line);border-radius:7px;padding:9px 10px;background:var(--wcb-surface);color:var(--wcb-text);text-align:left;display:flex;flex-direction:column;gap:2px;cursor:pointer}
+.wcb-more-item:hover{border-color:var(--wcb-accent);background:var(--wcb-surface2)}
+.wcb-more-item strong{font-size:11.5px}
+.wcb-more-item span{font-size:10px;color:var(--wcb-muted);line-height:1.45}
 .wcb-budget-body{max-height:64vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
 .wcb-adv-body{max-height:64vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
 .wcb-preview-modal{width:min(760px,94vw)}

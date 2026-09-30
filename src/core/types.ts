@@ -26,6 +26,35 @@ export type WorkspaceMode = 'anchor' | 'single'
 /** 文件加载模式：full=完整文件树，summary=目录摘要（计数），tree=浅层目录树。 */
 export type LoadMode = 'full' | 'summary' | 'tree'
 
+/** 用户友好的上下文策略；旧配置缺省视为 custom，保持原行为。 */
+export type ContextPreset = 'economy' | 'balanced' | 'deep' | 'custom'
+
+/** 全局预算闸产生的一条可解释降级记录。 */
+export type ContextDegradation = 'file-index-truncated' | 'code-index-truncated' | 'commands-truncated' | 'standards-truncated' | 'ai-content-skipped'
+
+/** 诊断项状态。 */
+export type DiagnosticStatus = 'ok' | 'warning' | 'error' | 'unknown'
+
+/** 诊断中心允许直接执行的安全修复动作。 */
+export type DiagnosticAction = 'refresh-caches' | 'sync-sandbox' | 'refresh-sessions'
+
+/** 一条诊断结果；动态数字和路径放在 data/paths，由 client 本地化展示。 */
+export interface DiagnosticItem {
+  id: 'directories' | 'sandbox-service' | 'writable-roots' | 'host-services' | 'sessions' | 'session-config' | 'file-index-cache' | 'code-index-cache' | 'token-alignment' | 'commands' | 'large-directories' | 'store-config' | 'versions'
+  status: DiagnosticStatus
+  data?: Record<string, string | number | boolean>
+  paths?: string[]
+  action?: DiagnosticAction
+}
+
+/** 当前工作空间的一次诊断快照。 */
+export interface DiagnosticReport {
+  generatedAt: number
+  workspaceId?: string
+  summary: Record<DiagnosticStatus, number>
+  items: DiagnosticItem[]
+}
+
 /** 加载模式对应的文件树最大扫描深度（summary 只需计数，深度 1 足够）。 */
 export function loadModeMaxDepth(loadMode: LoadMode): number {
   return loadMode === 'full' ? 4 : loadMode === 'tree' ? 3 : 1
@@ -189,10 +218,16 @@ export interface Workspace {
   mode?: WorkspaceMode
   /** 文件加载模式（默认 summary）。 */
   loadMode?: LoadMode
+  /** 上下文预设；旧工作空间缺省为 custom，新工作空间默认 balanced。 */
+  contextPreset?: ContextPreset
   /** 目录配置快照（一键保存/恢复）。 */
   snapshots?: WorkspaceSnapshot[]
-  /** 注入 prompt 的 token 预算上限（面板监控区可配置；缺省 60000）。 */
+  /** 全局注入 token 上限（旧配置中也兼作文件索引预算）。 */
   tokenBudget?: number
+  /** 文件索引区块预算；缺省时沿用 tokenBudget，保证旧配置行为不变。 */
+  fileIndexBudget?: number
+  /** 常用命令区块预算；缺省按需加载。 */
+  commandsBudget?: number
   /** 是否置顶（面板工作空间列表排序优先）。 */
   pinned?: boolean
   /** 颜色标识（面板工作空间列表色点；6 色循环）。 */
@@ -236,6 +271,8 @@ export interface DirectoryContextStat {
 
 /** 上下文监控汇总。 */
 export interface ContextStats {
+  /** 当前上下文预设。 */
+  preset: ContextPreset
   loadMode: LoadMode
   directories: DirectoryContextStat[]
   totalFiles: number
@@ -250,6 +287,12 @@ export interface ContextStats {
   codeIndexTokens: number
   /** 各项目常用命令区块估算 token 数。 */
   commandsTokens: number
+  /** 实际注入总量。 */
+  totalTokens: number
+  /** 全局注入预算上限。 */
+  globalBudget: number
+  /** 本次预算闸执行的降级。 */
+  degradations: ContextDegradation[]
 }
 
 // ---------------------------------------------------------------------------

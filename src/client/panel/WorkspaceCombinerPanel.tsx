@@ -18,6 +18,8 @@ import { PreviewModal } from './PreviewModal.tsx'
 import { BudgetModal } from './BudgetModal.tsx'
 import { ReadinessModal } from './ReadinessModal.tsx'
 import { StartTaskWizard } from './StartTaskWizard.tsx'
+import { DiagnosticsModal } from './DiagnosticsModal.tsx'
+import { MoreModal } from './MoreModal.tsx'
 
 /** 侧边栏图标：两个叠放的方块 + 连线，表达「多项目组合」。 */
 export function WorkspaceCombinerIcon({ size, active }: PanelIconProps): ReactElement {
@@ -228,7 +230,9 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
   const [advOpen, setAdvOpen] = useState(false)
   const [standardsOpen, setStandardsOpen] = useState(false)
   const [budgetOpen, setBudgetOpen] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
   const [readinessOpen, setReadinessOpen] = useState(false)
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const [taskWizardOpen, setTaskWizardOpen] = useState(false)
   const [cmdkOpen, setCmdkOpen] = useState(false)
   const [cmdkQuery, setCmdkQuery] = useState('')
@@ -260,6 +264,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
       { id: 'new-ws', label: tt('cmdkNewWorkspace'), kind: tt('cmdkKindAction'), run: () => setWizardOpen(true) },
       { id: 'add-dir', label: tt('cmdkAddDir'), kind: tt('cmdkKindAction'), run: state.pickAndAddDirectory },
       { id: 'refresh', label: tt('cmdkRefresh'), kind: tt('cmdkKindAction'), run: state.refreshContextStats },
+      { id: 'diagnostics', label: tt('diagnosticsTitle'), kind: tt('cmdkKindAction'), run: () => { setDiagnosticsOpen(true); state.refreshDiagnostics() } },
       { id: 'toggle-adv', label: tt('cmdkToggleAdvanced'), kind: tt('cmdkKindAction'), run: () => setAdvOpen(v => !v) },
       { id: 'toggle-preview', label: tt('cmdkTogglePreview'), kind: tt('cmdkKindAction'), run: () => state.setPreviewOpen(!state.previewOpen) },
     ]
@@ -504,10 +509,10 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
           </section>
           {/* 更多：上下文预算入口（点击弹窗） */}
           <section className="wcb-card">
-            <div className="wcb-card-head wcb-card-head-btn" role="button" tabIndex={0} aria-label={tt('moreTitle')} aria-expanded={budgetOpen} onClick={() => setBudgetOpen(true)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setBudgetOpen(true) } }}>
+            <div className="wcb-card-head wcb-card-head-btn" role="button" tabIndex={0} aria-label={tt('moreTitle')} aria-expanded={moreOpen} onClick={() => setMoreOpen(true)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setMoreOpen(true) } }}>
               <span className="wcb-caret" aria-hidden="true">▸</span>
               {tt('moreTitle')}
-              <span className="wcb-badge" style={{ marginLeft: 2 }}>{tt('moreBudgetHint')}</span>
+              <span className="wcb-badge" style={{ marginLeft: 2 }}>{tt('moreEntryHint')}</span>
             </div>
           </section>
         </div>
@@ -852,11 +857,28 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
         <BudgetModal
           stats={state.contextStats}
           usage={state.tokenUsage}
+          preset={state.contextPreset}
           budget={state.tokenBudget}
+          fileIndexBudget={state.fileIndexBudget}
+          codeIndexBudget={state.codeIndexBudget}
+          standardsBudget={state.standardsBudget}
+          commandsBudget={state.commandsBudget}
           dirs={state.dirs}
+          onPreset={state.setContextPreset}
           onBudget={state.setTokenBudget}
+          onFileIndexBudget={state.setFileIndexBudget}
+          onCodeIndexBudget={state.setCodeIndexBudget}
+          onStandardsBudget={(value) => { state.setContextPreset('custom'); state.setWorkspaceStandards({ ...(state.workspaceStandards ?? {}), budget: Math.max(0, Math.round(value)) }) }}
+          onCommandsBudget={state.setCommandsBudget}
           onRefresh={() => { state.refreshContextStats(); state.refreshTokenUsage() }}
           onClose={() => setBudgetOpen(false)}
+        />
+      ) : null}
+      {moreOpen ? (
+        <MoreModal
+          onBudget={() => { setMoreOpen(false); setBudgetOpen(true) }}
+          onDiagnostics={() => { setMoreOpen(false); setDiagnosticsOpen(true); state.refreshDiagnostics() }}
+          onClose={() => setMoreOpen(false)}
         />
       ) : null}
       {readinessOpen ? (
@@ -870,6 +892,17 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
           }}
           onOpenBudget={() => { setReadinessOpen(false); setBudgetOpen(true) }}
           onClose={() => setReadinessOpen(false)}
+        />
+      ) : null}
+      {diagnosticsOpen ? (
+        <DiagnosticsModal
+          report={state.diagnostics}
+          loading={state.diagnosticsLoading}
+          runningAction={state.diagnosticAction}
+          onRefresh={state.refreshDiagnostics}
+          onAction={state.runDiagnosticAction}
+          onCopy={state.copyText}
+          onClose={() => setDiagnosticsOpen(false)}
         />
       ) : null}
       {taskWizardOpen ? (

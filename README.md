@@ -109,6 +109,14 @@ Layers 1-4 ship today; see [Changelog](./CHANGELOG.md) · [中文](./CHANGELOG.z
   injected for the current configuration, and copy it.
 - **Context budget** — an editable per-workspace token budget with a donut summary, 2x2 stat
   cards, and a per-directory **column chart**; the panel warns past 80% and past 100%.
+- **Context presets + global budget gate** — new workspaces default to Balanced, with Economy,
+  Deep analysis, and Custom modes. Presets coordinate load mode and file-index, feature-index,
+  standards, and command budgets; when the global cap is tight, the task, directory list, explicit
+  `@` references, and standards are preserved first, while every truncation is explained.
+- **Unified diagnostics center** — check directories, sandbox roots, required DSH services,
+  linked-session freshness, index caches, token variance, project commands, oversized directories,
+  and configuration versions in one place. Safe repairs are one click, and copied reports redact
+  usernames and secrets.
 - **Fixed-height panel with local scrolling** — the panel fills the sidebar and only its lists
   scroll, so the header and the New-session button never leave the screen.
 - **Compact entry cards + modals** — advanced config, coding standards, prompt preview and the

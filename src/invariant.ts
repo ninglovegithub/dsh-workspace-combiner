@@ -63,6 +63,8 @@ export const API = {
   workspaceSessions: '/api/dsh-workspace-combiner/workspace-sessions',
   sessionRefresh: '/api/dsh-workspace-combiner/session-refresh',
   sessionTask: '/api/dsh-workspace-combiner/session-task',
+  diagnostics: '/api/dsh-workspace-combiner/diagnostics',
+  diagnosticAction: '/api/dsh-workspace-combiner/diagnostic-action',
 } as const
 
 /** 请求体上限（1 MiB），超出直接拒绝。 */

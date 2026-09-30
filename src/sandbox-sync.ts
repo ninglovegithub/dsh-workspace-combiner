@@ -17,7 +17,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { SANDBOX_PLUGIN_NAME, SANDBOX_REMOTE_SERVICE } from './invariant.ts'
@@ -34,6 +34,14 @@ interface SandboxConfigRemote {
   set?: (partial: { extraWritableRoots: string[] }) => unknown
 }
 
+export interface SandboxInspection {
+  remoteAvailable: boolean
+  configExists: boolean
+  configReadable: boolean
+  roots: string[]
+  missingExpected: string[]
+}
+
 /** 读取 config.json 里的 file-level extraWritableRoots（缺失/损坏 -> []）。 */
 async function readFileRoots(): Promise<string[]> {
   try {
@@ -47,6 +55,35 @@ async function readFileRoots(): Promise<string[]> {
     // 不存在或损坏：视为空。
   }
   return []
+}
+
+/** 只读检查沙盒依赖和已同步目录，不暴露配置中的其它敏感内容。 */
+export async function inspectExtraRoots(ctx: Context, expected: readonly string[]): Promise<SandboxInspection> {
+  let remoteAvailable = false
+  try {
+    const remote = ctx.get(SANDBOX_REMOTE_SERVICE) as SandboxConfigRemote | undefined
+    remoteAvailable = remote?.get !== undefined || remote?.set !== undefined
+  } catch {
+    remoteAvailable = false
+  }
+  let configExists = false
+  let configReadable = false
+  let roots: string[] = []
+  try {
+    configExists = (await stat(sandboxConfigFile())).isFile()
+    const raw = await readFile(sandboxConfigFile(), 'utf8')
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const value = (parsed as { extraWritableRoots?: unknown }).extraWritableRoots
+      if (Array.isArray(value)) {
+        roots = value.filter((item): item is string => typeof item === 'string')
+        configReadable = true
+      }
+    }
+  } catch {
+    // 缺失或损坏由诊断中心解释，不在这里修复。
+  }
+  return { remoteAvailable, configExists, configReadable, roots, missingExpected: expected.filter(path => !roots.includes(path)) }
 }
 
 /** 原子写入 config.json（目录 0700、文件 0600）。 */

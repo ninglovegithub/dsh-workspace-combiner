@@ -24,8 +24,10 @@ import { computeContextStats } from './host/contextStats.ts'
 import { getChangedFiles, getGitStatus } from './host/gitStatus.ts'
 import { syncExtraRoots } from './sandbox-sync.ts'
 import { WorkspaceCombinerStore } from './store.ts'
-import { loadModeMaxDepth, type LoadMode, type WorkspaceMode, type WorkspaceRef } from './core/types.ts'
+import { loadModeMaxDepth, type DiagnosticAction, type LoadMode, type TokenUsageReport, type WorkspaceMode, type WorkspaceRef } from './core/types.ts'
 import { parseSessionTask, type SessionTask } from './core/task.ts'
+import { resolveWorkspaceContext } from './core/contextPreset.ts'
+import { buildDiagnosticReport } from './host/diagnostics.ts'
 
 /** loopback 字面量 + 浏览器同源标记（dsh-ssh 配对路由栅栏）。 */
 function isLoopbackRequest(request: IncomingMessage): boolean {
@@ -94,6 +96,8 @@ export interface TokenUsageDeps {
   tokenUsage: TokenUsageTracker
   /** 某工作空间关联的会话 id 列表（会话 -> 工作空间绑定在 session/created 时确定）。 */
   sessionsOfWorkspace(workspaceId: string): readonly string[]
+  /** 各关联会话当前加载的工作空间配置时间戳。 */
+  sessionVersionsOfWorkspace(workspaceId: string): readonly number[]
   /** 工作空间配置变化后刷新其在跑会话的上下文快照（新增项目立即可用，无需新建会话）。 */
   refreshSessions(workspaceId: string): void
   /** 刷新单个会话的上下文快照；返回它绑定的工作空间 id，未绑定返回 undefined。 */
@@ -136,6 +140,44 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
     const next = writablePaths(ws?.directories ?? [])
     await syncExtraRoots(ctx, lastSyncedPaths, next)
     lastSyncedPaths = next
+  }
+
+  const contextStatsOf = async () => {
+    const ws = await store.getCurrentWorkspace()
+    if (ws === undefined) return { preset: 'custom' as const, loadMode: 'summary' as const, directories: [], totalFiles: 0, totalDirs: 0, fileIndexTokens: 0, promptOverheadTokens: 0, standardsTokens: 0, codeIndexTokens: 0, commandsTokens: 0, totalTokens: 0, globalBudget: DEFAULT_TOKEN_BUDGET, degradations: [] }
+    const context = resolveWorkspaceContext(ws)
+    const codeIndexEnabled = ws.codeIndexEnabled ?? true
+    const summaries = codeIndexEnabled ? await summaryCache.get(codeIndexSignature((await codeIndexCache.get(ws.directories)).entries)) : undefined
+    const standardGroups = resolveStandardGroups(ws.standards, ws.directories, await standardsLibrary.get())
+    return await computeContextStats({
+      directories: ws.directories,
+      mode: ws.mode ?? 'anchor',
+      loadMode: context.loadMode,
+      fileIndexCache,
+      preset: context.preset,
+      globalBudget: context.globalBudget,
+      fileIndexBudget: context.fileIndexBudget,
+      codeIndexCache,
+      codeConfig: { enabled: codeIndexEnabled, budget: context.codeIndexBudget, ...(summaries === undefined ? {} : { summaries }) },
+      standardGroups,
+      standardsBudget: context.standardsBudget,
+      commandsBudget: context.commandsBudget,
+    })
+  }
+
+  const tokenUsageOf = async (): Promise<TokenUsageReport> => {
+    const ws = await store.getCurrentWorkspace()
+    const sessionIds = ws === undefined ? [] : usage.sessionsOfWorkspace(ws.id)
+    const active = usage.tokenUsage.latestSessionId()
+    const latestId = sessionIds.includes(active)
+      ? active
+      : [...sessionIds].reverse().find(id => usage.tokenUsage.latestOf(id) !== null) ?? ''
+    const info = latestId === '' ? null : usage.tokenUsage.latestOf(latestId)
+    return {
+      sessions: sessionIds.length,
+      totals: usage.tokenUsage.summarize(sessionIds),
+      latest: info === null ? null : { sessionId: latestId, ...info },
+    }
   }
 
   return [
@@ -339,6 +381,9 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         const pinned = body !== undefined && typeof body.pinned === 'boolean' ? body.pinned : undefined
         const color = body !== undefined && typeof body.color === 'string' && body.color !== '' ? body.color : undefined
         const tokenBudget = body !== undefined && typeof body.tokenBudget === 'number' && Number.isFinite(body.tokenBudget) && body.tokenBudget > 0 ? body.tokenBudget : undefined
+        const contextPreset = body !== undefined && (body.contextPreset === 'economy' || body.contextPreset === 'balanced' || body.contextPreset === 'deep' || body.contextPreset === 'custom') ? body.contextPreset : undefined
+        const fileIndexBudget = body !== undefined && typeof body.fileIndexBudget === 'number' && Number.isFinite(body.fileIndexBudget) && body.fileIndexBudget >= 0 ? body.fileIndexBudget : undefined
+        const commandsBudget = body !== undefined && typeof body.commandsBudget === 'number' && Number.isFinite(body.commandsBudget) && body.commandsBudget >= 0 ? body.commandsBudget : undefined
         const codeIndexEnabled = body !== undefined && typeof body.codeIndexEnabled === 'boolean' ? body.codeIndexEnabled : undefined
         // 0 = 不注入上下文（改为按需查索引文件），必须放行；只有非法值才落回 undefined。
         const codeIndexBudget = body !== undefined && typeof body.codeIndexBudget === 'number' && Number.isFinite(body.codeIndexBudget) && body.codeIndexBudget >= 0 ? body.codeIndexBudget : undefined
@@ -346,11 +391,14 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         try {
           if (mode !== '') await store.setWorkspaceMode(id, mode)
           if (loadMode !== '') await store.setLoadMode(id, loadMode)
-          if (pinned !== undefined || color !== undefined || tokenBudget !== undefined || codeIndexEnabled !== undefined || codeIndexBudget !== undefined || codeIndexSummary !== undefined) {
+          if (pinned !== undefined || color !== undefined || contextPreset !== undefined || tokenBudget !== undefined || fileIndexBudget !== undefined || commandsBudget !== undefined || codeIndexEnabled !== undefined || codeIndexBudget !== undefined || codeIndexSummary !== undefined) {
             await store.patchMeta(id, {
               ...(pinned !== undefined ? { pinned } : {}),
               ...(color !== undefined ? { color } : {}),
+              ...(contextPreset !== undefined ? { contextPreset } : {}),
               ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+              ...(fileIndexBudget !== undefined ? { fileIndexBudget } : {}),
+              ...(commandsBudget !== undefined ? { commandsBudget } : {}),
               ...(codeIndexEnabled !== undefined ? { codeIndexEnabled } : {}),
               ...(codeIndexBudget !== undefined ? { codeIndexBudget } : {}),
               ...(codeIndexSummary !== undefined ? { codeIndexSummary } : {}),
@@ -606,27 +654,7 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
       handler: async (req, res) => {
         if (!guard(req, res, 'GET')) return
         try {
-          const ws = await store.getCurrentWorkspace()
-          if (ws === undefined) {
-            writeJson(res, 200, { loadMode: 'summary', directories: [], totalFiles: 0, totalDirs: 0, fileIndexTokens: 0, promptOverheadTokens: 0, standardsTokens: 0, codeIndexTokens: 0, commandsTokens: 0 })
-            return
-          }
-          const codeIndexEnabled = ws.codeIndexEnabled ?? true
-          const summaries = codeIndexEnabled ? await summaryCache.get(codeIndexSignature((await codeIndexCache.get(ws.directories)).entries)) : undefined
-          const standardGroups = resolveStandardGroups(ws.standards, ws.directories, await standardsLibrary.get())
-          const stats = await computeContextStats({
-            directories: ws.directories,
-            mode: ws.mode ?? 'anchor',
-            loadMode: ws.loadMode ?? 'summary',
-            fileIndexCache,
-            tokenBudget: ws.tokenBudget ?? DEFAULT_TOKEN_BUDGET,
-            codeIndexCache,
-            codeConfig: { enabled: codeIndexEnabled, budget: ws.codeIndexBudget ?? DEFAULT_CODE_INDEX_BUDGET, ...(summaries === undefined ? {} : { summaries }) },
-            standardGroups,
-            standardsBudget: ws.standards?.budget ?? DEFAULT_STANDARDS_BUDGET,
-            commandsBudget: DEFAULT_COMMANDS_BUDGET,
-          })
-          writeJson(res, 200, stats)
+          writeJson(res, 200, await contextStatsOf())
         } catch (error) {
           fail(res, error)
         }
@@ -639,19 +667,63 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
       handler: async (req, res) => {
         if (!guard(req, res, 'GET')) return
         try {
-          const ws = await store.getCurrentWorkspace()
-          const sessionIds = ws === undefined ? [] : usage.sessionsOfWorkspace(ws.id)
-          // 优先「最近有活动的会话」，且必须属于当前工作空间；否则退到最后一个有样本的会话。
-          const active = usage.tokenUsage.latestSessionId()
-          const latestId = sessionIds.includes(active)
-            ? active
-            : [...sessionIds].reverse().find(id => usage.tokenUsage.latestOf(id) !== null) ?? ''
-          const info = latestId === '' ? null : usage.tokenUsage.latestOf(latestId)
-          writeJson(res, 200, {
-            sessions: sessionIds.length,
-            totals: usage.tokenUsage.summarize(sessionIds),
-            latest: info === null ? null : { sessionId: latestId, ...info },
+          writeJson(res, 200, await tokenUsageOf())
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    // ---------------------------------------------------------- diagnostics
+    {
+      kind: 'exact',
+      path: API.diagnostics,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        try {
+          const workspace = await store.getCurrentWorkspace()
+          const sessions = workspace === undefined ? [] : usage.sessionsOfWorkspace(workspace.id)
+          const report = await buildDiagnosticReport({
+            ctx,
+            workspace,
+            fileIndexCache,
+            codeIndexCache,
+            contextStats: await contextStatsOf(),
+            tokenUsage: await tokenUsageOf(),
+            sessions,
+            sessionVersions: workspace === undefined ? [] : usage.sessionVersionsOfWorkspace(workspace.id),
           })
+          writeJson(res, 200, report)
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    // ---------------------------------------------------------- diagnostic-action
+    {
+      kind: 'exact',
+      path: API.diagnosticAction,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const action = body?.action as DiagnosticAction | undefined
+        try {
+          const workspace = await store.getCurrentWorkspace()
+          if (action === 'refresh-caches') {
+            fileIndexCache.clear()
+            codeIndexCache.clear()
+            if (workspace !== undefined) await Promise.all([
+              ...workspace.directories.filter(directory => (directory.access ?? 'readwrite') !== 'disabled').map(directory => fileIndexCache.count(directory.path)),
+              codeIndexCache.get(workspace.directories),
+            ])
+          } else if (action === 'sync-sandbox') {
+            await syncCurrent()
+          } else if (action === 'refresh-sessions') {
+            if (workspace !== undefined) usage.refreshSessions(workspace.id)
+          } else {
+            writeJson(res, 400, { error: 'unknown diagnostic action' })
+            return
+          }
+          writeJson(res, 200, { ok: true })
         } catch (error) {
           fail(res, error)
         }

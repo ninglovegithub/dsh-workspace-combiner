@@ -4,3 +4,9 @@ node_modules/
 
 # Local design-reference mockups (not part of the package)
 ui-redesign-mockup*.html
+
+# Local promo-video production workspace (frames, debug scripts; ~1 GB)
+.creative-design/
+
+# Project-local pnpm content-addressable store
+.pnpm-store/

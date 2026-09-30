@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { WorkspaceCombinerApi } from '../api.ts'
-import type { CodeIndexEntry, ContextStats, DetectedProject, DirectoryAccess, DirectoryCommands, EndpointImpact, GitStatus, LoadMode, TokenUsageReport, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceSnapshot, WorkspaceStandards } from '../../core/types.ts'
+import type { CodeIndexEntry, ContextPreset, ContextStats, DetectedProject, DiagnosticAction, DiagnosticReport, DirectoryAccess, DirectoryCommands, EndpointImpact, GitStatus, LoadMode, TokenUsageReport, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceSnapshot, WorkspaceStandards } from '../../core/types.ts'
 import { emptyLibrary, resolveStandardGroups, type StandardGroup, type StandardsLibrary } from '../../core/standards.ts'
 import type { FileTreeNode } from '../../core/fileTree.ts'
 import { calculateReadiness, type ReadinessReport } from '../../core/readiness.ts'
@@ -15,6 +15,7 @@ import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_STANDARDS_BUDGET, DEFAULT_TOKEN_BUDG
 import { renderMultiWorkspacePrompt } from '../../prompt.ts'
 import { tt } from '../locales.ts'
 import { checkWorkspaceNameDuplicate, sanitizeWorkspaceName } from './naming.ts'
+import { contextPresetConfig, resolveWorkspaceContext } from '../../core/contextPreset.ts'
 
 /** token 预算默认上限（与宿主机注入 prompt 使用同一常量）。 */
 export { DEFAULT_TOKEN_BUDGET }
@@ -83,6 +84,12 @@ export interface WorkspaceCombinerState {
   gitStatuses: Readonly<Record<string, GitStatus | null>>
   /** token 预算上限（工作空间级，缺省 DEFAULT_TOKEN_BUDGET）。 */
   tokenBudget: number
+  contextPreset: ContextPreset
+  fileIndexBudget: number
+  commandsBudget: number
+  setContextPreset(preset: ContextPreset): void
+  setFileIndexBudget(value: number): void
+  setCommandsBudget(value: number): void
   /** 预览：是否展开。 */
   previewOpen: boolean
   /** 预览：文件树（异步拉取 file-index）。 */
@@ -157,6 +164,11 @@ export interface WorkspaceCombinerState {
   /** 真实 token 用量（provider 上报，含提示词缓存命中率）。 */
   tokenUsage: TokenUsageReport | null
   refreshTokenUsage(): void
+  diagnostics: DiagnosticReport | null
+  diagnosticsLoading: boolean
+  diagnosticAction: DiagnosticAction | null
+  refreshDiagnostics(): void
+  runDiagnosticAction(action: DiagnosticAction): void
   /** 由工作区改动文件反查出的受影响端点（确定性查询，非预测）。 */
   endpointImpact: readonly EndpointImpact[]
   /** 参与反查的改动文件数（0 = 工作区干净）。 */
@@ -235,6 +247,9 @@ export function useWorkspaceCombiner(
   const [endpointImpact, setEndpointImpact] = useState<readonly EndpointImpact[]>([])
   const [endpointImpactFiles, setEndpointImpactFiles] = useState(0)
   const [endpointImpactLoading, setEndpointImpactLoading] = useState(false)
+  const [diagnostics, setDiagnostics] = useState<DiagnosticReport | null>(null)
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [diagnosticAction, setDiagnosticAction] = useState<DiagnosticAction | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [budgetOverride, setBudgetOverride] = useState<number | null>(null)
   const [sessionsByWorkspace, setSessionsByWorkspace] = useState<Readonly<Record<string, readonly string[]>>>({})
@@ -269,6 +284,29 @@ export function useWorkspaceCombiner(
     if (api === null) return
     void api.tokenUsage().then(setTokenUsage).catch(() => {})
   }, [])
+
+  const refreshDiagnostics = useCallback((): void => {
+    const api = apiRef.current
+    if (api === null) return
+    setDiagnosticsLoading(true)
+    void api.diagnostics()
+      .then(setDiagnostics)
+      .catch(error => showToast(tt('diagnosticsFailed', { error: errText(error) }), 'error'))
+      .finally(() => setDiagnosticsLoading(false))
+  }, [showToast])
+
+  const runDiagnosticAction = useCallback((action: DiagnosticAction): void => {
+    const api = apiRef.current
+    if (api === null) return
+    setDiagnosticAction(action)
+    void api.runDiagnosticAction(action)
+      .then(() => {
+        showToast(tt('diagnosticsActionDone'))
+        window.setTimeout(refreshDiagnostics, action === 'refresh-sessions' ? 350 : 0)
+      })
+      .catch(error => showToast(tt('diagnosticsActionFailed', { error: errText(error) }), 'error'))
+      .finally(() => setDiagnosticAction(null))
+  }, [refreshDiagnostics, showToast])
   useEffect(() => {
     refreshTokenUsage()
     const timer = setInterval(refreshTokenUsage, 10_000)
@@ -316,7 +354,12 @@ export function useWorkspaceCombiner(
     return sortedWorkspaces.filter(w => w.name.toLowerCase().includes(q))
   }, [sortedWorkspaces, search])
 
-  const tokenBudget = budgetOverride ?? currentWorkspace?.tokenBudget ?? DEFAULT_TOKEN_BUDGET
+  const contextConfig = useMemo(() => currentWorkspace === undefined ? contextPresetConfig('balanced') : resolveWorkspaceContext(currentWorkspace), [currentWorkspace])
+  const tokenBudget = budgetOverride ?? contextConfig.globalBudget
+  const contextPreset = contextConfig.preset
+  const fileIndexBudget = contextConfig.fileIndexBudget
+  const commandsBudget = contextConfig.commandsBudget
+  useEffect(() => { setBudgetOverride(null) }, [currentWorkspaceId])
 
   const readiness = useMemo<ReadinessReport>(() => calculateReadiness({
     workspace: currentWorkspace,
@@ -334,17 +377,18 @@ export function useWorkspaceCombiner(
   const contextStatsKey = useMemo(
     () => dirs.map(d => d.path + ':' + (d.access ?? 'readwrite')).join('\n')
       + '|' + (currentWorkspace?.mode ?? 'anchor')
-      + '|' + (currentWorkspace?.loadMode ?? 'summary'),
-    [dirs, currentWorkspace],
+      + '|' + contextConfig.loadMode
+      + '|' + contextConfig.globalBudget + ':' + contextConfig.fileIndexBudget + ':' + contextConfig.codeIndexBudget + ':' + contextConfig.standardsBudget + ':' + contextConfig.commandsBudget,
+    [dirs, currentWorkspace, contextConfig],
   )
   useEffect(() => { refreshContextStats() }, [refreshContextStats, contextStatsKey])
 
   const codeIndexEnabled = currentWorkspace?.codeIndexEnabled ?? true
-  const codeIndexBudget = currentWorkspace?.codeIndexBudget ?? DEFAULT_CODE_INDEX_BUDGET
-  const codeIndexSummary = currentWorkspace?.codeIndexSummary ?? 'off'
+  const codeIndexBudget = contextConfig.codeIndexBudget
+  const codeIndexSummary = contextConfig.codeIndexSummary
 
   const workspaceStandards: WorkspaceStandards | undefined = currentWorkspace?.standards
-  const standardsBudget = workspaceStandards?.budget ?? DEFAULT_STANDARDS_BUDGET
+  const standardsBudget = contextConfig.standardsBudget
   // 生效规范分组（与宿主同源：同一份 core/standards 纯函数）。
   const standardGroups = useMemo(
     () => resolveStandardGroups(workspaceStandards, dirs, standardsLibrary),
@@ -638,7 +682,7 @@ export function useWorkspaceCombiner(
     if (api === null || id === '') return
     void api.setLoadMode(id, loadMode)
       .then(() => {
-        setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, loadMode, updatedAt: Date.now() } : w))
+        setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, contextPreset: 'custom', loadMode, updatedAt: Date.now() } : w))
         showToast(tt('wsSaved'))
       })
       .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
@@ -649,8 +693,8 @@ export function useWorkspaceCombiner(
     const id = currentWsIdRef.current
     const api = apiRef.current
     if (api === null || id === '') return
-    setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, mode, loadMode, updatedAt: Date.now() } : w))
-    void api.patchWorkspace(id, { mode, loadMode })
+    setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, contextPreset: 'custom', mode, loadMode, updatedAt: Date.now() } : w))
+    void api.patchWorkspace(id, { contextPreset: 'custom', mode, loadMode })
       .then(() => showToast(tt('wsSaved')))
       .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
   }, [showToast])
@@ -662,17 +706,63 @@ export function useWorkspaceCombiner(
     const id = currentWsIdRef.current
     const api = apiRef.current
     if (api === null || id === '') return
-    setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, tokenBudget: next } : w))
-    void api.patchWorkspace(id, { tokenBudget: next }).catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+    setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, contextPreset: 'custom', tokenBudget: next } : w))
+    void api.patchWorkspace(id, { contextPreset: 'custom', tokenBudget: next }).catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
   }, [showToast])
+
+  const setFileIndexBudget = useCallback((value: number): void => {
+    const next = Number.isFinite(value) && value >= 0 ? Math.round(value) : 0
+    const id = currentWsIdRef.current
+    const api = apiRef.current
+    if (api === null || id === '') return
+    setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, contextPreset: 'custom', fileIndexBudget: next, updatedAt: Date.now() } : w))
+    void api.patchWorkspace(id, { contextPreset: 'custom', fileIndexBudget: next }).catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+  }, [showToast])
+
+  const setCommandsBudget = useCallback((value: number): void => {
+    const next = Number.isFinite(value) && value >= 0 ? Math.round(value) : 0
+    const id = currentWsIdRef.current
+    const api = apiRef.current
+    if (api === null || id === '') return
+    setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, contextPreset: 'custom', commandsBudget: next, updatedAt: Date.now() } : w))
+    void api.patchWorkspace(id, { contextPreset: 'custom', commandsBudget: next }).catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+  }, [showToast])
+
+  const setContextPreset = useCallback((preset: ContextPreset): void => {
+    const id = currentWsIdRef.current
+    const api = apiRef.current
+    if (api === null || id === '') return
+    if (preset === 'custom') {
+      setWorkspaces(prev => prev.map(workspace => workspace.id === id ? { ...workspace, contextPreset: 'custom', updatedAt: Date.now() } : workspace))
+      void api.patchWorkspace(id, { contextPreset: 'custom' }).catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+      return
+    }
+    const config = contextPresetConfig(preset)
+    const current = workspaces.find(workspace => workspace.id === id)
+    const standards = { ...(current?.standards ?? {}), budget: config.standardsBudget }
+    const patch = {
+      contextPreset: preset,
+      loadMode: config.loadMode,
+      tokenBudget: config.globalBudget,
+      fileIndexBudget: config.fileIndexBudget,
+      commandsBudget: config.commandsBudget,
+      codeIndexBudget: config.codeIndexBudget,
+      codeIndexSummary: config.codeIndexSummary,
+    } as const
+    setBudgetOverride(null)
+    setWorkspaces(prev => prev.map(workspace => workspace.id === id ? { ...workspace, ...patch, standards, updatedAt: Date.now() } : workspace))
+    void Promise.all([api.patchWorkspace(id, patch), api.setWorkspaceStandards(id, standards)])
+      .then(() => showToast(tt('wsSaved')))
+      .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+  }, [workspaces, showToast])
 
   // 功能索引配置（乐观即时生效 + 持久化）。
   const patchCodeIndex = useCallback((patch: { codeIndexEnabled?: boolean; codeIndexBudget?: number; codeIndexSummary?: 'off' | 'llm' }): void => {
     const id = currentWsIdRef.current
     const api = apiRef.current
     if (api === null || id === '') return
-    setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, ...patch, updatedAt: Date.now() } : w))
-    void api.patchWorkspace(id, patch).catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+    setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, contextPreset: 'custom', ...patch, updatedAt: Date.now() } : w))
+    void api.patchWorkspace(id, { contextPreset: 'custom', ...patch }).catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
   }, [showToast])
   const setCodeIndexEnabled = useCallback((enabled: boolean): void => { patchCodeIndex({ codeIndexEnabled: enabled }) }, [patchCodeIndex])
   const setCodeIndexBudget = useCallback((value: number): void => {
@@ -835,19 +925,21 @@ export function useWorkspaceCombiner(
 
   const previewText = useMemo(() => {
     const mode = currentWorkspace?.mode ?? 'anchor'
-    const loadMode = currentWorkspace?.loadMode ?? 'summary'
+    const loadMode = contextConfig.loadMode
     return renderMultiWorkspacePrompt({
       workspaces: dirs,
       mode,
       loadMode,
       entries: previewTrees,
-      tokenBudget,
+      fileIndexBudget,
+      globalBudget: tokenBudget,
       codeEntries: codeIndexEnabled ? codeEntries : [],
       codeIndexBudget,
       standardGroups,
       standardsBudget,
+      commandsBudget,
     })
-  }, [dirs, currentWorkspace, previewTrees, tokenBudget, codeEntries, codeIndexEnabled, codeIndexBudget, standardGroups, standardsBudget])
+  }, [dirs, currentWorkspace, contextConfig.loadMode, previewTrees, fileIndexBudget, tokenBudget, codeEntries, codeIndexEnabled, codeIndexBudget, standardGroups, standardsBudget, commandsBudget])
 
   const copyPreview = useCallback((): void => {
     if (previewText === '') return
@@ -906,6 +998,12 @@ export function useWorkspaceCombiner(
     missingDirs,
     gitStatuses,
     tokenBudget,
+    contextPreset,
+    fileIndexBudget,
+    commandsBudget,
+    setContextPreset,
+    setFileIndexBudget,
+    setCommandsBudget,
     previewOpen,
     previewTrees,
     codeEntries,
@@ -959,6 +1057,11 @@ export function useWorkspaceCombiner(
     refreshContextStats,
     tokenUsage,
     refreshTokenUsage,
+    diagnostics,
+    diagnosticsLoading,
+    diagnosticAction,
+    refreshDiagnostics,
+    runDiagnosticAction,
     endpointImpact,
     endpointImpactFiles,
     endpointImpactLoading,

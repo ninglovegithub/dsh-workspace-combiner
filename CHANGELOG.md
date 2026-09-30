@@ -8,6 +8,21 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+### Added — unified diagnostics center
+
+- Added 13 checks covering project directories, sandbox dependency and writable roots, required DSH services, linked sessions and configuration freshness, file/feature index caches, token estimate variance, project commands, large directories, the store file, and version metadata.
+- Every check reports OK, warning, error, or unknown and can be rerun; safe one-click repairs refresh caches, resync sandbox roots, and refresh linked sessions.
+- Copied diagnostic reports automatically redact local usernames, common API keys, tokens, and authorization values.
+
+### Added — context presets and a global budget gate
+
+- Added Economy, Balanced, Deep analysis, and Custom context strategies. New workspaces default to
+  Balanced, while legacy workspaces resolve to Custom without changing their existing behavior.
+- A global budget gate now protects the task, directory list, explicit `@` references, and standards
+  before trimming file indexes, feature indexes, and AI-generated summaries.
+- The context budget dialog shows per-block budgets, resident usage, and every automatic degradation.
+  Editing a low-level budget switches the workspace to Custom.
+
 ## [0.8.1] - 2026-09-30
 
 ### Changed — context-heavy blocks default to on-demand

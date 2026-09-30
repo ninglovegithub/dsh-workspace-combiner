@@ -8,7 +8,7 @@
  */
 
 import { useEffect, type ChangeEvent, type ReactElement } from 'react'
-import type { ContextStats, ProjectType, TokenUsageReport, WorkspaceRef } from '../../core/types.ts'
+import type { ContextPreset, ContextStats, ProjectType, TokenUsageReport, WorkspaceRef } from '../../core/types.ts'
 import { tt } from '../locales.ts'
 
 /** 千分位 token 简写（36200 -> 36.2k）。 */
@@ -122,15 +122,25 @@ function RealUsage({ usage, injected }: { usage: TokenUsageReport | null; inject
 
 interface BudgetModalProps {
   stats: ContextStats | null
+  preset: ContextPreset
   budget: number
+  fileIndexBudget: number
+  codeIndexBudget: number
+  standardsBudget: number
+  commandsBudget: number
   dirs: readonly WorkspaceRef[]
   usage: TokenUsageReport | null
+  onPreset(value: ContextPreset): void
   onBudget(value: number): void
+  onFileIndexBudget(value: number): void
+  onCodeIndexBudget(value: number): void
+  onStandardsBudget(value: number): void
+  onCommandsBudget(value: number): void
   onRefresh(): void
   onClose(): void
 }
 
-export function BudgetModal({ stats, budget, dirs, usage, onBudget, onRefresh, onClose }: BudgetModalProps): ReactElement {
+export function BudgetModal({ stats, preset, budget, fileIndexBudget, codeIndexBudget, standardsBudget, commandsBudget, dirs, usage, onPreset, onBudget, onFileIndexBudget, onCodeIndexBudget, onStandardsBudget, onCommandsBudget, onRefresh, onClose }: BudgetModalProps): ReactElement {
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
@@ -148,6 +158,13 @@ export function BudgetModal({ stats, budget, dirs, usage, onBudget, onRefresh, o
       <div className="wcb-modal wcb-modal-wide wcb-budget-modal" role="dialog" aria-modal="true" aria-label={tt('budgetTitle')} onClick={(event) => event.stopPropagation()}>
         <div className="wcb-modal-title">{tt('budgetTitle')}</div>
 
+        <div className="wcb-tabs" role="tablist" aria-label={tt('contextPresetLabel')}>
+          {([['economy', tt('contextPresetEconomy')], ['balanced', tt('contextPresetBalanced')], ['deep', tt('contextPresetDeep')], ['custom', tt('contextPresetCustom')]] as Array<[ContextPreset, string]>).map(([value, label]) => (
+            <button key={value} type="button" role="tab" aria-selected={preset === value} className={'wcb-tab' + (preset === value ? ' wcb-tab-on' : '')} onClick={() => onPreset(value)}>{label}</button>
+          ))}
+        </div>
+        <div className="wcb-hint">{tt('contextPresetHint')}</div>
+
         <div className="wcb-std-toolbar">
           <div className="wcb-head-actions">
             <span className="wcb-label" style={{ margin: 0 }}>{tt('budgetLimit')}</span>
@@ -155,6 +172,22 @@ export function BudgetModal({ stats, budget, dirs, usage, onBudget, onRefresh, o
             <button type="button" className="wcb-linkbtn" aria-label={tt('monitorRefresh')} onClick={onRefresh}>{'↻ ' + tt('monitorRefresh')}</button>
           </div>
         </div>
+
+        {preset === 'custom' ? (
+          <div className="wcb-stat-grid">
+            {([
+              [tt('budgetFileIndex'), fileIndexBudget, onFileIndexBudget],
+              [tt('budgetCodeIndex'), codeIndexBudget, onCodeIndexBudget],
+              [tt('budgetStandards'), standardsBudget, onStandardsBudget],
+              [tt('budgetCommands'), commandsBudget, onCommandsBudget],
+            ] as Array<[string, number, (value: number) => void]>).map(([label, value, update]) => (
+              <label className="wcb-stat-card" key={label}>
+                <span className="wcb-stat-label">{label}</span>
+                <input className="wcb-budget-input" type="number" min={0} value={value} aria-label={label} onChange={(event: ChangeEvent<HTMLInputElement>) => update(Number(event.currentTarget.value))} />
+              </label>
+            ))}
+          </div>
+        ) : null}
 
         <div className="wcb-modal-body wcb-budget-body">
           {stats === null ? (
@@ -170,6 +203,12 @@ export function BudgetModal({ stats, budget, dirs, usage, onBudget, onRefresh, o
                 </div>
               </div>
               {ratio > 1 ? <div className="wcb-alert wcb-alert-over">{tt('budgetOver')}</div> : ratio > 0.8 ? <div className="wcb-alert">{tt('budgetWarn')}</div> : null}
+              {stats.degradations.length > 0 ? (
+                <div className="wcb-alert">
+                  <strong>{tt('budgetDegraded')}</strong>
+                  {' ' + stats.degradations.map(item => tt(item === 'file-index-truncated' ? 'budgetDegradeFile' : item === 'code-index-truncated' ? 'budgetDegradeCode' : item === 'commands-truncated' ? 'budgetDegradeCommands' : item === 'standards-truncated' ? 'budgetDegradeStandards' : 'budgetDegradeAi')).join('；')}
+                </div>
+              ) : null}
               <div className="wcb-stat-grid">
                 <div className="wcb-stat-card">
                   <div className="wcb-stat-label">{tt('statFiles')}</div>

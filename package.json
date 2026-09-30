@@ -58,7 +58,9 @@
     "smoke:task-verification": "node --experimental-strip-types scripts/task-verification-smoke.ts",
     "smoke:task-preflight": "node --experimental-strip-types scripts/task-preflight-smoke.ts",
     "smoke:project-defaults": "node --experimental-strip-types scripts/project-defaults-smoke.ts",
-    "smoke:on-demand-context": "node --experimental-strip-types scripts/on-demand-context-smoke.ts"
+    "smoke:on-demand-context": "node --experimental-strip-types scripts/on-demand-context-smoke.ts",
+    "smoke:context-budget": "node --experimental-strip-types scripts/context-budget-smoke.ts",
+    "smoke:diagnostics": "node --experimental-strip-types scripts/diagnostics-smoke.ts"
   },
   "peerDependencies": {
     "@chaoset/sandbox-extra-roots": "^0.4.12",

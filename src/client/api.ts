@@ -5,7 +5,7 @@
  */
 
 import { API } from '../invariant.ts'
-import type { CodeIndexEntry, ContextStats, DetectedProject, EndpointImpact, GitStatus, LoadMode, TokenUsageReport, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceStandards } from '../core/types.ts'
+import type { CodeIndexEntry, ContextPreset, ContextStats, DetectedProject, DiagnosticAction, DiagnosticReport, EndpointImpact, GitStatus, LoadMode, TokenUsageReport, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceStandards } from '../core/types.ts'
 import type { StandardsLibrary } from '../core/standards.ts'
 import type { FileTreeNode } from '../core/fileTree.ts'
 import type { SessionTask } from '../core/task.ts'
@@ -110,7 +110,7 @@ export class WorkspaceCombinerApi {
   }
 
   /** 局部更新工作空间级元信息（模式 / 加载模式 / 置顶 / 颜色 / token 预算）。 */
-  async patchWorkspace(id: string, patch: { mode?: WorkspaceMode; loadMode?: LoadMode; pinned?: boolean; color?: string; tokenBudget?: number; codeIndexEnabled?: boolean; codeIndexBudget?: number; codeIndexSummary?: 'off' | 'llm' }): Promise<void> {
+  async patchWorkspace(id: string, patch: { mode?: WorkspaceMode; loadMode?: LoadMode; pinned?: boolean; color?: string; contextPreset?: ContextPreset; tokenBudget?: number; fileIndexBudget?: number; commandsBudget?: number; codeIndexEnabled?: boolean; codeIndexBudget?: number; codeIndexSummary?: 'off' | 'llm' }): Promise<void> {
     await request<{ ok: boolean }>(API.workspacePatch, {
       method: 'POST',
       body: JSON.stringify({ id, ...patch }),
@@ -178,6 +178,16 @@ export class WorkspaceCombinerApi {
   /** 读取当前工作空间的真实 token 用量（provider 上报，含提示词缓存命中）。 */
   async tokenUsage(): Promise<TokenUsageReport> {
     return await request<TokenUsageReport>(API.tokenUsage, { method: 'GET' })
+  }
+
+  /** 运行当前工作空间的统一诊断。 */
+  async diagnostics(): Promise<DiagnosticReport> {
+    return await request<DiagnosticReport>(API.diagnostics, { method: 'GET' })
+  }
+
+  /** 执行诊断中心允许的一项安全修复。 */
+  async runDiagnosticAction(action: DiagnosticAction): Promise<void> {
+    await request<{ ok: boolean }>(API.diagnosticAction, { method: 'POST', body: JSON.stringify({ action }) })
   }
 
   /** 读取某工作空间已加载（绑定）的会话 id；只有本进程加载过的会话才可刷新。 */

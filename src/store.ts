@@ -12,7 +12,8 @@ import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { emptyStore, type CustomStandard, type LoadMode, type StoreShape, type Workspace, type WorkspaceMode, type WorkspaceRef, type WorkspaceSnapshot, type WorkspaceStandards } from './core/types.ts'
+import { emptyStore, type ContextPreset, type CustomStandard, type LoadMode, type StoreShape, type Workspace, type WorkspaceMode, type WorkspaceRef, type WorkspaceSnapshot, type WorkspaceStandards } from './core/types.ts'
+import { contextPresetConfig } from './core/contextPreset.ts'
 import { parseCustomStandard } from './core/standards.ts'
 import { parseWorkspaceRef } from './core/validate.ts'
 import { STORE_FILE } from './invariant.ts'
@@ -106,8 +107,11 @@ function parseWorkspace(raw: unknown): Workspace | undefined {
     ...(typeof ws.lastSessionAt === 'number' ? { lastSessionAt: ws.lastSessionAt } : {}),
     ...(ws.mode === 'anchor' || ws.mode === 'single' ? { mode: ws.mode } : {}),
     ...(ws.loadMode === 'full' || ws.loadMode === 'summary' || ws.loadMode === 'tree' ? { loadMode: ws.loadMode } : {}),
+    ...(ws.contextPreset === 'economy' || ws.contextPreset === 'balanced' || ws.contextPreset === 'deep' || ws.contextPreset === 'custom' ? { contextPreset: ws.contextPreset } : {}),
     ...(Array.isArray(ws.snapshots) ? { snapshots: ws.snapshots.map(parseSnapshot).filter((s): s is WorkspaceSnapshot => s !== undefined) } : {}),
     ...(typeof ws.tokenBudget === 'number' && Number.isFinite(ws.tokenBudget) && ws.tokenBudget > 0 ? { tokenBudget: Math.round(ws.tokenBudget) } : {}),
+    ...(typeof ws.fileIndexBudget === 'number' && Number.isFinite(ws.fileIndexBudget) && ws.fileIndexBudget >= 0 ? { fileIndexBudget: Math.round(ws.fileIndexBudget) } : {}),
+    ...(typeof ws.commandsBudget === 'number' && Number.isFinite(ws.commandsBudget) && ws.commandsBudget >= 0 ? { commandsBudget: Math.round(ws.commandsBudget) } : {}),
     ...(typeof ws.pinned === 'boolean' ? { pinned: ws.pinned } : {}),
     ...(typeof ws.color === 'string' && ws.color !== '' ? { color: ws.color } : {}),
     ...(typeof ws.codeIndexEnabled === 'boolean' ? { codeIndexEnabled: ws.codeIndexEnabled } : {}),
@@ -120,7 +124,8 @@ function parseWorkspace(raw: unknown): Workspace | undefined {
 /** 构造一个默认工作空间（全新安装 / 迁移 / 兜底）。 */
 function makeDefaultWorkspace(directories: readonly WorkspaceRef[] = []): Workspace {
   const now = Date.now()
-  return { id: randomUUID(), name: '默认工作空间', directories: [...directories], createdAt: now, updatedAt: now }
+  const preset = contextPresetConfig('balanced')
+  return { id: randomUUID(), name: '默认工作空间', directories: [...directories], contextPreset: 'balanced', loadMode: preset.loadMode, tokenBudget: preset.globalBudget, fileIndexBudget: preset.fileIndexBudget, commandsBudget: preset.commandsBudget, codeIndexBudget: preset.codeIndexBudget, codeIndexSummary: preset.codeIndexSummary, createdAt: now, updatedAt: now }
 }
 
 /**
@@ -166,6 +171,7 @@ export class WorkspaceCombinerStore {
   async createWorkspace(name: string, remark?: string, directories: readonly WorkspaceRef[] = [], mode: WorkspaceMode = 'anchor', loadMode: LoadMode = 'summary'): Promise<Workspace> {
     await this.ready
     const now = Date.now()
+    const preset = contextPresetConfig('balanced')
     const ws: Workspace = {
       id: randomUUID(),
       name,
@@ -173,6 +179,12 @@ export class WorkspaceCombinerStore {
       directories: normalizeDirectories(directories),
       mode,
       loadMode,
+      contextPreset: 'balanced',
+      tokenBudget: preset.globalBudget,
+      fileIndexBudget: preset.fileIndexBudget,
+      commandsBudget: preset.commandsBudget,
+      codeIndexBudget: preset.codeIndexBudget,
+      codeIndexSummary: preset.codeIndexSummary,
       createdAt: now,
       updatedAt: now,
     }
@@ -269,7 +281,7 @@ export class WorkspaceCombinerStore {
   }
 
   /** 局部更新工作空间级元信息（置顶 / 颜色 / token 预算 / 功能索引配置）；未提供的字段保持原值。 */
-  async patchMeta(id: string, patch: { pinned?: boolean; color?: string; tokenBudget?: number; codeIndexEnabled?: boolean; codeIndexBudget?: number; codeIndexSummary?: 'off' | 'llm' }): Promise<void> {
+  async patchMeta(id: string, patch: { pinned?: boolean; color?: string; contextPreset?: ContextPreset; tokenBudget?: number; fileIndexBudget?: number; commandsBudget?: number; codeIndexEnabled?: boolean; codeIndexBudget?: number; codeIndexSummary?: 'off' | 'llm' }): Promise<void> {
     await this.ready
     await this.mutate(() => {
       if (!this.shape.workspaces.some(w => w.id === id)) return
@@ -280,7 +292,10 @@ export class WorkspaceCombinerStore {
               ...w,
               ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
               ...(patch.color !== undefined ? { color: patch.color } : {}),
+              ...(patch.contextPreset !== undefined ? { contextPreset: patch.contextPreset } : {}),
               ...(patch.tokenBudget !== undefined ? { tokenBudget: Math.max(1, Math.round(patch.tokenBudget)) } : {}),
+              ...(patch.fileIndexBudget !== undefined ? { fileIndexBudget: Math.max(0, Math.round(patch.fileIndexBudget)) } : {}),
+              ...(patch.commandsBudget !== undefined ? { commandsBudget: Math.max(0, Math.round(patch.commandsBudget)) } : {}),
               ...(patch.codeIndexEnabled !== undefined ? { codeIndexEnabled: patch.codeIndexEnabled } : {}),
               // 0 = 不注入上下文（按需查索引文件），不是「未设置」，别 clamp 成 1。
               ...(patch.codeIndexBudget !== undefined ? { codeIndexBudget: Math.max(0, Math.round(patch.codeIndexBudget)) } : {}),
@@ -341,7 +356,7 @@ export class WorkspaceCombinerStore {
       const now = Date.now()
       this.shape = {
         ...this.shape,
-        workspaces: this.shape.workspaces.map(w => w.id === id ? { ...w, lastSessionAt: now, updatedAt: now } : w),
+        workspaces: this.shape.workspaces.map(w => w.id === id ? { ...w, lastSessionAt: now } : w),
       }
     })
   }

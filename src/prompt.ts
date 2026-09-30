@@ -3,7 +3,7 @@
  * @module dsh-workspace-combiner/prompt
  */
 
-import type { CodeIndexEntry, LoadMode, WorkspaceMode, WorkspaceRef } from './core/types.ts'
+import type { CodeIndexEntry, ContextDegradation, LoadMode, WorkspaceMode, WorkspaceRef } from './core/types.ts'
 import { renderTree, estimateTokens, type FileIndexEntry } from './core/fileTree.ts'
 import type { StandardGroup } from './core/standards.ts'
 import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_COMMANDS_BUDGET, DEFAULT_STANDARDS_BUDGET } from './invariant.ts'
@@ -213,7 +213,12 @@ export interface MultiWorkspacePromptInput {
   mode?: WorkspaceMode
   loadMode?: LoadMode
   entries?: readonly FileIndexEntry[]
+  /** 旧调用兼容：未提供 fileIndexBudget 时作为文件索引预算。 */
   tokenBudget?: number
+  /** 文件索引区块预算。 */
+  fileIndexBudget?: number
+  /** 整个插件注入区块的全局预算；缺省不启用总闸。 */
+  globalBudget?: number
   codeEntries?: readonly CodeIndexEntry[]
   codeIndexBudget?: number
   /** 按需查询文件路径：功能索引不常驻上下文时，给模型一条「需要时去查」的线索。 */
@@ -229,6 +234,12 @@ export interface MultiWorkspacePromptInput {
   commandsPath?: string
   /** 仅属于当前会话的一次性任务目标与范围。 */
   task?: SessionTask
+}
+
+export interface MultiWorkspacePromptResult {
+  text: string
+  degradations: ContextDegradation[]
+  effectiveBudgets: { fileIndex: number; codeIndex: number; standards: number; commands: number }
 }
 
 function renderTask(task: SessionTask, directories: readonly WorkspaceRef[]): string {
@@ -254,13 +265,15 @@ function renderTask(task: SessionTask, directories: readonly WorkspaceRef[]): st
  * @param input - 工作区、加载模式、文件索引、功能索引与开发规范等内容。
  * @returns 符合约定的 prompt 文本；空列表返回 ''。
  */
-export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): string {
+export function renderMultiWorkspacePromptDetailed(input: MultiWorkspacePromptInput): MultiWorkspacePromptResult {
   const {
     workspaces,
     mode = 'anchor',
     loadMode = 'summary',
     entries = [],
     tokenBudget = 0,
+    fileIndexBudget = tokenBudget,
+    globalBudget = Number.POSITIVE_INFINITY,
     codeEntries = [],
     codeIndexBudget = CODE_INDEX_TOKEN_BUDGET,
     codeIndexPath,
@@ -273,7 +286,7 @@ export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): st
   } = input
   // 剔除「禁用」目录（不注入上下文）；主项目（第 0 项）恒保留。
   const active = workspaces.filter((ws, index) => index === 0 || (ws.access ?? 'readwrite') !== 'disabled')
-  if (active.length === 0) return ''
+  if (active.length === 0) return { text: '', degradations: [], effectiveBudgets: { fileIndex: 0, codeIndex: 0, standards: 0, commands: 0 } }
   const hasReadonly = active.some(ws => (ws.access ?? 'readwrite') === 'readonly')
   const primaryLabel = mode === 'single' ? '【主项目 · 核心业务代码】' : '【主项目 · 工作区锚点（文档/非代码文件保存区）】'
   const secondaryLabel = mode === 'single' ? '【参考依赖模块】' : '【代码项目】'
@@ -288,52 +301,79 @@ export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): st
       return `${header}${index + 1}.${ws.name}${role}${lock}绝对路径：${ws.path}`
     })
     .join('\n')
-  const standards = renderStandards(standardGroups, standardsBudget)
-  const fileIndex = renderFileIndex(entries, loadMode, tokenBudget)
-  const codeIndex = renderCodeIndex(codeEntries, codeIndexBudget)
-  const commands = renderCommands(active, commandsBudget)
   const taskBlock = task === undefined ? '' : renderTask(task, active)
-  const standardsUsage = standards !== ''
-    ? ''
-    : standardsPath !== undefined && standardsPath !== ''
-      ? '- 开发规范未常驻上下文：写入/修改项目文件前，先按目录或技术栈 grep/read ' + standardsPath + ' 的相关小节；不要为此整份通读。'
-      : ''
-  const commandsUsage = commands !== ''
-    ? ''
-    : commandsPath !== undefined && commandsPath !== ''
-      ? '- 各项目启动/测试/构建命令未常驻上下文：运行命令前先 grep/read ' + commandsPath + ' 中对应项目；仍必须在项目绝对路径下执行。'
-      : ''
-  // 常驻时用「@功能名」定位；改为按需（预算 <=0）时给一条查询线索，否则模型不知道有这份索引。
-  const codeIndexUsage = codeIndex !== ''
-    ? '- @功能名（如 @workspaceCreate）：指上方「功能/接口索引」里的名字，展开即读取该项列出的服务端/前端文件，用于快速定位。'
-    : codeIndexPath !== undefined && codeIndexPath !== ''
-      ? '- 功能/接口索引（端点 ↔ 前后端落点）未常驻上下文：需要定位端点时先 grep ' + codeIndexPath + '（每行一条：@功能名 → 端点 | 服务端 文件:行 | 前端 文件:行），不必为此通读仓库。'
-      : ''
-  return [
-    '# 多工作区联合开发模式生效',
-    `当前会话加载【${active.length}】个项目目录：`,
-    list,
-    ...(taskBlock !== '' ? ['', taskBlock] : []),
-    ...(commands !== '' ? ['', commands] : []),
-    ...(standards !== '' ? ['', standards] : []),
-    ...(fileIndex !== '' ? ['', fileIndex] : []),
-    ...(codeIndex !== '' ? ['', codeIndex] : []),
-    '',
-    '# @指令 · 动态范围',
-    '- 消息中以 @ 开头的 token 是被显式引用的路径：@绝对路径，或 @相对某工作区根的相对路径。',
-    '- @结尾带 / 的是目录：需要其内容时列出其目录树（ls / read）。',
-    '- 其它是文件：需要其内容时先用 read 读取，禁止未读就声称已检查。',
-    '- 含空格的路径用 @"路径 with spaces" 包裹。',
-    ...(standardsUsage !== '' ? [standardsUsage] : []),
-    ...(commandsUsage !== '' ? [commandsUsage] : []),
-    ...(codeIndexUsage !== '' ? [codeIndexUsage] : []),
-    '- 被 @ 引用的文件/目录应优先纳入本次处理范围；不在上方文件索引里的路径同样可直接 read（沙盒读不受限）。',
-    '',
-    '开发强制规则：',
-    '1. 读写文件、查看代码必须使用完整绝对路径，禁止相对路径',
-    '2. 多个仓库Git相互独立，提交互不干扰',
-    '3. 做接口变更时，同步修改后端代码与前端请求代码',
-    '4. 终端执行命令，必须填写文件完整绝对路径，不允许直接使用相对路径执行',
-    ...(hasReadonly ? ['5. 标记【只读】的目录仅可读取，禁止写入、新建、删除其中任何文件'] : []),
-  ].join('\n')
+  const requested = { fileIndex: Math.max(0, fileIndexBudget), codeIndex: Math.max(0, codeIndexBudget), standards: Math.max(0, standardsBudget), commands: Math.max(0, commandsBudget) }
+  const effective = { ...requested }
+  let renderedCodeEntries = [...codeEntries]
+  const degradations = new Set<ContextDegradation>()
+
+  const compose = (): string => {
+    const standards = renderStandards(standardGroups, effective.standards)
+    const commands = renderCommands(active, effective.commands)
+    const fileIndex = renderFileIndex(entries, loadMode, effective.fileIndex)
+    const codeIndex = renderCodeIndex(renderedCodeEntries, effective.codeIndex)
+    const standardsUsage = standards !== '' ? '' : standardsPath ? '- 开发规范未常驻上下文：写入/修改项目文件前，先按目录或技术栈 grep/read ' + standardsPath + ' 的相关小节；不要为此整份通读。' : ''
+    const commandsUsage = commands !== '' ? '' : commandsPath ? '- 各项目启动/测试/构建命令未常驻上下文：运行命令前先 grep/read ' + commandsPath + ' 中对应项目；仍必须在项目绝对路径下执行。' : ''
+    const codeIndexUsage = codeIndex !== ''
+      ? '- @功能名（如 @workspaceCreate）：指上方「功能/接口索引」里的名字，展开即读取该项列出的服务端/前端文件，用于快速定位。'
+      : codeIndexPath ? '- 功能/接口索引（端点 ↔ 前后端落点）未常驻上下文：需要定位端点时先 grep ' + codeIndexPath + '（每行一条：@功能名 → 端点 | 服务端 文件:行 | 前端 文件:行），不必为此通读仓库。' : ''
+    const degradationLabels: Record<ContextDegradation, string> = {
+      'file-index-truncated': '文件索引已按全局预算截断',
+      'code-index-truncated': '功能/接口索引已按全局预算截断或改为按需查询',
+      'commands-truncated': '项目命令已按全局预算截断或改为按需查询',
+      'standards-truncated': '开发规范已在保留优先级后按全局预算截断',
+      'ai-content-skipped': 'AI 生成的索引摘要已跳过，保留确定性端点信息',
+    }
+    return [
+      '# 多工作区联合开发模式生效',
+      `当前会话加载【${active.length}】个项目目录：`,
+      list,
+      ...(taskBlock !== '' ? ['', taskBlock] : []),
+      ...(commands !== '' ? ['', commands] : []),
+      ...(standards !== '' ? ['', standards] : []),
+      ...(degradations.size > 0 ? ['', '# 上下文预算降级', ...[...degradations].map(item => '- ' + degradationLabels[item])] : []),
+      ...(fileIndex !== '' ? ['', fileIndex] : []),
+      ...(codeIndex !== '' ? ['', codeIndex] : []),
+      '',
+      '# @指令 · 动态范围',
+      '- 消息中以 @ 开头的 token 是被显式引用的路径：@绝对路径，或 @相对某工作区根的相对路径。',
+      '- @结尾带 / 的是目录：需要其内容时列出其目录树（ls / read）。',
+      '- 其它是文件：需要其内容时先用 read 读取，禁止未读就声称已检查。',
+      '- 含空格的路径用 @"路径 with spaces" 包裹。',
+      ...(standardsUsage !== '' ? [standardsUsage] : []),
+      ...(commandsUsage !== '' ? [commandsUsage] : []),
+      ...(codeIndexUsage !== '' ? [codeIndexUsage] : []),
+      '- 被 @ 引用的文件/目录应优先纳入本次处理范围；全局预算不足也不得静默忽略用户显式引用。',
+      '',
+      '开发强制规则：',
+      '1. 读写文件、查看代码必须使用完整绝对路径，禁止相对路径',
+      '2. 多个仓库Git相互独立，提交互不干扰',
+      '3. 做接口变更时，同步修改后端代码与前端请求代码',
+      '4. 终端执行命令，必须填写文件完整绝对路径，不允许直接使用相对路径执行',
+      ...(hasReadonly ? ['5. 标记【只读】的目录仅可读取，禁止写入、新建、删除其中任何文件'] : []),
+    ].join('\n')
+  }
+
+  let text = compose()
+  const trim = (key: keyof typeof effective, degradation: ContextDegradation): void => {
+    if (effective[key] <= 0) return
+    const excess = Math.max(128, estimateTokens(text) - globalBudget)
+    effective[key] = Math.max(0, effective[key] - excess)
+    degradations.add(degradation)
+    text = compose()
+  }
+  for (let pass = 0; pass < 8 && estimateTokens(text) > globalBudget; pass++) trim('fileIndex', 'file-index-truncated')
+  for (let pass = 0; pass < 8 && estimateTokens(text) > globalBudget; pass++) trim('codeIndex', 'code-index-truncated')
+  if (estimateTokens(text) > globalBudget && renderedCodeEntries.some(entry => entry.summary !== undefined && entry.summary !== '')) {
+    renderedCodeEntries = renderedCodeEntries.map(({ summary: _summary, ...entry }) => entry)
+    degradations.add('ai-content-skipped')
+    text = compose()
+  }
+  for (let pass = 0; pass < 8 && estimateTokens(text) > globalBudget; pass++) trim('commands', 'commands-truncated')
+  for (let pass = 0; pass < 8 && estimateTokens(text) > globalBudget; pass++) trim('standards', 'standards-truncated')
+  return { text, degradations: [...degradations], effectiveBudgets: effective }
+}
+
+export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): string {
+  return renderMultiWorkspacePromptDetailed(input).text
 }

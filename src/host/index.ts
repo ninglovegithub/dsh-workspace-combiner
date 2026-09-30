@@ -38,6 +38,7 @@ import { persistOnDemandContext } from './onDemandContext.ts'
 import { TokenUsageTracker, type TrackedEvent, type TrackedSession } from './tokenUsage.ts'
 import type { SessionTask } from '../core/task.ts'
 import { resolveStandardGroups, type StandardGroup } from '../core/standards.ts'
+import { resolveWorkspaceContext } from '../core/contextPreset.ts'
 
 /** 稳定的 cordis 插件名（编排行 id）。 */
 export const name = PLUGIN_ID
@@ -66,10 +67,12 @@ interface SessionLike {
 }
 
 interface SessionSelection {
+  workspaceUpdatedAt: number
   directories: readonly WorkspaceRef[]
   mode: WorkspaceMode
   loadMode: LoadMode
-  tokenBudget: number
+  globalBudget: number
+  fileIndexBudget: number
   entries: FileIndexEntry[]
   codeEntries: CodeIndexEntry[]
   codeIndexBudget: number
@@ -133,7 +136,8 @@ export function apply(ctx: Context, config: Config = {}): void {
           mode: selected.mode,
           loadMode: selected.loadMode,
           entries: selected.entries,
-          tokenBudget: selected.tokenBudget,
+          fileIndexBudget: selected.fileIndexBudget,
+          globalBudget: selected.globalBudget,
           codeEntries: selected.codeEntries,
           codeIndexBudget: selected.codeIndexBudget,
           // 预算 <=0 = 不常驻：改给一条按需查询线索（索引空说明功能索引未启用，则不给）。
@@ -159,7 +163,8 @@ export function apply(ctx: Context, config: Config = {}): void {
    */
   const selectWorkspace = (sessionId: string, ws: Workspace): void => {
     const task = taskBySession.get(sessionId)
-    const loadMode = task?.loadMode ?? ws.loadMode ?? 'summary'
+    const context = resolveWorkspaceContext(ws)
+    const loadMode = task?.loadMode ?? context.loadMode
     const mode = ws.mode ?? 'anchor'
     const selectedPaths = task === undefined ? undefined : new Set(task.directoryPaths)
     const directories = ws.directories
@@ -168,15 +173,16 @@ export function apply(ctx: Context, config: Config = {}): void {
         ...directory,
         ...(task?.type === 'review' ? { access: 'readonly' as const } : {}),
       }))
-    const tokenBudget = ws.tokenBudget ?? DEFAULT_TOKEN_BUDGET
-    const codeIndexBudget = task?.includeCodeIndex === false ? 0 : ws.codeIndexBudget ?? DEFAULT_CODE_INDEX_BUDGET
-    const standardsBudget = ws.standards?.budget ?? DEFAULT_STANDARDS_BUDGET
-    const commandsBudget = 0
+    const globalBudget = context.globalBudget
+    const fileIndexBudget = context.fileIndexBudget
+    const codeIndexBudget = task?.includeCodeIndex === false ? 0 : context.codeIndexBudget
+    const standardsBudget = context.standardsBudget
+    const commandsBudget = context.commandsBudget
     const nonce = (selectionNonceBySession.get(sessionId) ?? 0) + 1
     selectionNonceBySession.set(sessionId, nonce)
     // 先绑定目录快照，再异步补充文件树。此前在文件树扫描之后才写入 Map：大型
     // 仓库扫描期间 system prompt 可能已被组装，导致首轮请求完全没有多工作区上下文。
-    selectionBySession.set(sessionId, { directories, mode, loadMode, tokenBudget, entries: [], codeEntries: [], codeIndexBudget, standardGroups: [], standardsBudget, commandsBudget, ...(task === undefined ? {} : { task }) })
+    selectionBySession.set(sessionId, { workspaceUpdatedAt: ws.updatedAt, directories, mode, loadMode, globalBudget, fileIndexBudget, entries: [], codeEntries: [], codeIndexBudget, standardGroups: [], standardsBudget, commandsBudget, ...(task === undefined ? {} : { task }) })
     void (async () => {
 
       // 各目录并行扫描（顺序由 Promise.all 保持）；summary 只注入递归计数、不建树。
@@ -199,7 +205,8 @@ export function apply(ctx: Context, config: Config = {}): void {
       // 会话可能在扫描期间已被关闭；不要把过期快照重新放回 Map。
       if (sessionWorkspaceBySession.get(sessionId) === ws.id && selectionNonceBySession.get(sessionId) === nonce) {
         selectionBySession.set(sessionId, {
-          directories, mode, loadMode, tokenBudget, entries, codeEntries, codeIndexBudget,
+          workspaceUpdatedAt: ws.updatedAt,
+          directories, mode, loadMode, globalBudget, fileIndexBudget, entries, codeEntries, codeIndexBudget,
           standardGroups,
           standardsBudget,
           ...(standardsBudget <= 0 ? { standardsPath: onDemand.standardsPath } : {}),
@@ -209,7 +216,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         })
       }
       // AI 摘要在后台生成：不阻塞会话创建与首轮；完成后更新快照并失效渲染缓存。
-      if (baseCodeEntries.length > 0 && (ws.codeIndexSummary ?? 'off') === 'llm' && cachedSummaries === undefined) {
+      if (baseCodeEntries.length > 0 && context.codeIndexSummary === 'llm' && cachedSummaries === undefined) {
         void (async () => {
           const generated = await summaryCache.ensure(signature, () => summarizeFeatures(ctx, sessionId, baseCodeEntries))
           if (generated.size === 0) return
@@ -295,6 +302,10 @@ export function apply(ctx: Context, config: Config = {}): void {
       // 用量按工作空间聚合：会话 -> 工作空间的绑定在 session/created 时确定。
       sessionsOfWorkspace: (workspaceId: string) =>
         [...sessionWorkspaceBySession].filter(([, id]) => id === workspaceId).map(([sessionId]) => sessionId),
+      sessionVersionsOfWorkspace: (workspaceId: string) =>
+        [...sessionWorkspaceBySession]
+          .filter(([, id]) => id === workspaceId)
+          .map(([sessionId]) => selectionBySession.get(sessionId)?.workspaceUpdatedAt ?? 0),
       // 工作空间改动后立刻刷新在跑的会话（见 refreshWorkspaceSessions）。
       refreshSessions: refreshWorkspaceSessions,
       refreshSession,

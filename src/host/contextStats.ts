@@ -3,12 +3,12 @@
  * @module dsh-workspace-combiner/host/contextStats
  */
 
-import { loadModeMaxDepth, type CodeIndexEntry, type ContextStats, type DirectoryContextStat, type LoadMode, type WorkspaceMode, type WorkspaceRef } from '../core/types.ts'
+import { loadModeMaxDepth, type CodeIndexEntry, type ContextPreset, type ContextStats, type DirectoryContextStat, type LoadMode, type WorkspaceMode, type WorkspaceRef } from '../core/types.ts'
 import { estimateTokens, type FileIndexEntry } from '../core/fileTree.ts'
 import type { StandardGroup } from '../core/standards.ts'
 import type { FileIndexCache } from './fileIndex.ts'
 import { codeIndexTextFile, type CodeIndexCache } from './codeIndex.ts'
-import { renderCodeIndex, renderCommands, renderCommandsText, renderFileIndex, renderMultiWorkspacePrompt, renderStandards, renderStandardsText } from '../prompt.ts'
+import { renderCodeIndex, renderCommands, renderCommandsText, renderFileIndex, renderMultiWorkspacePromptDetailed, renderStandards, renderStandardsText } from '../prompt.ts'
 import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_COMMANDS_BUDGET } from '../invariant.ts'
 import { commandsTextFile, standardsTextFile } from './onDemandContext.ts'
 
@@ -26,8 +26,9 @@ export interface ContextStatsInput {
   mode: WorkspaceMode
   loadMode: LoadMode
   fileIndexCache: FileIndexCache
-  /** 与注入 prompt 使用同一预算，保证统计值与实际注入一致。 */
-  tokenBudget?: number
+  preset?: ContextPreset
+  globalBudget?: number
+  fileIndexBudget?: number
   codeIndexCache?: CodeIndexCache
   codeConfig?: CodeIndexStatsConfig
   /** 生效的开发规范分组。 */
@@ -47,7 +48,9 @@ export async function computeContextStats(input: ContextStatsInput): Promise<Con
     mode,
     loadMode,
     fileIndexCache,
-    tokenBudget = 0,
+    preset = 'custom',
+    globalBudget = Number.POSITIVE_INFINITY,
+    fileIndexBudget = 0,
     codeIndexCache,
     codeConfig,
     standardGroups = [],
@@ -71,7 +74,7 @@ export async function computeContextStats(input: ContextStatsInput): Promise<Con
           files: counts.files,
           dirs: counts.dirs,
           // 逐目录条形图用「该目录单独渲染」的近似值（含一次区块标题）。
-          tokens: estimateTokens(renderFileIndex([entry], loadMode, tokenBudget)),
+          tokens: estimateTokens(renderFileIndex([entry], loadMode, fileIndexBudget)),
         },
       }
     }))
@@ -79,8 +82,6 @@ export async function computeContextStats(input: ContextStatsInput): Promise<Con
   const fileEntries = perDirectory.map(item => item.entry)
   const totalFiles = stats.reduce((sum, s) => sum + s.files, 0)
   const totalDirs = stats.reduce((sum, s) => sum + s.dirs, 0)
-  // 整块渲染一次才是真实区块大小（逐目录近似值会重复计算区块标题）。
-  const fileIndexTokens = estimateTokens(renderFileIndex(fileEntries, loadMode, tokenBudget))
   // 功能索引也算进固定开销，面板总额才与实际注入一致；关闭时不计。
   const codeEntries: CodeIndexEntry[] = []
   if (codeConfig?.enabled !== false && codeIndexCache !== undefined && directories.length > 0) {
@@ -95,16 +96,13 @@ export async function computeContextStats(input: ContextStatsInput): Promise<Con
   // 各区块分别计费：面板才能显示「谁在吃预算」，而不是只知道一个总数。
   const standardsText = renderStandardsText(standardGroups)
   const commandsText = renderCommandsText(directories)
-  const standardsTokens = estimateTokens(renderStandards(standardGroups, standardsBudget))
-  const codeIndexTokens = estimateTokens(renderCodeIndex(codeEntries, codeIndexBudget))
-  const commandsTokens = estimateTokens(renderCommands(directories, commandsBudgetResolved))
-  // 固定开销 = 整块渲染总量 - 各已计费区块，保证面板各项相加等于实际注入量。
-  const totalTokens = estimateTokens(renderMultiWorkspacePrompt({
+  const rendered = renderMultiWorkspacePromptDetailed({
     workspaces: directories,
     mode,
     loadMode,
     entries: fileEntries,
-    tokenBudget,
+    fileIndexBudget,
+    globalBudget,
     codeEntries,
     codeIndexBudget,
     ...(codeIndexBudget <= 0 && codeEntries.length > 0 ? { codeIndexPath: codeIndexTextFile() } : {}),
@@ -113,7 +111,12 @@ export async function computeContextStats(input: ContextStatsInput): Promise<Con
     ...(standardsBudget <= 0 && standardsText !== '' ? { standardsPath: standardsTextFile() } : {}),
     commandsBudget: commandsBudgetResolved,
     ...(commandsBudgetResolved <= 0 && commandsText !== '' ? { commandsPath: commandsTextFile() } : {}),
-  }))
+  })
+  const fileIndexTokens = estimateTokens(renderFileIndex(fileEntries, loadMode, rendered.effectiveBudgets.fileIndex))
+  const standardsTokens = estimateTokens(renderStandards(standardGroups, rendered.effectiveBudgets.standards))
+  const codeIndexTokens = estimateTokens(renderCodeIndex(codeEntries, rendered.effectiveBudgets.codeIndex))
+  const commandsTokens = estimateTokens(renderCommands(directories, rendered.effectiveBudgets.commands))
+  const totalTokens = estimateTokens(rendered.text)
   const promptOverheadTokens = Math.max(0, totalTokens - fileIndexTokens - codeIndexTokens - standardsTokens - commandsTokens)
-  return { loadMode, directories: stats, totalFiles, totalDirs, fileIndexTokens, promptOverheadTokens, standardsTokens, codeIndexTokens, commandsTokens }
+  return { preset, loadMode, directories: stats, totalFiles, totalDirs, fileIndexTokens, promptOverheadTokens, standardsTokens, codeIndexTokens, commandsTokens, totalTokens, globalBudget, degradations: rendered.degradations }
 }
