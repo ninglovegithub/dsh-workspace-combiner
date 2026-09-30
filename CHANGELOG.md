@@ -8,6 +8,8 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-30
+
 ### Added — task-scope risk check before session creation
 
 - The confirmation step now blocks creation when a selected directory is missing or inaccessible,
