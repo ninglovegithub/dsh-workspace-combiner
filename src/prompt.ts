@@ -7,7 +7,7 @@ import type { CodeIndexEntry, LoadMode, WorkspaceMode, WorkspaceRef } from './co
 import { renderTree, estimateTokens, type FileIndexEntry } from './core/fileTree.ts'
 import type { StandardGroup } from './core/standards.ts'
 import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_COMMANDS_BUDGET, DEFAULT_STANDARDS_BUDGET } from './invariant.ts'
-import { taskTypeLabel, type SessionTask } from './core/task.ts'
+import { taskTypeLabel, taskVerificationLabel, type SessionTask } from './core/task.ts'
 
 /** 功能索引默认预算（不挤占文件索引配额）。 */
 export const CODE_INDEX_TOKEN_BUDGET = DEFAULT_CODE_INDEX_BUDGET
@@ -210,7 +210,9 @@ export interface MultiWorkspacePromptInput {
 
 function renderTask(task: SessionTask, directories: readonly WorkspaceRef[]): string {
   const selected = directories.filter(directory => task.directoryPaths.includes(directory.path)).map(directory => directory.name)
-  const verification = task.verification.length === 0 ? '未指定；完成后明确说明实际验证情况' : task.verification.join('、')
+  const verification = task.verification.length === 0
+    ? '未指定；完成后明确说明实际验证情况'
+    : task.verification.map(taskVerificationLabel).join('、')
   const reviewRule = task.type === 'review' ? '\n- 本任务是代码审查：禁止修改、新建或删除任何项目文件，只输出问题、证据与建议。' : ''
   return [
     '# 本次任务',

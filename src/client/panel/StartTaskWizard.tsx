@@ -6,7 +6,7 @@
 
 import { useEffect, useState, type ChangeEvent, type ReactElement } from 'react'
 import type { CodeIndexEntry, LoadMode, WorkspaceRef } from '../../core/types.ts'
-import { recommendTask, type SessionTask, type TaskRecommendation, type TaskType } from '../../core/task.ts'
+import { recommendTask, taskVerificationCoverage, type SessionTask, type TaskRecommendation, type TaskType, type TaskVerification } from '../../core/task.ts'
 import { tt } from '../locales.ts'
 
 interface StartTaskWizardProps {
@@ -17,6 +17,7 @@ interface StartTaskWizardProps {
 }
 
 const TASK_TYPES: TaskType[] = ['feature', 'api-change', 'bugfix', 'review', 'refactor', 'custom']
+const VERIFICATIONS: TaskVerification[] = ['run', 'test', 'build', 'review-impact']
 
 function typeLabel(type: TaskType): string {
   switch (type) {
@@ -35,6 +36,13 @@ function recommendationLabel(recommendation: TaskRecommendation): string {
   }
   if (recommendation.mode === 'weak-match') return tt('taskWeakScope', { n: recommendation.weakEndpoints.length })
   return tt('taskDefaultScope')
+}
+
+function verificationLabel(verification: TaskVerification): string {
+  if (verification === 'run') return tt('taskVerificationRun')
+  if (verification === 'test') return tt('taskVerificationTest')
+  if (verification === 'build') return tt('taskVerificationBuild')
+  return tt('taskVerificationImpact')
 }
 
 export function StartTaskWizard({ directories, codeEntries, onCreate, onClose }: StartTaskWizardProps): ReactElement {
@@ -65,6 +73,15 @@ export function StartTaskWizard({ directories, codeEntries, onCreate, onClose }:
       directoryPaths: current.directoryPaths.includes(path)
         ? current.directoryPaths.filter(item => item !== path)
         : [...current.directoryPaths, path],
+    }))
+  }
+
+  const toggleVerification = (verification: TaskVerification): void => {
+    setTask(current => ({
+      ...current,
+      verification: current.verification.includes(verification)
+        ? current.verification.filter(item => item !== verification)
+        : [...current.verification, verification],
     }))
   }
 
@@ -127,6 +144,31 @@ export function StartTaskWizard({ directories, codeEntries, onCreate, onClose }:
               </div>
             </div>
             <label className="wcb-check-row"><input type="checkbox" checked={task.includeCodeIndex} onChange={(event) => setTask(current => ({ ...current, includeCodeIndex: event.currentTarget.checked }))} />{tt('taskIncludeCodeIndex')}</label>
+            <div className="wcb-field">
+              <span>{tt('taskVerification')}</span>
+              <div className="wcb-task-verifications">
+                {VERIFICATIONS.map(verification => {
+                  const coverage = taskVerificationCoverage(verification, task.directoryPaths, directories)
+                  return (
+                    <label className="wcb-task-verification" key={verification}>
+                      <input type="checkbox" checked={task.verification.includes(verification)} onChange={() => toggleVerification(verification)} />
+                      <span>
+                        <strong>{verificationLabel(verification)}</strong>
+                        {coverage !== undefined ? (
+                          <small>{coverage.total === 0 ? tt('taskVerificationNoProjects') : tt('taskVerificationCoverage', { configured: coverage.configured, total: coverage.total })}</small>
+                        ) : null}
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+              {VERIFICATIONS.some(verification => {
+                if (!task.verification.includes(verification)) return false
+                const coverage = taskVerificationCoverage(verification, task.directoryPaths, directories)
+                return coverage !== undefined && coverage.total > 0 && coverage.configured === 0
+              }) ? <div className="wcb-task-verification-warn">{tt('taskVerificationMissingCommand')}</div> : null}
+              <div className="wcb-hint">{tt('taskVerificationHint')}</div>
+            </div>
             <div className="wcb-hint">{tt('taskSessionOnlyHint')}</div>
           </div>
         ) : null}
@@ -139,7 +181,7 @@ export function StartTaskWizard({ directories, codeEntries, onCreate, onClose }:
               <div><span>{tt('taskScope')}</span><strong>{tt('taskDirectoryCount', { n: task.directoryPaths.length })}</strong></div>
               <div><span>{tt('taskScopeReason')}</span><strong>{recommendationLabel(recommendation)}</strong></div>
               <div><span>{tt('loadModeLabel')}</span><strong>{task.loadMode}</strong></div>
-              <div><span>{tt('taskVerification')}</span><strong>{task.verification.length > 0 ? task.verification.join(' · ') : tt('taskVerificationNone')}</strong></div>
+              <div><span>{tt('taskVerification')}</span><strong>{task.verification.length > 0 ? task.verification.map(verificationLabel).join(' · ') : tt('taskVerificationNone')}</strong></div>
             </div>
           </div>
         ) : null}

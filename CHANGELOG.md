@@ -8,6 +8,15 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+### Improved — editable task verification with command coverage
+
+- Step two of Start Task now exposes Run, Test, Build, and Impact review toggles instead of
+  hiding the task-type defaults in an uneditable configuration.
+- Run/Test/Build show how many selected code projects have the corresponding command configured.
+  Missing coverage produces a non-blocking warning while still allowing script discovery.
+- The confirmation page and injected prompt use readable verification labels instead of internal
+  enum values such as `review-impact`.
+
 ### Improved — confidence-aware task scope recommendations
 
 - Start Task narrows the project scope only when an Exact/Normalized endpoint has a complete

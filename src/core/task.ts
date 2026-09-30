@@ -24,6 +24,11 @@ export interface TaskRecommendation {
 const TASK_TYPES = new Set<TaskType>(['feature', 'api-change', 'bugfix', 'review', 'refactor', 'custom'])
 const LOAD_MODES = new Set<LoadMode>(['summary', 'tree', 'full'])
 const VERIFICATIONS = new Set<TaskVerification>(['run', 'test', 'build', 'review-impact'])
+const VERIFICATION_COMMAND: Partial<Record<TaskVerification, 'run' | 'test' | 'build'>> = {
+  run: 'run',
+  test: 'test',
+  build: 'build',
+}
 
 export function parseSessionTask(raw: unknown): SessionTask | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
@@ -122,6 +127,29 @@ export function recommendTask(type: TaskType, description: string, directories: 
     weakEndpoints,
     mode,
     directoryFeatures,
+  }
+}
+
+export function taskVerificationCoverage(
+  verification: TaskVerification,
+  directoryPaths: readonly string[],
+  directories: readonly WorkspaceRef[],
+): { configured: number; total: number } | undefined {
+  const command = VERIFICATION_COMMAND[verification]
+  if (command === undefined) return undefined
+  const selectedProjects = directories.filter((directory, index) => index > 0 && directoryPaths.includes(directory.path))
+  return {
+    total: selectedProjects.length,
+    configured: selectedProjects.filter(directory => (directory.commands?.[command] ?? '').trim() !== '').length,
+  }
+}
+
+export function taskVerificationLabel(verification: TaskVerification): string {
+  switch (verification) {
+    case 'run': return '启动验证'
+    case 'test': return '测试'
+    case 'build': return '构建'
+    case 'review-impact': return '变更影响复核'
   }
 }
 

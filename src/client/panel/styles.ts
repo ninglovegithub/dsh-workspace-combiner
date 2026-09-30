@@ -242,6 +242,13 @@ const PANEL_CSS = String.raw`
 .wcb-task-dir strong{font-size:10.5px;color:var(--wcb-text2)}
 .wcb-task-dir small{font-size:9px;color:var(--wcb-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wcb-task-dir em{font-size:9px;color:var(--wcb-accent);font-style:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wcb-task-verifications{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}
+.wcb-task-verification{display:flex;align-items:flex-start;gap:6px;border:1px solid var(--wcb-line);border-radius:5px;padding:5px 7px;background:var(--wcb-surface);cursor:pointer}
+.wcb-task-verification>input{margin-top:2px}
+.wcb-task-verification>span{display:flex;flex-direction:column;min-width:0}
+.wcb-task-verification strong{font-size:10px;color:var(--wcb-text2);font-weight:500}
+.wcb-task-verification small{font-size:8.5px;color:var(--wcb-dim)}
+.wcb-task-verification-warn{font-size:9px;color:var(--wcb-warn);line-height:1.4}
 .wcb-check-row{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--wcb-text2)}
 .wcb-task-summary{display:flex;flex-direction:column;gap:6px}
 .wcb-task-summary>div{display:grid;grid-template-columns:90px 1fr;gap:8px;border-bottom:1px solid var(--wcb-line);padding-bottom:5px}
