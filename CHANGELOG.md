@@ -8,6 +8,8 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-30
+
 ### Improved — automatic grouping and smart defaults
 
 - Workspace scans now suggest Backend / Frontend / Reference / Other groups by stack and project
