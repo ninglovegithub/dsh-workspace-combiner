@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useRef, useState, type ChangeEvent, type ReactElement } from 'react'
-import type { DetectedProject, WorkspaceMode, WorkspaceRef } from '../../core/types.ts'
+import type { DetectedProject, LoadMode, WorkspaceMode, WorkspaceRef } from '../../core/types.ts'
 import { DEFAULT_WORKSPACE_NAME } from '../../invariant.ts'
 import { WorkspaceCombinerApi } from '../api.ts'
 import { tt } from '../locales.ts'
@@ -15,7 +15,14 @@ import { TypeBadge } from './typeBadge.tsx'
 interface NewWorkspaceWizardProps {
   pickDirectory: () => Promise<string | null>
   onClose: () => void
-  onCreate: (name: string, basePath: string, directories: readonly WorkspaceRef[], mode: WorkspaceMode) => void
+  onCreate: (name: string, basePath: string, directories: readonly WorkspaceRef[], mode: WorkspaceMode, loadMode: LoadMode) => void
+}
+
+function suggestedGroupLabel(project: DetectedProject): string {
+  if (project.suggestedGroup === 'backend') return tt('groupBackend')
+  if (project.suggestedGroup === 'frontend') return tt('groupFrontend')
+  if (project.suggestedGroup === 'reference') return tt('groupRef')
+  return tt('groupOther')
 }
 
 export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWorkspaceWizardProps): ReactElement {
@@ -95,9 +102,11 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
 
   const finalName = name.trim() === '' ? DEFAULT_WORKSPACE_NAME : name.trim()
   const selected = projects.filter(p => checked.has(p.root))
-  // 识别出的项目类型顺带带上预填命令（面板里可改），省掉「这项目怎么跑」的手工录入。
+  const suggestedLoadMode: LoadMode = selected.length > 0 && selected.length <= 4 ? 'tree' : 'summary'
+  // 识别出的项目顺带带上自动分组、访问模式与真实脚本命令；创建后仍可逐项修改。
   const buildSecondaryRefs = (): WorkspaceRef[] => selected.map(p => ({
     id: p.root, name: p.name, path: p.root, projectType: p.type, evidence: p.evidence,
+    access: 'readwrite', group: suggestedGroupLabel(p),
     ...(p.commands === undefined ? {} : { commands: p.commands }),
   }))
 
@@ -171,6 +180,10 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
                       <div className="wcb-scan-info">
                         <div className="wcb-scan-name">{p.name}</div>
                         <div className="wcb-scan-path" title={p.root}>{p.root}</div>
+                        <div className="wcb-scan-defaults">
+                          <span>{tt('wizardAutoGroup', { group: suggestedGroupLabel(p) })}</span>
+                          <span>{p.commands === undefined ? tt('wizardNoCommandDefault') : tt('wizardCommandDefaults', { n: Object.keys(p.commands).length })}</span>
+                        </div>
                       </div>
                       <TypeBadge type={p.type} evidence={p.evidence} />
                     </li>
@@ -184,6 +197,11 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
         {step === 3 ? (
           <div className="wcb-wizard-body">
             <div className="wcb-hint">{tt('wizardSummary', { name: finalName, base: basePath, n: selected.length })}</div>
+            <div className="wcb-smart-defaults">
+              <strong>{tt('wizardSmartDefaults')}</strong>
+              <span>{tt('wizardSuggestedLoadMode', { mode: suggestedLoadMode === 'tree' ? tt('loadModeTree') : tt('loadModeSummary') })}</span>
+              <span>{tt('wizardDefaultsEditable')}</span>
+            </div>
           </div>
         ) : null}
 
@@ -193,7 +211,7 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
           {step < 3 ? (
             <button type="button" className="wcb-btn-primary" aria-label={tt('wizardNext')} disabled={step === 1 && basePath === ''} onClick={() => setStep((step + 1) as 1 | 2 | 3)}>{tt('wizardNext')}</button>
           ) : (
-            <button type="button" className="wcb-btn-primary" aria-label={tt('wizardCreate')} disabled={basePath === ''} onClick={() => onCreate(finalName, basePath, buildSecondaryRefs(), mode)}>{tt('wizardCreate')}</button>
+            <button type="button" className="wcb-btn-primary" aria-label={tt('wizardCreate')} disabled={basePath === ''} onClick={() => onCreate(finalName, basePath, buildSecondaryRefs(), mode, suggestedLoadMode)}>{tt('wizardCreate')}</button>
           )}
         </div>
       </div>

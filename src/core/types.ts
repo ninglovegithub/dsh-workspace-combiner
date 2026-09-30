@@ -127,6 +127,8 @@ export interface DetectedProject {
   evidence: string
   /** 按项目类型推断的常用命令默认值（面板可改）。 */
   commands?: DirectoryCommands
+  /** 根据技术栈和目录名推断的分组语义，客户端映射为当前语言标签。 */
+  suggestedGroup?: 'backend' | 'frontend' | 'reference' | 'other'
 }
 
 /** 工作空间目录配置快照（一键保存/恢复目录选择 + 访问模式 + 分组）。 */

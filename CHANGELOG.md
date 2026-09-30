@@ -8,6 +8,15 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+### Improved — automatic grouping and smart defaults
+
+- Workspace scans now suggest Backend / Frontend / Reference / Other groups by stack and project
+  name; adding a single project to an existing workspace uses the same detection path.
+- Node projects derive commands from `packageManager`, lockfiles, and actual package scripts instead
+  of assuming pnpm. Java detects Maven/Gradle wrappers, while Go/Python keep conservative defaults.
+- Workspaces with 1–4 code projects default to tree loading, with larger scopes falling back to
+  summary mode. The wizard shows these defaults and keeps them editable after creation.
+
 ## [0.8.0] - 2026-09-30
 
 ### Added — task-scope risk check before session creation

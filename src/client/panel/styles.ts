@@ -417,6 +417,11 @@ const PANEL_CSS = String.raw`
 .wcb-scan-info{flex:1;min-width:0}
 .wcb-scan-name{font-weight:500;font-size:11px;color:var(--wcb-text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wcb-scan-path{color:var(--wcb-dim);font-size:9.5px;font-family:var(--ds-font-family-code,monospace);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wcb-scan-defaults{display:flex;gap:6px;margin-top:3px;flex-wrap:wrap}
+.wcb-scan-defaults span{font-size:8.5px;color:var(--wcb-accent);background:rgba(79,140,255,.08);border-radius:3px;padding:1px 4px}
+.wcb-smart-defaults{display:flex;flex-direction:column;gap:3px;border:1px solid rgba(79,140,255,.25);background:rgba(79,140,255,.07);border-radius:6px;padding:8px 9px}
+.wcb-smart-defaults strong{font-size:10.5px;color:var(--wcb-text2)}
+.wcb-smart-defaults span{font-size:9.5px;color:var(--wcb-muted)}
 .wcb-pathbox{flex:1;min-width:0;color:var(--wcb-dim);font-size:10px;font-family:var(--ds-font-family-code,monospace);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wcb-toolbar{display:flex;justify-content:flex-end}

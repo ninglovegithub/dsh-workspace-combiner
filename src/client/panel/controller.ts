@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { WorkspaceCombinerApi } from '../api.ts'
-import type { CodeIndexEntry, ContextStats, DirectoryAccess, DirectoryCommands, EndpointImpact, GitStatus, LoadMode, TokenUsageReport, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceSnapshot, WorkspaceStandards } from '../../core/types.ts'
+import type { CodeIndexEntry, ContextStats, DetectedProject, DirectoryAccess, DirectoryCommands, EndpointImpact, GitStatus, LoadMode, TokenUsageReport, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceSnapshot, WorkspaceStandards } from '../../core/types.ts'
 import { emptyLibrary, resolveStandardGroups, type StandardGroup, type StandardsLibrary } from '../../core/standards.ts'
 import type { FileTreeNode } from '../../core/fileTree.ts'
 import { calculateReadiness, type ReadinessReport } from '../../core/readiness.ts'
@@ -182,6 +182,22 @@ function basename(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, '')
   const seg = trimmed.split(/[\\/]/).pop()
   return seg === undefined || seg === '' ? trimmed : seg
+}
+
+function detectedProjectRef(project: DetectedProject): WorkspaceRef {
+  const group = project.suggestedGroup === 'backend' ? tt('groupBackend')
+    : project.suggestedGroup === 'frontend' ? tt('groupFrontend')
+      : project.suggestedGroup === 'reference' ? tt('groupRef') : tt('groupOther')
+  return {
+    id: project.root,
+    name: project.name,
+    path: project.root,
+    projectType: project.type,
+    evidence: project.evidence,
+    access: 'readwrite',
+    group,
+    ...(project.commands === undefined ? {} : { commands: project.commands }),
+  }
 }
 
 /** 错误文本提取。 */
@@ -497,12 +513,33 @@ export function useWorkspaceCombiner(
       showToast(tt('pathRequired'), 'error')
       return
     }
-    if (dirs.some(d => d.path === trimmed)) {
+    if (dirsRef.current.some(d => d.path === trimmed)) {
       showToast(tt('alreadyAdded'), 'error')
       return
     }
-    applyDirs([...dirs, { id: trimmed, name: basename(trimmed), path: trimmed }])
-  }, [dirs, applyDirs, showToast])
+    const fallback = (): void => {
+      const current = dirsRef.current
+      if (current.some(directory => directory.path === trimmed)) return
+      applyDirs([...current, { id: trimmed, name: basename(trimmed), path: trimmed, access: 'readwrite', group: tt('groupOther') }])
+    }
+    const api = apiRef.current
+    if (api === null) {
+      fallback()
+      return
+    }
+    void api.scan(trimmed)
+      .then(projects => {
+        const detected = projects.find(project => project.root === trimmed)
+        if (detected === undefined) {
+          fallback()
+          return
+        }
+        const current = dirsRef.current
+        if (current.some(directory => directory.path === trimmed)) return
+        applyDirs([...current, detectedProjectRef(detected)])
+      })
+      .catch(fallback)
+  }, [applyDirs, showToast])
 
   const pickAndAddDirectory = useCallback((): void => {
     void pickDirectory()

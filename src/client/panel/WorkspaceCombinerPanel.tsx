@@ -645,7 +645,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                           </div>
                           {missing ? <span className="wcb-warn-icon" title={tt('dirMissing')} role="img" aria-label={tt('dirMissing')}>⚠</span> : null}
                           {i > 0 ? (
-                            <select className="wcb-cap wcb-cap-other" style={{ border: 'none', font: 'inherit', fontSize: '9.5px', cursor: 'pointer' }} value={group === '' ? '' : group} aria-label={tt('groupHint')} onChange={(event) => state.setDirectoryGroup(d.path, event.currentTarget.value)} onDragStart={(event: DragEvent<HTMLSelectElement>) => event.stopPropagation()}>
+                            <select className={'wcb-cap ' + (GROUP_CLASS[group] ?? 'wcb-cap-other')} style={{ border: 'none', font: 'inherit', fontSize: '9.5px', cursor: 'pointer' }} value={group === '' ? '' : group} aria-label={tt('groupHint')} onChange={(event) => state.setDirectoryGroup(d.path, event.currentTarget.value)} onDragStart={(event: DragEvent<HTMLSelectElement>) => event.stopPropagation()}>
                               <option value="">{tt('groupNone')}</option>
                               <option value={tt('groupDoc')}>{tt('groupDoc')}</option>
                               <option value={tt('groupBackend')}>{tt('groupBackend')}</option>
@@ -654,7 +654,6 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                               <option value={tt('groupOther')}>{tt('groupOther')}</option>
                             </select>
                           ) : null}
-                          {i > 0 && group !== '' ? <span className={GROUP_CLASS[group] ?? 'wcb-cap-other'} aria-hidden="true">{group}</span> : null}
                           {i === 0 ? (
                             <span className={ACCESS_CLASS.readwrite} title={tt('primaryAccessFixed')}>{tt('accessReadwrite')}</span>
                           ) : (

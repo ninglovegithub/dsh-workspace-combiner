@@ -23,14 +23,29 @@ const CODE_EXTENSIONS = new Set([
   '.c', '.cc', '.cpp', '.h', '.hpp', '.cs', '.rb', '.php', '.kt', '.scala', '.swift',
 ])
 
-/** 读 package.json 的 dependencies/devDependencies 键名（失败返回空）。 */
-async function readPackageDeps(dir: string): Promise<string[]> {
+interface PackageInfo {
+  deps: string[]
+  scripts: Set<string>
+  packageManager?: string
+}
+
+/** 读 package.json 的依赖、脚本与包管理器声明（失败返回空）。 */
+async function readPackageInfo(dir: string): Promise<PackageInfo> {
   try {
     const raw = await readFile(join(dir, 'package.json'), 'utf8')
-    const pkg = JSON.parse(raw) as { dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> }
-    return Object.keys({ ...pkg.dependencies, ...pkg.devDependencies })
+    const pkg = JSON.parse(raw) as {
+      dependencies?: Record<string, unknown>
+      devDependencies?: Record<string, unknown>
+      scripts?: Record<string, unknown>
+      packageManager?: unknown
+    }
+    return {
+      deps: Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }),
+      scripts: new Set(Object.entries(pkg.scripts ?? {}).filter(([, value]) => typeof value === 'string' && value.trim() !== '').map(([name]) => name)),
+      ...(typeof pkg.packageManager === 'string' ? { packageManager: pkg.packageManager } : {}),
+    }
   } catch {
-    return []
+    return { deps: [], scripts: new Set() }
   }
 }
 
@@ -41,7 +56,7 @@ async function detectType(dir: string, entries: string[]): Promise<ProjectType> 
   if (names.has('go.mod')) return 'go'
   if (names.has('requirements.txt') || names.has('pyproject.toml') || names.has('setup.py')) return 'python'
   if (names.has('package.json')) {
-    const deps = await readPackageDeps(dir)
+    const { deps } = await readPackageInfo(dir)
     // next 基于 react、webpack 常作为 vue/react 的构建依赖，按「更具体优先」判定。
     if (deps.includes('next')) return 'frontend-next'
     if (deps.includes('vue')) return 'frontend-vue'
@@ -93,6 +108,51 @@ export function defaultCommands(type: ProjectType): DirectoryCommands | undefine
   }
 }
 
+export function suggestedGroup(type: ProjectType, name: string): 'backend' | 'frontend' | 'reference' | 'other' {
+  if (type.startsWith('frontend')) return 'frontend'
+  if (type === 'java' || type === 'go' || type === 'python') return 'backend'
+  if (/\b(shared|common|sdk|types?|contracts?|schemas?|proto)\b/i.test(name.replace(/[-_.]+/g, ' '))) return 'reference'
+  return 'other'
+}
+
+function packageManager(entries: readonly string[], declared?: string): 'pnpm' | 'npm' | 'yarn' | 'bun' {
+  const name = declared?.split('@')[0]
+  if (name === 'pnpm' || name === 'npm' || name === 'yarn' || name === 'bun') return name
+  if (entries.includes('pnpm-lock.yaml')) return 'pnpm'
+  if (entries.includes('yarn.lock')) return 'yarn'
+  if (entries.includes('bun.lock') || entries.includes('bun.lockb')) return 'bun'
+  return 'npm'
+}
+
+function scriptCommand(manager: 'pnpm' | 'npm' | 'yarn' | 'bun', script: string): string {
+  if (manager === 'npm') return 'npm run ' + script
+  if (manager === 'bun') return 'bun run ' + script
+  return manager + ' ' + script
+}
+
+async function detectedCommands(dir: string, type: ProjectType, entries: readonly string[]): Promise<DirectoryCommands | undefined> {
+  if (type.startsWith('frontend')) {
+    const info = await readPackageInfo(dir)
+    const manager = packageManager(entries, info.packageManager)
+    const runScript = info.scripts.has('dev') ? 'dev' : info.scripts.has('start') ? 'start' : undefined
+    const commands: DirectoryCommands = {
+      ...(runScript === undefined ? {} : { run: scriptCommand(manager, runScript) }),
+      ...(info.scripts.has('test') ? { test: scriptCommand(manager, 'test') } : {}),
+      ...(info.scripts.has('build') ? { build: scriptCommand(manager, 'build') } : {}),
+    }
+    return Object.keys(commands).length === 0 ? undefined : commands
+  }
+  if (type === 'java') {
+    if (entries.includes('pom.xml')) {
+      const runner = entries.includes('mvnw') ? './mvnw' : 'mvn'
+      return { run: runner + ' spring-boot:run', test: runner + ' test', build: runner + ' package -DskipTests' }
+    }
+    const runner = entries.includes('gradlew') ? './gradlew' : 'gradle'
+    return { run: runner + ' bootRun', test: runner + ' test', build: runner + ' build -x test' }
+  }
+  return defaultCommands(type)
+}
+
 /** 从根目录向下扫描（最多 2 层），返回识别到的项目列表。 */
 export async function scanDirectory(root: string): Promise<DetectedProject[]> {
   const found: DetectedProject[] = []
@@ -110,8 +170,16 @@ export async function scanDirectory(root: string): Promise<DetectedProject[]> {
     const names = entries.map(e => e.name)
     const type = await detectType(dir, names)
     if (type !== 'none') {
-      const commands = defaultCommands(type)
-      found.push({ root: dir, name: basename(dir), type, evidence: evidenceFor(type), ...(commands === undefined ? {} : { commands }) })
+      const name = basename(dir)
+      const commands = await detectedCommands(dir, type, names)
+      found.push({
+        root: dir,
+        name,
+        type,
+        evidence: evidenceFor(type),
+        suggestedGroup: suggestedGroup(type, name),
+        ...(commands === undefined ? {} : { commands }),
+      })
       return
     }
     if (depth >= MAX_SCAN_DEPTH) return

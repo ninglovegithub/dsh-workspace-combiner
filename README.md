@@ -56,7 +56,8 @@ Layers 1-4 ship today; see [Changelog](./CHANGELOG.md) · [中文](./CHANGELOG.z
   execution plan, then checks missing directories, dirty repositories, read-only projects, and
   verification gaps before session creation.
 - **New-workspace wizard** — pick a name + base path; the host creates the primary folder
-  and a scan detects Java / Vue / React / Python / Go projects for multi-select.
+  and scans Java / Vue / React / Python / Go projects for multi-select, automatic grouping,
+  commands derived from real project scripts, and a scope-aware loading default.
 - **Three ways to add a directory** — select from native DSH workspaces, open the host
   directory picker, or paste an absolute path.
 - **Directory tri-state access** — `readwrite` (sandbox-writable), `readonly` (visible but
