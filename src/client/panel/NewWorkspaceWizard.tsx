@@ -108,6 +108,7 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
     id: p.root, name: p.name, path: p.root, projectType: p.type, evidence: p.evidence,
     access: 'readwrite', group: suggestedGroupLabel(p),
     ...(p.commands === undefined ? {} : { commands: p.commands }),
+    ...(p.monorepo === undefined ? {} : { monorepo: p.monorepo }),
   }))
 
   return (
@@ -181,6 +182,7 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
                         <div className="wcb-scan-name">{p.name}</div>
                         <div className="wcb-scan-path" title={p.root}>{p.root}</div>
                         <div className="wcb-scan-defaults">
+                          {p.monorepo !== undefined ? <span>{tt('wizardMonorepo', { kind: p.monorepo.kind, n: p.monorepo.packages.length })}</span> : null}
                           <span>{tt('wizardAutoGroup', { group: suggestedGroupLabel(p) })}</span>
                           <span>{p.commands === undefined ? tt('wizardNoCommandDefault') : tt('wizardCommandDefaults', { n: Object.keys(p.commands).length })}</span>
                         </div>

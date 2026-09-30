@@ -10,7 +10,7 @@ const directories: WorkspaceRef[] = [
 const clean: GitStatus = { branch: 'main', dirty: 0, untracked: 0, ahead: 0 }
 const dirty: GitStatus = { branch: 'main', dirty: 2, untracked: 1, ahead: 0 }
 const baseTask: SessionTask = {
-  type: 'bugfix', description: 'fix login', directoryPaths: ['/docs', '/api'], loadMode: 'tree', includeCodeIndex: true, verification: ['test'],
+  taskMode: 'bugfix', description: 'fix login', directoryPaths: ['/docs', '/api'], loadMode: 'tree', includeCodeIndex: true, verification: ['test'], contextPreset: 'balanced', endpointImpact: false, allowWrites: true,
 }
 
 assert.deepEqual(taskPreflight(baseTask, directories, new Set(), { '/api': clean }), { status: 'ready', issues: [] })

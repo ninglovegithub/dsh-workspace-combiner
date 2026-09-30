@@ -70,6 +70,22 @@ export interface DirectoryCommands {
   build?: string
 }
 
+/** Monorepo 工作区类型。 */
+export type MonorepoKind = 'pnpm' | 'npm' | 'yarn' | 'bun' | 'turbo' | 'nx' | 'lerna' | 'maven' | 'gradle'
+
+/** Monorepo 内部的一个包/模块；路径始终相对 Monorepo 根目录。 */
+export interface MonorepoPackage {
+  name: string
+  path: string
+  projectType: ProjectType
+}
+
+/** Monorepo 元数据：工作空间仍只加载根目录，内部包边界用于展示与 prompt 导航。 */
+export interface MonorepoInfo {
+  kind: MonorepoKind
+  packages: MonorepoPackage[]
+}
+
 /** 一个被选中的项目（目录）引用。path 是宿主文件系统的绝对路径。 */
 export interface WorkspaceRef {
   /** 稳定 id（本插件内 = path；兼容历史 DSH workspaceId）。 */
@@ -92,6 +108,8 @@ export interface WorkspaceRef {
   note?: string
   /** 该目录的常用命令（启动 / 测试 / 构建；注入 prompt 时带绝对路径）。 */
   commands?: DirectoryCommands
+  /** Monorepo 根及其内部包清单；不把嵌套包重复加入沙盒和目录列表。 */
+  monorepo?: MonorepoInfo
 }
 
 /** 一个目录的 git 状态（非 git 仓库时为 null）。 */
@@ -158,6 +176,8 @@ export interface DetectedProject {
   commands?: DirectoryCommands
   /** 根据技术栈和目录名推断的分组语义，客户端映射为当前语言标签。 */
   suggestedGroup?: 'backend' | 'frontend' | 'reference' | 'other'
+  /** 检测到 Monorepo 时携带内部包边界。 */
+  monorepo?: MonorepoInfo
 }
 
 /** 工作空间目录配置快照（一键保存/恢复目录选择 + 访问模式 + 分组）。 */

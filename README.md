@@ -55,6 +55,12 @@ Layers 1-4 ship today; see [Changelog](./CHANGELOG.md) · [中文](./CHANGELOG.z
   Impact checks are editable and show command coverage. The confirmation step adds a per-project
   execution plan, then checks missing directories, dirty repositories, read-only projects, and
   verification gaps before session creation.
+- **TaskMode workflows** — all six task modes share one registry with explicit scope, context
+  preset, required data blocks, endpoint-impact behavior, verification, write permissions, and
+  final-output rules. Review is read-only and API change always checks both endpoint sides.
+- **Native monorepo detection** — recognizes pnpm/npm/yarn/bun workspaces, Turbo, Nx, Lerna,
+  Maven modules, and Gradle multi-project builds; loads the root once while preserving package
+  boundaries in the session prompt.
 - **New-workspace wizard** — pick a name + base path; the host creates the primary folder
   and scans Java / Vue / React / Python / Go projects for multi-select, automatic grouping,
   commands derived from real project scripts, and a scope-aware loading default.

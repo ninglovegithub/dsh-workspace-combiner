@@ -233,6 +233,9 @@ const PANEL_CSS = String.raw`
 .wcb-tab:disabled{opacity:.45;cursor:default}
 .wcb-task-textarea{min-height:88px;resize:vertical;line-height:1.55;padding:7px}
 .wcb-task-types{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+.wcb-task-mode-hint{display:flex;flex-direction:column;gap:2px;border-left:2px solid var(--wcb-accent);padding:5px 7px;background:rgba(79,140,255,.06);border-radius:0 5px 5px 0}
+.wcb-task-mode-hint strong{font-size:10px;color:var(--wcb-text2);font-weight:500}
+.wcb-task-mode-hint span{font-size:9px;color:var(--wcb-muted)}
 .wcb-task-recommendation{display:flex;flex-direction:column;gap:2px;border:1px solid rgba(79,140,255,.25);background:rgba(79,140,255,.07);border-radius:5px;padding:7px 8px}
 .wcb-task-recommendation strong{font-size:11px;color:var(--wcb-text)}
 .wcb-task-recommendation span{font-size:9.5px;color:var(--wcb-muted)}

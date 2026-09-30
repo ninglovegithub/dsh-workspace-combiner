@@ -16,7 +16,7 @@ assert.equal(taskVerificationCoverage('review-impact', ['/docs', '/api'], direct
 assert.equal(taskVerificationLabel('review-impact'), '变更影响复核')
 
 const executionPlan = taskExecutionPlan({
-  type: 'feature', description: 'ship feature', directoryPaths: ['/docs', '/api', '/web'], loadMode: 'tree', includeCodeIndex: true, verification: ['test', 'build', 'review-impact'],
+  taskMode: 'feature', description: 'ship feature', directoryPaths: ['/docs', '/api', '/web'], loadMode: 'tree', includeCodeIndex: true, verification: ['test', 'build', 'review-impact'], contextPreset: 'balanced', endpointImpact: false, allowWrites: true,
 }, directories, {
   '/api': { branch: 'main', dirty: 2, untracked: 1, ahead: 0 },
   '/web': { branch: 'feature/ui', dirty: 0, untracked: 0, ahead: 1 },
@@ -39,5 +39,7 @@ const parsed = parseSessionTask({
   verification: ['test', 'test', 'unknown', 'review-impact'],
 })
 assert.deepEqual(parsed?.verification, ['test', 'review-impact'])
+assert.equal(parsed?.taskMode, 'bugfix')
+assert.equal(parsed?.contextPreset, 'balanced')
 
 console.log('task verification smoke: coverage, execution plan, labels, parsing OK')

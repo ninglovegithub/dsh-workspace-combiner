@@ -8,6 +8,18 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+### Added — Monorepo support
+
+- Detects pnpm/npm/yarn/bun workspaces, Turbo, Nx, Lerna, Maven modules, and Gradle multi-project builds, showing the workspace kind and package count in the creation wizard.
+- Loads a monorepo root once instead of duplicating nested packages in the directory list, sandbox roots, and Git rules; package boundaries persist with the workspace.
+- Injects package names, stacks, and absolute paths into the session prompt and distinguishes root commands from package-level commands.
+
+### Added — TaskMode workflows
+
+- Consolidated feature, API change, bug fix, review, cross-repository refactor, and custom tasks into one registry that drives scope, context preset, required data blocks, endpoint impact, verification, permissions, and final output.
+- Task mode is stored only in the session snapshot and never overwrites workspace configuration. Legacy `type` payloads remain compatible and migrate to `taskMode` when parsed.
+- Review is read-only everywhere; API change forces the endpoint index and impact review; bugfix, refactor, and feature modes inject reproduction/regression, migration-risk, and delivery rules respectively.
+
 ## [0.8.2] - 2026-09-30
 
 ### Added — unified diagnostics center

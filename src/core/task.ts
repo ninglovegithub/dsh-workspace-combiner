@@ -1,15 +1,54 @@
-import type { CodeIndexEntry, GitStatus, LoadMode, WorkspaceRef } from './types.ts'
+import type { CodeIndexEntry, ContextPreset, GitStatus, LoadMode, WorkspaceRef } from './types.ts'
 
-export type TaskType = 'feature' | 'api-change' | 'bugfix' | 'review' | 'refactor' | 'custom'
+export type TaskMode = 'feature' | 'api-change' | 'bugfix' | 'review' | 'refactor' | 'custom'
+/** 兼容旧调用方；新代码使用 TaskMode。 */
+export type TaskType = TaskMode
 export type TaskVerification = 'run' | 'test' | 'build' | 'review-impact'
+export type TaskDataBlock = 'file-index' | 'code-index' | 'standards' | 'commands' | 'endpoint-impact' | 'git-status'
+export type TaskContextPreset = Exclude<ContextPreset, 'custom'>
+
+export interface TaskModeConfig {
+  taskMode: TaskMode
+  label: string
+  labelKey: 'taskTypeFeature' | 'taskTypeApi' | 'taskTypeBugfix' | 'taskTypeReview' | 'taskTypeRefactor' | 'taskTypeCustom'
+  descriptionKey: 'taskModeFeatureHint' | 'taskModeApiHint' | 'taskModeBugfixHint' | 'taskModeReviewHint' | 'taskModeRefactorHint' | 'taskModeCustomHint'
+  scope: 'matched-or-all' | 'all'
+  contextPreset: TaskContextPreset
+  loadMode: LoadMode
+  requiredBlocks: readonly TaskDataBlock[]
+  endpointImpact: boolean
+  verification: readonly TaskVerification[]
+  allowWrites: boolean
+  promptRules: readonly string[]
+  finalOutput: string
+}
+
+const MODE_CONFIGS: readonly TaskModeConfig[] = [
+  { taskMode: 'feature', label: '功能开发', labelKey: 'taskTypeFeature', descriptionKey: 'taskModeFeatureHint', scope: 'matched-or-all', contextPreset: 'balanced', loadMode: 'tree', requiredBlocks: ['file-index', 'standards', 'commands'], endpointImpact: false, verification: ['test', 'build'], allowWrites: true, promptRules: ['先确认实现范围和受影响项目，再完成代码修改。', '新增或改变行为时补充对应测试；不得只实现不验证。'], finalOutput: '按“实现内容 / 验证结果 / 剩余事项”输出。' },
+  { taskMode: 'api-change', label: 'API 联调/变更', labelKey: 'taskTypeApi', descriptionKey: 'taskModeApiHint', scope: 'matched-or-all', contextPreset: 'deep', loadMode: 'tree', requiredBlocks: ['file-index', 'code-index', 'endpoint-impact', 'standards', 'commands'], endpointImpact: true, verification: ['test', 'build', 'review-impact'], allowWrites: true, promptRules: ['必须同时检查服务端注册处、客户端调用处以及请求/响应类型。', '接口路径、字段或语义变化后，必须执行端点影响复核，禁止只改一端。'], finalOutput: '按“接口变化 / 服务端修改 / 客户端修改 / 兼容性与验证”输出。' },
+  { taskMode: 'bugfix', label: 'Bug 修复', labelKey: 'taskTypeBugfix', descriptionKey: 'taskModeBugfixHint', scope: 'matched-or-all', contextPreset: 'balanced', loadMode: 'tree', requiredBlocks: ['file-index', 'git-status', 'commands'], endpointImpact: false, verification: ['test', 'review-impact'], allowWrites: true, promptRules: ['先给出可验证的复现条件或失败证据，再定位根因。', '修复后执行针对性回归，说明为什么不会引入同类问题。'], finalOutput: '按“复现 / 根因 / 修复 / 回归验证”输出。' },
+  { taskMode: 'review', label: '代码审查', labelKey: 'taskTypeReview', descriptionKey: 'taskModeReviewHint', scope: 'all', contextPreset: 'balanced', loadMode: 'tree', requiredBlocks: ['file-index', 'code-index', 'git-status'], endpointImpact: true, verification: ['review-impact'], allowWrites: false, promptRules: ['禁止修改、新建或删除任何项目文件。', '只报告可执行的问题，必须包含证据位置、影响和建议。'], finalOutput: '按严重程度输出风险清单；无问题时明确说明检查范围和残余风险。' },
+  { taskMode: 'refactor', label: '跨仓重构', labelKey: 'taskTypeRefactor', descriptionKey: 'taskModeRefactorHint', scope: 'all', contextPreset: 'deep', loadMode: 'tree', requiredBlocks: ['file-index', 'code-index', 'git-status', 'standards', 'commands'], endpointImpact: true, verification: ['test', 'build', 'review-impact'], allowWrites: true, promptRules: ['修改前列出跨仓依赖、迁移顺序和回滚边界。', '保持阶段性兼容，明确旧入口、旧字段或旧调用的清理时机。'], finalOutput: '按“依赖关系 / 迁移步骤 / 修改结果 / 风险与回滚 / 验证”输出。' },
+  { taskMode: 'custom', label: '自定义任务', labelKey: 'taskTypeCustom', descriptionKey: 'taskModeCustomHint', scope: 'all', contextPreset: 'balanced', loadMode: 'summary', requiredBlocks: ['file-index'], endpointImpact: false, verification: [], allowWrites: true, promptRules: ['严格按用户目标执行；范围或完成标准不清楚时先说明假设。'], finalOutput: '按用户要求输出，并明确实际修改和验证情况。' },
+]
+
+export const TASK_MODE_REGISTRY: Readonly<Record<TaskMode, TaskModeConfig>> = Object.freeze(Object.fromEntries(MODE_CONFIGS.map(config => [config.taskMode, config])) as Record<TaskMode, TaskModeConfig>)
+export const TASK_MODES: readonly TaskMode[] = MODE_CONFIGS.map(config => config.taskMode)
+
+export function taskModeConfig(taskMode: TaskMode): TaskModeConfig {
+  return TASK_MODE_REGISTRY[taskMode]
+}
 
 export interface SessionTask {
-  type: TaskType
+  taskMode: TaskMode
   description: string
   directoryPaths: string[]
   loadMode: LoadMode
   includeCodeIndex: boolean
   verification: TaskVerification[]
+  contextPreset: TaskContextPreset
+  endpointImpact: boolean
+  allowWrites: boolean
 }
 
 export interface TaskRecommendation {
@@ -49,36 +88,38 @@ export interface TaskExecutionProject {
   checks: readonly TaskExecutionCheck[]
 }
 
-const TASK_TYPES = new Set<TaskType>(['feature', 'api-change', 'bugfix', 'review', 'refactor', 'custom'])
+const TASK_MODES_SET = new Set<TaskMode>(TASK_MODES)
 const LOAD_MODES = new Set<LoadMode>(['summary', 'tree', 'full'])
 const VERIFICATIONS = new Set<TaskVerification>(['run', 'test', 'build', 'review-impact'])
-const VERIFICATION_COMMAND: Partial<Record<TaskVerification, 'run' | 'test' | 'build'>> = {
-  run: 'run',
-  test: 'test',
-  build: 'build',
-}
+const VERIFICATION_COMMAND: Partial<Record<TaskVerification, 'run' | 'test' | 'build'>> = { run: 'run', test: 'test', build: 'build' }
 
 export function parseSessionTask(raw: unknown): SessionTask | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
   const record = raw as Record<string, unknown>
-  if (typeof record.type !== 'string' || !TASK_TYPES.has(record.type as TaskType)) return undefined
+  const rawMode = typeof record.taskMode === 'string' ? record.taskMode : record.type
+  if (typeof rawMode !== 'string' || !TASK_MODES_SET.has(rawMode as TaskMode)) return undefined
+  const taskMode = rawMode as TaskMode
+  const config = taskModeConfig(taskMode)
   if (typeof record.description !== 'string') return undefined
   const description = record.description.trim().slice(0, 2000)
   if (description === '') return undefined
   if (!Array.isArray(record.directoryPaths)) return undefined
   const directoryPaths = [...new Set(record.directoryPaths.filter((path): path is string => typeof path === 'string' && path.trim() !== '').map(path => path.trim()))].slice(0, 50)
   if (directoryPaths.length === 0) return undefined
-  const loadMode = typeof record.loadMode === 'string' && LOAD_MODES.has(record.loadMode as LoadMode) ? record.loadMode as LoadMode : 'summary'
+  const loadMode = typeof record.loadMode === 'string' && LOAD_MODES.has(record.loadMode as LoadMode) ? record.loadMode as LoadMode : config.loadMode
   const verification = Array.isArray(record.verification)
     ? [...new Set(record.verification.filter((item): item is TaskVerification => typeof item === 'string' && VERIFICATIONS.has(item as TaskVerification)))]
-    : []
+    : [...config.verification]
   return {
-    type: record.type as TaskType,
+    taskMode,
     description,
     directoryPaths,
     loadMode,
-    includeCodeIndex: record.includeCodeIndex !== false,
+    includeCodeIndex: config.requiredBlocks.includes('code-index') || record.includeCodeIndex !== false,
     verification,
+    contextPreset: config.contextPreset,
+    endpointImpact: config.endpointImpact,
+    allowWrites: config.allowWrites,
   }
 }
 
@@ -95,23 +136,11 @@ function matchesEntry(description: string, entry: CodeIndexEntry): boolean {
 }
 
 function isTrustedMatch(entry: CodeIndexEntry): boolean {
-  return (entry.confidence === 'exact' || entry.confidence === 'normalized')
-    && entry.server !== undefined
-    && entry.client !== undefined
+  return (entry.confidence === 'exact' || entry.confidence === 'normalized') && entry.server !== undefined && entry.client !== undefined
 }
 
-function defaults(type: TaskType): { loadMode: LoadMode; includeCodeIndex: boolean; verification: TaskVerification[] } {
-  switch (type) {
-    case 'api-change': return { loadMode: 'tree', includeCodeIndex: true, verification: ['test', 'build', 'review-impact'] }
-    case 'bugfix': return { loadMode: 'tree', includeCodeIndex: true, verification: ['test', 'review-impact'] }
-    case 'review': return { loadMode: 'tree', includeCodeIndex: true, verification: ['review-impact'] }
-    case 'refactor': return { loadMode: 'tree', includeCodeIndex: true, verification: ['test', 'build', 'review-impact'] }
-    case 'feature': return { loadMode: 'tree', includeCodeIndex: true, verification: ['test', 'build'] }
-    case 'custom': return { loadMode: 'summary', includeCodeIndex: true, verification: [] }
-  }
-}
-
-export function recommendTask(type: TaskType, description: string, directories: readonly WorkspaceRef[], entries: readonly CodeIndexEntry[]): TaskRecommendation {
+export function recommendTask(taskMode: TaskMode, description: string, directories: readonly WorkspaceRef[], entries: readonly CodeIndexEntry[]): TaskRecommendation {
+  const config = taskModeConfig(taskMode)
   const enabled = directories.filter(directory => (directory.access ?? 'readwrite') !== 'disabled')
   const matchedEndpoints = entries.filter(entry => matchesEntry(description, entry))
   const trustedEndpoints = matchedEndpoints.filter(isTrustedMatch)
@@ -131,24 +160,21 @@ export function recommendTask(type: TaskType, description: string, directories: 
   const primary = enabled[0]
   if (primary !== undefined) matchedPaths.add(primary.path)
   const hasMatchedProject = enabled.some((directory, index) => index > 0 && matchedPaths.has(directory.path))
-  const selected = trustedEndpoints.length > 0 && hasMatchedProject
-    ? enabled.filter(directory => matchedPaths.has(directory.path))
-    : enabled
-  const mode = trustedEndpoints.length > 0 && hasMatchedProject
-    ? 'trusted-match'
-    : weakEndpoints.length > 0 ? 'weak-match' : 'default'
-  const directoryFeatures = Object.fromEntries(
-    [...featuresByPath].map(([path, features]) => [path, [...features]]),
-  )
-  const config = defaults(type)
+  const trustedScope = config.scope === 'matched-or-all' && trustedEndpoints.length > 0 && hasMatchedProject
+  const selected = trustedScope ? enabled.filter(directory => matchedPaths.has(directory.path)) : enabled
+  const mode: TaskRecommendation['mode'] = trustedScope ? 'trusted-match' : weakEndpoints.length > 0 ? 'weak-match' : 'default'
+  const directoryFeatures = Object.fromEntries([...featuresByPath].map(([path, features]) => [path, [...features]]))
   return {
     task: {
-      type,
+      taskMode,
       description: description.trim(),
       directoryPaths: selected.map(directory => directory.path),
       loadMode: config.loadMode,
-      includeCodeIndex: config.includeCodeIndex,
-      verification: config.verification,
+      includeCodeIndex: config.requiredBlocks.includes('code-index'),
+      verification: [...config.verification],
+      contextPreset: config.contextPreset,
+      endpointImpact: config.endpointImpact,
+      allowWrites: config.allowWrites,
     },
     matchedEndpoints,
     trustedEndpoints,
@@ -158,34 +184,22 @@ export function recommendTask(type: TaskType, description: string, directories: 
   }
 }
 
-export function taskVerificationCoverage(
-  verification: TaskVerification,
-  directoryPaths: readonly string[],
-  directories: readonly WorkspaceRef[],
-): { configured: number; total: number } | undefined {
+export function taskVerificationCoverage(verification: TaskVerification, directoryPaths: readonly string[], directories: readonly WorkspaceRef[]): { configured: number; total: number } | undefined {
   const command = VERIFICATION_COMMAND[verification]
   if (command === undefined) return undefined
   const selectedProjects = directories.filter((directory, index) => index > 0 && directoryPaths.includes(directory.path))
-  return {
-    total: selectedProjects.length,
-    configured: selectedProjects.filter(directory => (directory.commands?.[command] ?? '').trim() !== '').length,
-  }
+  return { total: selectedProjects.length, configured: selectedProjects.filter(directory => (directory.commands?.[command] ?? '').trim() !== '').length }
 }
 
 export function taskVerificationLabel(verification: TaskVerification): string {
-  switch (verification) {
-    case 'run': return '启动验证'
-    case 'test': return '测试'
-    case 'build': return '构建'
-    case 'review-impact': return '变更影响复核'
-  }
+  if (verification === 'run') return '启动验证'
+  if (verification === 'test') return '测试'
+  if (verification === 'build') return '构建'
+  return '变更影响复核'
 }
 
-export function taskExecutionPlan(
-  task: SessionTask,
-  directories: readonly WorkspaceRef[],
-  gitStatuses: Readonly<Record<string, GitStatus | null>>,
-): readonly TaskExecutionProject[] {
+export function taskExecutionPlan(task: SessionTask, directories: readonly WorkspaceRef[], gitStatuses: Readonly<Record<string, GitStatus | null>>): readonly TaskExecutionProject[] {
+  const allowWrites = taskModeConfig(task.taskMode).allowWrites
   return directories.flatMap((directory, index) => {
     if (!task.directoryPaths.includes(directory.path)) return []
     const checks = index === 0 ? [] : task.verification.map(verification => {
@@ -193,25 +207,14 @@ export function taskExecutionPlan(
       const command = commandKey === undefined ? undefined : directory.commands?.[commandKey]?.trim()
       return { verification, ...(command === undefined || command === '' ? {} : { command }) }
     })
-    return [{
-      name: directory.name,
-      path: directory.path,
-      primary: index === 0,
-      access: directory.access === 'readonly' ? 'readonly' : 'readwrite',
-      gitStatus: gitStatuses[directory.path] ?? null,
-      checks,
-    }]
+    return [{ name: directory.name, path: directory.path, primary: index === 0, access: !allowWrites || directory.access === 'readonly' ? 'readonly' : 'readwrite', gitStatus: gitStatuses[directory.path] ?? null, checks }]
   })
 }
 
-export function taskPreflight(
-  task: SessionTask,
-  directories: readonly WorkspaceRef[],
-  missingDirectories: ReadonlySet<string>,
-  gitStatuses: Readonly<Record<string, GitStatus | null>>,
-): TaskPreflightResult {
+export function taskPreflight(task: SessionTask, directories: readonly WorkspaceRef[], missingDirectories: ReadonlySet<string>, gitStatuses: Readonly<Record<string, GitStatus | null>>): TaskPreflightResult {
+  const config = taskModeConfig(task.taskMode)
   const selected = directories.filter(directory => task.directoryPaths.includes(directory.path))
-  const selectedProjects = selected.filter((directory, index) => directories.indexOf(directory) > 0)
+  const selectedProjects = selected.filter(directory => directories.indexOf(directory) > 0)
   const issues: TaskPreflightIssue[] = []
   const missing = selected.filter(directory => missingDirectories.has(directory.path)).length
   if (missing > 0) issues.push({ code: 'missing-directory', count: missing })
@@ -220,31 +223,19 @@ export function taskPreflight(
     return status != null && status.dirty + status.untracked > 0
   }).length
   if (dirty > 0) issues.push({ code: 'dirty-repository', count: dirty })
-  if (task.type !== 'review') {
+  if (config.allowWrites) {
     const readonly = selectedProjects.filter(directory => directory.access === 'readonly').length
     if (readonly > 0) issues.push({ code: 'readonly-directory', count: readonly })
   }
-  if (selectedProjects.length === 0 && task.type !== 'review') issues.push({ code: 'no-code-project' })
+  if (selectedProjects.length === 0 && config.allowWrites) issues.push({ code: 'no-code-project' })
   if (task.verification.length === 0) issues.push({ code: 'no-verification' })
   for (const verification of task.verification) {
     const coverage = taskVerificationCoverage(verification, task.directoryPaths, directories)
-    if (coverage !== undefined && coverage.total > 0 && coverage.configured === 0) {
-      issues.push({ code: 'missing-command', verification })
-    }
+    if (coverage !== undefined && coverage.total > 0 && coverage.configured === 0) issues.push({ code: 'missing-command', verification })
   }
-  return {
-    status: missing > 0 ? 'blocked' : issues.length > 0 ? 'warning' : 'ready',
-    issues,
-  }
+  return { status: missing > 0 ? 'blocked' : issues.length > 0 ? 'warning' : 'ready', issues }
 }
 
-export function taskTypeLabel(type: TaskType): string {
-  switch (type) {
-    case 'feature': return '功能开发'
-    case 'api-change': return 'API 联调/变更'
-    case 'bugfix': return 'Bug 修复'
-    case 'review': return '代码审查'
-    case 'refactor': return '跨仓重构'
-    case 'custom': return '自定义任务'
-  }
+export function taskTypeLabel(taskMode: TaskMode): string {
+  return taskModeConfig(taskMode).label
 }

@@ -8,8 +8,8 @@
 
 import { readdir, readFile } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
-import { basename, join } from 'node:path'
-import type { DetectedProject, DirectoryCommands, ProjectType } from '../core/types.ts'
+import { basename, join, relative } from 'node:path'
+import type { DetectedProject, DirectoryCommands, MonorepoInfo, MonorepoKind, ProjectType } from '../core/types.ts'
 
 /** 最大扫描深度（根 = 0，向下到第 2 层子目录）。 */
 const MAX_SCAN_DEPTH = 2
@@ -27,6 +27,7 @@ interface PackageInfo {
   deps: string[]
   scripts: Set<string>
   packageManager?: string
+  workspaces: string[]
 }
 
 /** 读 package.json 的依赖、脚本与包管理器声明（失败返回空）。 */
@@ -38,15 +39,141 @@ async function readPackageInfo(dir: string): Promise<PackageInfo> {
       devDependencies?: Record<string, unknown>
       scripts?: Record<string, unknown>
       packageManager?: unknown
+      workspaces?: unknown
     }
+    const workspaceValue = pkg.workspaces
+    const workspaces = Array.isArray(workspaceValue)
+      ? workspaceValue.filter((value): value is string => typeof value === 'string')
+      : workspaceValue !== null && typeof workspaceValue === 'object' && Array.isArray((workspaceValue as { packages?: unknown }).packages)
+        ? (workspaceValue as { packages: unknown[] }).packages.filter((value): value is string => typeof value === 'string')
+        : []
     return {
       deps: Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }),
       scripts: new Set(Object.entries(pkg.scripts ?? {}).filter(([, value]) => typeof value === 'string' && value.trim() !== '').map(([name]) => name)),
       ...(typeof pkg.packageManager === 'string' ? { packageManager: pkg.packageManager } : {}),
+      workspaces,
     }
   } catch {
-    return { deps: [], scripts: new Set() }
+    return { deps: [], scripts: new Set(), workspaces: [] }
   }
+}
+
+function normalizeRelative(path: string): string {
+  return path.split('\\').join('/').replace(/^\.\//, '').replace(/\/$/, '')
+}
+
+function globPattern(pattern: string): RegExp {
+  const normalized = normalizeRelative(pattern)
+  let source = ''
+  for (let index = 0; index < normalized.length; index++) {
+    const char = normalized[index]
+    if (char === '*' && normalized[index + 1] === '*') {
+      source += '.*'
+      index++
+    } else if (char === '*') source += '[^/]*'
+    else source += char.replace(/[|\\{}()[\]^$+?.]/g, '\\$&')
+  }
+  return new RegExp('^' + source + '$')
+}
+
+async function readText(path: string): Promise<string | undefined> {
+  try { return await readFile(path, 'utf8') } catch { return undefined }
+}
+
+async function childDirectories(root: string, maxDepth = 4): Promise<string[]> {
+  const output: string[] = []
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    if (depth > maxDepth || output.length >= MAX_VISITED_DIRS) return
+    let entries: Dirent[]
+    try { entries = await readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'target' || entry.name === 'dist' || entry.name === 'build') continue
+      const child = join(dir, entry.name)
+      output.push(child)
+      await walk(child, depth + 1)
+    }
+  }
+  await walk(root, 1)
+  return output
+}
+
+function yamlWorkspacePatterns(text: string): string[] {
+  const lines = text.split(/\r?\n/)
+  const patterns: string[] = []
+  let inPackages = false
+  for (const line of lines) {
+    if (/^packages\s*:/.test(line.trim())) { inPackages = true; continue }
+    if (!inPackages) continue
+    const match = line.match(/^\s*-\s*['"]?([^'"#]+?)['"]?\s*(?:#.*)?$/)
+    if (match !== null) patterns.push(match[1].trim())
+    else if (line.trim() !== '' && !/^\s/.test(line)) break
+  }
+  return patterns
+}
+
+function mavenModules(text: string): string[] {
+  const modules = text.match(/<modules>[\s\S]*?<\/modules>/i)?.[0] ?? ''
+  return [...modules.matchAll(/<module>\s*([^<]+?)\s*<\/module>/gi)].map(match => match[1].trim())
+}
+
+function gradleModules(text: string): string[] {
+  const modules: string[] = []
+  for (const line of text.split(/\r?\n/)) {
+    if (!/^\s*include\b/.test(line)) continue
+    for (const match of line.matchAll(/['"]:?(.*?)['"]/g)) modules.push(match[1].replaceAll(':', '/'))
+  }
+  return modules
+}
+
+async function detectMonorepo(root: string, entries: readonly string[]): Promise<MonorepoInfo | undefined> {
+  const names = new Set(entries)
+  const packageInfo = names.has('package.json') ? await readPackageInfo(root) : undefined
+  let kind: MonorepoKind | undefined
+  let patterns: string[] = packageInfo?.workspaces ?? []
+
+  if (names.has('pnpm-workspace.yaml')) {
+    kind = 'pnpm'
+    patterns = yamlWorkspacePatterns((await readText(join(root, 'pnpm-workspace.yaml'))) ?? '')
+  } else if (names.has('nx.json')) kind = 'nx'
+  else if (names.has('turbo.json')) kind = 'turbo'
+  else if (names.has('lerna.json')) {
+    kind = 'lerna'
+    try {
+      const lerna = JSON.parse((await readText(join(root, 'lerna.json'))) ?? '{}') as { packages?: unknown }
+      if (patterns.length === 0 && Array.isArray(lerna.packages)) patterns = lerna.packages.filter((value): value is string => typeof value === 'string')
+    } catch { /* malformed manifests are ignored */ }
+  } else if (patterns.length > 0) {
+    const manager = packageManager(entries, packageInfo?.packageManager)
+    kind = manager
+  } else if (names.has('pom.xml')) {
+    patterns = mavenModules((await readText(join(root, 'pom.xml'))) ?? '')
+    if (patterns.length > 0) kind = 'maven'
+  } else if (names.has('settings.gradle') || names.has('settings.gradle.kts')) {
+    const file = names.has('settings.gradle.kts') ? 'settings.gradle.kts' : 'settings.gradle'
+    patterns = gradleModules((await readText(join(root, file))) ?? '')
+    if (patterns.length > 0) kind = 'gradle'
+  }
+
+  if (kind === undefined) return undefined
+  if (patterns.length === 0 && (kind === 'nx' || kind === 'turbo')) patterns = ['apps/*', 'packages/*', 'libs/*']
+  const positive = patterns.filter(pattern => !pattern.startsWith('!')).map(globPattern)
+  const negative = patterns.filter(pattern => pattern.startsWith('!')).map(pattern => globPattern(pattern.slice(1)))
+  const dirs = await childDirectories(root)
+  const packageDirs = dirs.filter(dir => {
+    const path = normalizeRelative(relative(root, dir))
+    return positive.some(pattern => pattern.test(path)) && !negative.some(pattern => pattern.test(path))
+  })
+  const packages = []
+  for (const dir of packageDirs) {
+    let childEntries: Dirent[]
+    try { childEntries = await readdir(dir, { withFileTypes: true }) } catch { continue }
+    const childNames = childEntries.map(entry => entry.name)
+    const projectType = await detectType(dir, childNames)
+    if (projectType === 'none') continue
+    packages.push({ name: basename(dir), path: normalizeRelative(relative(root, dir)), projectType })
+  }
+  packages.sort((a, b) => a.path.localeCompare(b.path))
+  return { kind, packages }
 }
 
 /** 依据目录项识别项目类型（none 表示不是项目根）。 */
@@ -169,16 +296,19 @@ export async function scanDirectory(root: string): Promise<DetectedProject[]> {
     }
     const names = entries.map(e => e.name)
     const type = await detectType(dir, names)
-    if (type !== 'none') {
+    const monorepo = await detectMonorepo(dir, names)
+    if (type !== 'none' || monorepo !== undefined) {
       const name = basename(dir)
-      const commands = await detectedCommands(dir, type, names)
+      const resolvedType = type === 'none' ? 'generic' : type
+      const commands = await detectedCommands(dir, resolvedType, names)
       found.push({
         root: dir,
         name,
-        type,
-        evidence: evidenceFor(type),
-        suggestedGroup: suggestedGroup(type, name),
+        type: resolvedType,
+        evidence: monorepo === undefined ? evidenceFor(resolvedType) : `${monorepo.kind} monorepo · ${monorepo.packages.length} packages`,
+        suggestedGroup: suggestedGroup(resolvedType, name),
         ...(commands === undefined ? {} : { commands }),
+        ...(monorepo === undefined ? {} : { monorepo }),
       })
       return
     }

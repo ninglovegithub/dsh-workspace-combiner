@@ -7,7 +7,7 @@ import type { CodeIndexEntry, ContextDegradation, LoadMode, WorkspaceMode, Works
 import { renderTree, estimateTokens, type FileIndexEntry } from './core/fileTree.ts'
 import type { StandardGroup } from './core/standards.ts'
 import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_COMMANDS_BUDGET, DEFAULT_STANDARDS_BUDGET } from './invariant.ts'
-import { taskTypeLabel, taskVerificationLabel, type SessionTask } from './core/task.ts'
+import { taskModeConfig, taskTypeLabel, taskVerificationLabel, type SessionTask, type TaskDataBlock } from './core/task.ts'
 
 /** 功能索引默认预算（不挤占文件索引配额）。 */
 export const CODE_INDEX_TOKEN_BUDGET = DEFAULT_CODE_INDEX_BUDGET
@@ -243,19 +243,33 @@ export interface MultiWorkspacePromptResult {
 }
 
 function renderTask(task: SessionTask, directories: readonly WorkspaceRef[]): string {
+  const config = taskModeConfig(task.taskMode)
   const selected = directories.filter(directory => task.directoryPaths.includes(directory.path)).map(directory => directory.name)
   const verification = task.verification.length === 0
     ? '未指定；完成后明确说明实际验证情况'
     : task.verification.map(taskVerificationLabel).join('、')
-  const reviewRule = task.type === 'review' ? '\n- 本任务是代码审查：禁止修改、新建或删除任何项目文件，只输出问题、证据与建议。' : ''
+  const blockLabels: Record<TaskDataBlock, string> = {
+    'file-index': '文件索引',
+    'code-index': '功能/接口索引',
+    standards: '开发规范',
+    commands: '项目命令',
+    'endpoint-impact': '接口影响分析',
+    'git-status': 'Git 状态与改动',
+  }
   return [
     '# 本次任务',
-    '- 类型：' + taskTypeLabel(task.type),
+    '- 任务模式：' + taskTypeLabel(task.taskMode),
     '- 目标：' + task.description,
     '- 本次范围：' + selected.join('、'),
+    '- 会话上下文预设：' + task.contextPreset,
     '- 文件加载：' + task.loadMode + '；功能/接口索引：' + (task.includeCodeIndex ? '启用' : '关闭'),
+    '- 必须读取的数据块：' + config.requiredBlocks.map(block => blockLabels[block]).join('、'),
+    '- 接口影响分析：' + (config.endpointImpact ? '必须执行' : '按任务需要执行'),
+    '- 文件权限：' + (config.allowWrites ? '允许在可写目录中修改' : '全范围只读，禁止修改、新建或删除文件'),
     '- 完成前验证：' + verification,
-    '- 只处理本次范围内的项目；如果必须读取范围外内容，先说明原因。' + reviewRule,
+    '- 只处理本次范围内的项目；如果必须读取范围外内容，先说明原因。',
+    ...config.promptRules.map(rule => '- ' + rule),
+    '- 最终输出：' + config.finalOutput,
   ].join('\n')
 }
 
@@ -298,9 +312,19 @@ export function renderMultiWorkspacePromptDetailed(input: MultiWorkspacePromptIn
       const group = index === 0 ? '' : (ws.group ?? '')
       const header = group !== '' && group !== currentGroup ? '【' + group + '】\n' : ''
       if (group !== '' && group !== currentGroup) currentGroup = group
-      return `${header}${index + 1}.${ws.name}${role}${lock}绝对路径：${ws.path}`
+      const monorepo = ws.monorepo === undefined ? '' : `【Monorepo:${ws.monorepo.kind} · ${ws.monorepo.packages.length} 包】`
+      return `${header}${index + 1}.${ws.name}${role}${lock}${monorepo}绝对路径：${ws.path}`
     })
     .join('\n')
+  const monorepoMap = active.flatMap(ws => {
+    if (ws.monorepo === undefined) return []
+    const shown = ws.monorepo.packages.slice(0, 40)
+    return [
+      `## ${ws.name}（${ws.monorepo.kind}）`,
+      ...shown.map(pkg => `- ${pkg.name} [${pkg.projectType}]：${ws.path}/${pkg.path}`),
+      ...(shown.length < ws.monorepo.packages.length ? [`- …另有 ${ws.monorepo.packages.length - shown.length} 个包；需要时从根目录工作区清单查询。`] : []),
+    ]
+  })
   const taskBlock = task === undefined ? '' : renderTask(task, active)
   const requested = { fileIndex: Math.max(0, fileIndexBudget), codeIndex: Math.max(0, codeIndexBudget), standards: Math.max(0, standardsBudget), commands: Math.max(0, commandsBudget) }
   const effective = { ...requested }
@@ -328,6 +352,7 @@ export function renderMultiWorkspacePromptDetailed(input: MultiWorkspacePromptIn
       '# 多工作区联合开发模式生效',
       `当前会话加载【${active.length}】个项目目录：`,
       list,
+      ...(monorepoMap.length > 0 ? ['', '# Monorepo 包边界', ...monorepoMap, '- Monorepo 只加载一次根目录；执行命令前先确认根命令还是包级命令，禁止把嵌套包当成独立 Git 仓库。'] : []),
       ...(taskBlock !== '' ? ['', taskBlock] : []),
       ...(commands !== '' ? ['', commands] : []),
       ...(standards !== '' ? ['', standards] : []),

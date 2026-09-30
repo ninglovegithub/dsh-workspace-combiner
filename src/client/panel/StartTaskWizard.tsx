@@ -6,7 +6,7 @@
 
 import { useEffect, useState, type ChangeEvent, type ReactElement } from 'react'
 import type { CodeIndexEntry, GitStatus, LoadMode, WorkspaceRef } from '../../core/types.ts'
-import { recommendTask, taskExecutionPlan, taskPreflight, taskVerificationCoverage, type SessionTask, type TaskPreflightIssue, type TaskRecommendation, type TaskType, type TaskVerification } from '../../core/task.ts'
+import { recommendTask, TASK_MODES, taskExecutionPlan, taskModeConfig, taskPreflight, taskVerificationCoverage, type SessionTask, type TaskMode, type TaskPreflightIssue, type TaskRecommendation, type TaskVerification } from '../../core/task.ts'
 import { tt } from '../locales.ts'
 
 interface StartTaskWizardProps {
@@ -18,18 +18,10 @@ interface StartTaskWizardProps {
   onClose(): void
 }
 
-const TASK_TYPES: TaskType[] = ['feature', 'api-change', 'bugfix', 'review', 'refactor', 'custom']
 const VERIFICATIONS: TaskVerification[] = ['run', 'test', 'build', 'review-impact']
 
-function typeLabel(type: TaskType): string {
-  switch (type) {
-    case 'feature': return tt('taskTypeFeature')
-    case 'api-change': return tt('taskTypeApi')
-    case 'bugfix': return tt('taskTypeBugfix')
-    case 'review': return tt('taskTypeReview')
-    case 'refactor': return tt('taskTypeRefactor')
-    case 'custom': return tt('taskTypeCustom')
-  }
+function typeLabel(taskMode: TaskMode): string {
+  return tt(taskModeConfig(taskMode).labelKey)
 }
 
 function recommendationLabel(recommendation: TaskRecommendation): string {
@@ -59,7 +51,7 @@ function preflightIssueLabel(issue: TaskPreflightIssue): string {
 export function StartTaskWizard({ directories, codeEntries, missingDirectories, gitStatuses, onCreate, onClose }: StartTaskWizardProps): ReactElement {
   const [step, setStep] = useState<1 | 2 | 3>(1)
   const [description, setDescription] = useState('')
-  const [type, setType] = useState<TaskType>('feature')
+  const [taskMode, setTaskMode] = useState<TaskMode>('feature')
   const [recommendation, setRecommendation] = useState<TaskRecommendation>(() => recommendTask('feature', 'new feature', directories, codeEntries))
   const [task, setTask] = useState<SessionTask>(() => recommendation.task)
 
@@ -70,7 +62,7 @@ export function StartTaskWizard({ directories, codeEntries, missingDirectories, 
   }, [onClose])
 
   const prepareRecommendation = (): void => {
-    const recommendation = recommendTask(type, description, directories, codeEntries)
+    const recommendation = recommendTask(taskMode, description, directories, codeEntries)
     setTask(recommendation.task)
     setRecommendation(recommendation)
     setStep(2)
@@ -120,7 +112,11 @@ export function StartTaskWizard({ directories, codeEntries, missingDirectories, 
             <div className="wcb-field">
               <span>{tt('taskType')}</span>
               <div className="wcb-task-types">
-                {TASK_TYPES.map(item => <button key={item} type="button" className={'wcb-tab' + (type === item ? ' wcb-tab-on' : '')} onClick={() => setType(item)}>{typeLabel(item)}</button>)}
+                {TASK_MODES.map(item => <button key={item} type="button" className={'wcb-tab' + (taskMode === item ? ' wcb-tab-on' : '')} onClick={() => setTaskMode(item)}>{typeLabel(item)}</button>)}
+              </div>
+              <div className="wcb-task-mode-hint">
+                <strong>{tt(taskModeConfig(taskMode).descriptionKey)}</strong>
+                <span>{tt('taskModeDefaults', { preset: tt(taskModeConfig(taskMode).contextPreset === 'deep' ? 'contextPresetDeep' : taskModeConfig(taskMode).contextPreset === 'economy' ? 'contextPresetEconomy' : 'contextPresetBalanced'), access: taskModeConfig(taskMode).allowWrites ? tt('taskModeWritable') : tt('taskModeReadonly') })}</span>
               </div>
             </div>
             <div className="wcb-hint">{tt('taskRecommendationHint')}</div>
@@ -156,7 +152,7 @@ export function StartTaskWizard({ directories, codeEntries, missingDirectories, 
                 ))}
               </div>
             </div>
-            <label className="wcb-check-row"><input type="checkbox" checked={task.includeCodeIndex} onChange={(event) => setTask(current => ({ ...current, includeCodeIndex: event.currentTarget.checked }))} />{tt('taskIncludeCodeIndex')}</label>
+            <label className="wcb-check-row"><input type="checkbox" checked={task.includeCodeIndex} disabled={taskModeConfig(task.taskMode).requiredBlocks.includes('code-index')} onChange={(event) => setTask(current => ({ ...current, includeCodeIndex: event.currentTarget.checked }))} />{tt('taskIncludeCodeIndex')}{taskModeConfig(task.taskMode).requiredBlocks.includes('code-index') ? ' · ' + tt('taskModeRequired') : ''}</label>
             <div className="wcb-field">
               <span>{tt('taskVerification')}</span>
               <div className="wcb-task-verifications">
@@ -189,7 +185,8 @@ export function StartTaskWizard({ directories, codeEntries, missingDirectories, 
         {step === 3 ? (
           <div className="wcb-wizard-body">
             <div className="wcb-task-summary">
-              <div><span>{tt('taskType')}</span><strong>{typeLabel(task.type)}</strong></div>
+              <div><span>{tt('taskType')}</span><strong>{typeLabel(task.taskMode)}</strong></div>
+              <div><span>{tt('contextPresetLabel')}</span><strong>{tt(task.contextPreset === 'deep' ? 'contextPresetDeep' : task.contextPreset === 'economy' ? 'contextPresetEconomy' : 'contextPresetBalanced')}</strong></div>
               <div><span>{tt('taskDescription')}</span><strong>{task.description}</strong></div>
               <div><span>{tt('taskScope')}</span><strong>{tt('taskDirectoryCount', { n: task.directoryPaths.length })}</strong></div>
               <div><span>{tt('taskScopeReason')}</span><strong>{recommendationLabel(recommendation)}</strong></div>

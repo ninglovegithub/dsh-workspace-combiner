@@ -38,7 +38,7 @@ import { persistOnDemandContext } from './onDemandContext.ts'
 import { TokenUsageTracker, type TrackedEvent, type TrackedSession } from './tokenUsage.ts'
 import type { SessionTask } from '../core/task.ts'
 import { resolveStandardGroups, type StandardGroup } from '../core/standards.ts'
-import { resolveWorkspaceContext } from '../core/contextPreset.ts'
+import { contextPresetConfig, resolveWorkspaceContext } from '../core/contextPreset.ts'
 
 /** 稳定的 cordis 插件名（编排行 id）。 */
 export const name = PLUGIN_ID
@@ -163,7 +163,7 @@ export function apply(ctx: Context, config: Config = {}): void {
    */
   const selectWorkspace = (sessionId: string, ws: Workspace): void => {
     const task = taskBySession.get(sessionId)
-    const context = resolveWorkspaceContext(ws)
+    const context = task === undefined ? resolveWorkspaceContext(ws) : contextPresetConfig(task.contextPreset)
     const loadMode = task?.loadMode ?? context.loadMode
     const mode = ws.mode ?? 'anchor'
     const selectedPaths = task === undefined ? undefined : new Set(task.directoryPaths)
@@ -171,7 +171,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       .filter((directory, index) => index === 0 || selectedPaths === undefined || selectedPaths.has(directory.path))
       .map(directory => ({
         ...directory,
-        ...(task?.type === 'review' ? { access: 'readonly' as const } : {}),
+        ...(task?.allowWrites === false ? { access: 'readonly' as const } : {}),
       }))
     const globalBudget = context.globalBudget
     const fileIndexBudget = context.fileIndexBudget

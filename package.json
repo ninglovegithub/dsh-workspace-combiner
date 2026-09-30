@@ -1,6 +1,6 @@
 {
   "name": "dsh-workspace-combiner",
-  "description": "DSH 工作区组合器：左侧边栏管理多工作空间，每个绑定一个主目录（工作区锚点/文档区）+ 若干代码项目；新建向导自动识别 Java/Vue/React/Python/Go 等项目并支持多选，新建会话在主目录打开，把所有项目绝对路径注入 system prompt，联动 @chaoset/sandbox-extra-roots 放开读写白名单。",
+  "description": "DSH 工作区组合器：管理主目录与多个代码项目，自动识别 Java/Vue/React/Python/Go 及 pnpm/Turbo/Nx/Maven/Gradle Monorepo，把项目和内部包绝对路径注入会话并联动沙盒白名单。",
   "version": "0.8.2",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
@@ -58,9 +58,11 @@
     "smoke:task-verification": "node --experimental-strip-types scripts/task-verification-smoke.ts",
     "smoke:task-preflight": "node --experimental-strip-types scripts/task-preflight-smoke.ts",
     "smoke:project-defaults": "node --experimental-strip-types scripts/project-defaults-smoke.ts",
+    "smoke:monorepo": "node --experimental-strip-types scripts/monorepo-smoke.ts",
     "smoke:on-demand-context": "node --experimental-strip-types scripts/on-demand-context-smoke.ts",
     "smoke:context-budget": "node --experimental-strip-types scripts/context-budget-smoke.ts",
-    "smoke:diagnostics": "node --experimental-strip-types scripts/diagnostics-smoke.ts"
+    "smoke:diagnostics": "node --experimental-strip-types scripts/diagnostics-smoke.ts",
+    "smoke:task-mode": "node --experimental-strip-types scripts/task-mode-smoke.ts"
   },
   "peerDependencies": {
     "@chaoset/sandbox-extra-roots": "^0.4.12",

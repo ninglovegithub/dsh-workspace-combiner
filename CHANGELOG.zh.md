@@ -10,6 +10,18 @@
 
 ## [Unreleased]
 
+### 新增 —— Monorepo 支持
+
+- 自动识别 pnpm/npm/yarn/bun workspaces、Turbo、Nx、Lerna、Maven modules 和 Gradle multi-project，并在新建向导中显示工作区类型与内部包数量。
+- Monorepo 以根目录作为唯一工作区目录，内部 package/module 不再重复加入目录列表、沙盒白名单和 Git 规则；包边界随工作空间配置持久化。
+- 会话 prompt 注入包名、技术栈和绝对路径映射，并明确区分根命令与包级命令，避免把嵌套 package 误当独立仓库。
+
+### 新增 —— TaskMode 稳定工作流
+
+- 将功能开发、API 联调、Bug 修复、代码审查、跨仓重构和自定义任务收敛为统一注册表；目录范围、默认上下文预设、必读数据块、端点影响、验证、权限和最终输出均由模式配置驱动。
+- 任务模式只写入会话快照，不覆盖工作空间配置；旧会话的 `type` 字段继续兼容并自动迁移为 `taskMode`。
+- Review 模式全范围只读；API 模式强制启用接口索引和影响复核；Bugfix、Refactor 与 Feature 分别注入复现回归、迁移风险和交付闭环规则。
+
 ## [0.8.2] - 2026-09-30
 
 ### 新增 —— 统一诊断中心
