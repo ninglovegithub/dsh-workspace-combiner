@@ -7,6 +7,7 @@ import type { CodeIndexEntry, LoadMode, WorkspaceMode, WorkspaceRef } from './co
 import { renderTree, estimateTokens, type FileIndexEntry } from './core/fileTree.ts'
 import type { StandardGroup } from './core/standards.ts'
 import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_COMMANDS_BUDGET, DEFAULT_STANDARDS_BUDGET } from './invariant.ts'
+import { taskTypeLabel, type SessionTask } from './core/task.ts'
 
 /** 功能索引默认预算（不挤占文件索引配额）。 */
 export const CODE_INDEX_TOKEN_BUDGET = DEFAULT_CODE_INDEX_BUDGET
@@ -202,6 +203,23 @@ export interface MultiWorkspacePromptInput {
   standardsBudget?: number
   /** 各项目常用命令区块预算。 */
   commandsBudget?: number
+  /** 仅属于当前会话的一次性任务目标与范围。 */
+  task?: SessionTask
+}
+
+function renderTask(task: SessionTask, directories: readonly WorkspaceRef[]): string {
+  const selected = directories.filter(directory => task.directoryPaths.includes(directory.path)).map(directory => directory.name)
+  const verification = task.verification.length === 0 ? '未指定；完成后明确说明实际验证情况' : task.verification.join('、')
+  const reviewRule = task.type === 'review' ? '\n- 本任务是代码审查：禁止修改、新建或删除任何项目文件，只输出问题、证据与建议。' : ''
+  return [
+    '# 本次任务',
+    '- 类型：' + taskTypeLabel(task.type),
+    '- 目标：' + task.description,
+    '- 本次范围：' + selected.join('、'),
+    '- 文件加载：' + task.loadMode + '；功能/接口索引：' + (task.includeCodeIndex ? '启用' : '关闭'),
+    '- 完成前验证：' + verification,
+    '- 只处理本次范围内的项目；如果必须读取范围外内容，先说明原因。' + reviewRule,
+  ].join('\n')
 }
 
 /**
@@ -223,12 +241,13 @@ export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): st
     standardGroups = [],
     standardsBudget = DEFAULT_STANDARDS_BUDGET,
     commandsBudget = DEFAULT_COMMANDS_BUDGET,
+    task,
   } = input
   // 剔除「禁用」目录（不注入上下文）；主项目（第 0 项）恒保留。
   const active = workspaces.filter((ws, index) => index === 0 || (ws.access ?? 'readwrite') !== 'disabled')
   if (active.length === 0) return ''
   const hasReadonly = active.some(ws => (ws.access ?? 'readwrite') === 'readonly')
-  const primaryLabel = mode === 'single' ? '【主项目 · 核心业务代码（读写）】' : '【主项目 · 工作区锚点（文档/非代码文件保存区）】'
+  const primaryLabel = mode === 'single' ? '【主项目 · 核心业务代码】' : '【主项目 · 工作区锚点（文档/非代码文件保存区）】'
   const secondaryLabel = mode === 'single' ? '【参考依赖模块】' : '【代码项目】'
   let currentGroup = ''
   const list = active
@@ -245,6 +264,7 @@ export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): st
   const fileIndex = renderFileIndex(entries, loadMode, tokenBudget)
   const codeIndex = renderCodeIndex(codeEntries, codeIndexBudget)
   const commands = renderCommands(active, commandsBudget)
+  const taskBlock = task === undefined ? '' : renderTask(task, active)
   // 常驻时用「@功能名」定位；改为按需（预算 <=0）时给一条查询线索，否则模型不知道有这份索引。
   const codeIndexUsage = codeIndex !== ''
     ? '- @功能名（如 @workspaceCreate）：指上方「功能/接口索引」里的名字，展开即读取该项列出的服务端/前端文件，用于快速定位。'
@@ -255,6 +275,7 @@ export function renderMultiWorkspacePrompt(input: MultiWorkspacePromptInput): st
     '# 多工作区联合开发模式生效',
     `当前会话加载【${active.length}】个项目目录：`,
     list,
+    ...(taskBlock !== '' ? ['', taskBlock] : []),
     ...(commands !== '' ? ['', commands] : []),
     ...(standards !== '' ? ['', standards] : []),
     ...(fileIndex !== '' ? ['', fileIndex] : []),

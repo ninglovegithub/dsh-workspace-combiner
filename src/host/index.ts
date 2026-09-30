@@ -35,6 +35,7 @@ import { CodeIndexCache, codeIndexTextFile } from './codeIndex.ts'
 import { FeatureSummaryCache, codeIndexSignature, summarizeFeatures } from './codeIndexSummary.ts'
 import { StandardsLibraryStore } from './standardsLibrary.ts'
 import { TokenUsageTracker, type TrackedEvent, type TrackedSession } from './tokenUsage.ts'
+import type { SessionTask } from '../core/task.ts'
 import { resolveStandardGroups, type StandardGroup } from '../core/standards.ts'
 
 /** 稳定的 cordis 插件名（编排行 id）。 */
@@ -61,6 +62,19 @@ function withSummaries(entries: readonly CodeIndexEntry[], summaries: Map<string
 interface SessionLike {
   id: string
   header?: { parentSession?: string }
+}
+
+interface SessionSelection {
+  directories: readonly WorkspaceRef[]
+  mode: WorkspaceMode
+  loadMode: LoadMode
+  tokenBudget: number
+  entries: FileIndexEntry[]
+  codeEntries: CodeIndexEntry[]
+  codeIndexBudget: number
+  standardGroups: StandardGroup[]
+  standardsBudget: number
+  task?: SessionTask
 }
 
 /**
@@ -90,7 +104,9 @@ export function apply(ctx: Context, config: Config = {}): void {
   const summaryCache = new FeatureSummaryCache()
   const standardsLibrary = new StandardsLibraryStore()
   const tokenUsage = new TokenUsageTracker()
-  const selectionBySession = new Map<string, { directories: readonly WorkspaceRef[]; mode: WorkspaceMode; loadMode: LoadMode; tokenBudget: number; entries: FileIndexEntry[]; codeEntries: CodeIndexEntry[]; codeIndexBudget: number; standardGroups: StandardGroup[]; standardsBudget: number }>()
+  const selectionBySession = new Map<string, SessionSelection>()
+  const taskBySession = new Map<string, SessionTask>()
+  const selectionNonceBySession = new Map<string, number>()
   // 会话 id -> 归属的自定义工作空间 id（新建会话时的当前工作空间）。
   const sessionWorkspaceBySession = new Map<string, string>()
   // 会话 id -> 已渲染文本：同一快照对象直接复用，避免每个模型步重复拼串。
@@ -120,6 +136,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           ...(selected.codeIndexBudget <= 0 && selected.codeEntries.length > 0 ? { codeIndexPath: codeIndexTextFile() } : {}),
           standardGroups: selected.standardGroups,
           standardsBudget: selected.standardsBudget,
+          task: selected.task,
         })
         renderedBySession.set(session.id, { snapshot: selected, text })
         return text
@@ -134,14 +151,23 @@ export function apply(ctx: Context, config: Config = {}): void {
    * @param ws - 工作空间记录。
    */
   const selectWorkspace = (sessionId: string, ws: Workspace): void => {
-    const loadMode = ws.loadMode ?? 'summary'
+    const task = taskBySession.get(sessionId)
+    const loadMode = task?.loadMode ?? ws.loadMode ?? 'summary'
     const mode = ws.mode ?? 'anchor'
-    const directories = ws.directories.map(directory => ({ ...directory }))
+    const selectedPaths = task === undefined ? undefined : new Set(task.directoryPaths)
+    const directories = ws.directories
+      .filter((directory, index) => index === 0 || selectedPaths === undefined || selectedPaths.has(directory.path))
+      .map(directory => ({
+        ...directory,
+        ...(task?.type === 'review' ? { access: 'readonly' as const } : {}),
+      }))
     const tokenBudget = ws.tokenBudget ?? DEFAULT_TOKEN_BUDGET
-    const codeIndexBudget = ws.codeIndexBudget ?? DEFAULT_CODE_INDEX_BUDGET
+    const codeIndexBudget = task?.includeCodeIndex === false ? 0 : ws.codeIndexBudget ?? DEFAULT_CODE_INDEX_BUDGET
+    const nonce = (selectionNonceBySession.get(sessionId) ?? 0) + 1
+    selectionNonceBySession.set(sessionId, nonce)
     // 先绑定目录快照，再异步补充文件树。此前在文件树扫描之后才写入 Map：大型
     // 仓库扫描期间 system prompt 可能已被组装，导致首轮请求完全没有多工作区上下文。
-    selectionBySession.set(sessionId, { directories, mode, loadMode, tokenBudget, entries: [], codeEntries: [], codeIndexBudget, standardGroups: [], standardsBudget: ws.standards?.budget ?? DEFAULT_STANDARDS_BUDGET })
+    selectionBySession.set(sessionId, { directories, mode, loadMode, tokenBudget, entries: [], codeEntries: [], codeIndexBudget, standardGroups: [], standardsBudget: ws.standards?.budget ?? DEFAULT_STANDARDS_BUDGET, ...(task === undefined ? {} : { task }) })
     void (async () => {
 
       // 各目录并行扫描（顺序由 Promise.all 保持）；summary 只注入递归计数、不建树。
@@ -154,18 +180,19 @@ export function apply(ctx: Context, config: Config = {}): void {
         }))
       // 功能/接口索引：把前后端落点连起来，减少盲搜。可在面板关闭或改预算；
       // codeIndexSummary='llm' 时按签名生成一次一句话摘要并缓存（失败静默降级）。
-      const baseCodeEntries = (ws.codeIndexEnabled ?? true) ? (await codeIndexCache.get(directories)).entries : []
+      const baseCodeEntries = (ws.codeIndexEnabled ?? true) && task?.includeCodeIndex !== false ? (await codeIndexCache.get(directories)).entries : []
       const signature = codeIndexSignature(baseCodeEntries)
       const cachedSummaries = baseCodeEntries.length > 0 ? await summaryCache.get(signature) : undefined
       const codeEntries = withSummaries(baseCodeEntries, cachedSummaries)
       // 开发规范：按工作空间绑定 + projectType 自动匹配解析出作用域分组。
       const standardGroups = resolveStandardGroups(ws.standards, directories, await standardsLibrary.get())
       // 会话可能在扫描期间已被关闭；不要把过期快照重新放回 Map。
-      if (sessionWorkspaceBySession.get(sessionId) === ws.id) {
+      if (sessionWorkspaceBySession.get(sessionId) === ws.id && selectionNonceBySession.get(sessionId) === nonce) {
         selectionBySession.set(sessionId, {
           directories, mode, loadMode, tokenBudget, entries, codeEntries, codeIndexBudget,
           standardGroups,
           standardsBudget: ws.standards?.budget ?? DEFAULT_STANDARDS_BUDGET,
+          ...(task === undefined ? {} : { task }),
         })
       }
       // AI 摘要在后台生成：不阻塞会话创建与首轮；完成后更新快照并失效渲染缓存。
@@ -173,7 +200,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         void (async () => {
           const generated = await summaryCache.ensure(signature, () => summarizeFeatures(ctx, sessionId, baseCodeEntries))
           if (generated.size === 0) return
-          if (sessionWorkspaceBySession.get(sessionId) !== ws.id) return
+          if (sessionWorkspaceBySession.get(sessionId) !== ws.id || selectionNonceBySession.get(sessionId) !== nonce) return
           const current = selectionBySession.get(sessionId)
           if (current === undefined || current.codeEntries !== codeEntries) return
           selectionBySession.set(sessionId, { ...current, codeEntries: withSummaries(baseCodeEntries, generated) })
@@ -227,9 +254,17 @@ export function apply(ctx: Context, config: Config = {}): void {
     }
   }
 
+  const setSessionTask = (sessionId: string, task: SessionTask): void => {
+    taskBySession.set(sessionId, task)
+    renderedBySession.delete(sessionId)
+    if (sessionWorkspaceBySession.has(sessionId)) refreshSession(sessionId)
+  }
+
   ctx.on('session/disposed', (session: SessionLike) => {
     selectionBySession.delete(session.id)
     sessionWorkspaceBySession.delete(session.id)
+    taskBySession.delete(session.id)
+    selectionNonceBySession.delete(session.id)
     renderedBySession.delete(session.id)
     tokenUsage.forget(session.id)
   }, { global: true })
@@ -250,6 +285,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       // 工作空间改动后立刻刷新在跑的会话（见 refreshWorkspaceSessions）。
       refreshSessions: refreshWorkspaceSessions,
       refreshSession,
+      setSessionTask,
     }).map(route => ctx.webServer.register(route))
     return () => {
       for (const dispose of disposers) dispose()

@@ -8,6 +8,34 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+### Added — task-scoped cross-repository sessions
+
+- The primary action is now a three-step Start task wizard: enter the goal and task type,
+  review the recommended directory scope, load mode, and feature-index policy, then create
+  a session with that task context. The previous behavior remains available as Quick session.
+- Feature, API-change, bug-fix, review, cross-repository refactor, and custom tasks are
+  supported. Endpoint or `@feature` matches narrow the recommendation to the linked client
+  and server projects plus the primary directory; uncertain matches safely fall back to all
+  enabled directories.
+- Task settings live in host memory by session ID and never overwrite the saved workspace.
+  Review tasks mark their session snapshot read-only and explicitly prohibit file changes in
+  the injected prompt.
+- A loopback-only `session-task` route accepts task metadata even before `session/created`
+  finishes, avoiding a client/host lifecycle race.
+
+### Added — workspace readiness report
+
+- The current-workspace header now exposes a compact Ready / Needs attention / Blocked
+  status. Its detail view checks directory validity, detected frontend/backend projects,
+  writable roots, Git state, paired endpoints, project commands, context budget, and
+  attached sessions in one place.
+- A missing primary directory or an empty workspace blocks readiness; budget pressure,
+  an empty endpoint index, missing commands, and dirty repositories remain actionable
+  non-blocking warnings. The report can re-run its checks and open the context-budget
+  view directly.
+- Readiness is derived by a platform-independent pure function, with no new host route
+  and no writes to project files.
+
 ### Added — per-project session list with a one-click refresh
 
 - Clicking a project in the panel expands the sessions that have it loaded (the ones this DSH

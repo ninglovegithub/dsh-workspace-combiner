@@ -45,6 +45,14 @@ Layers 1-4 ship today; see [Changelog](./CHANGELOG.md) · [中文](./CHANGELOG.z
 
 - **Workspaces** — create / rename / delete / switch named workspaces; each owns a
   primary directory plus ordered code-project directories with per-directory access.
+- **Workspace readiness report** — a compact status in the header summarizes directory
+  validity, detected frontend/backend projects, writable roots, Git changes, paired
+  endpoints, project commands, context budget, and attached sessions. Open it for
+  blocking issues and actionable suggestions.
+- **Start-task wizard** — describe a feature, API change, bug fix, code review,
+  cross-repository refactor, or custom task. The endpoint index recommends a per-session
+  directory scope, load mode, code-index policy, and verification checklist without
+  changing the saved workspace.
 - **New-workspace wizard** — pick a name + base path; the host creates the primary folder
   and a scan detects Java / Vue / React / Python / Go projects for multi-select.
 - **Three ways to add a directory** — select from native DSH workspaces, open the host
@@ -101,7 +109,7 @@ Layers 1-4 ship today; see [Changelog](./CHANGELOG.md) · [中文](./CHANGELOG.z
 - **Compact entry cards + modals** — advanced config, coding standards, prompt preview and the
   context budget are left-column entry cards that open modals, so they no longer occupy permanent
   panel height.
-- **Keyboard** — `Cmd/Ctrl+N` new session, `Cmd/Ctrl+K` command palette, `Esc` to close; the
+- **Keyboard** — `Cmd/Ctrl+N` opens Start task, `Cmd/Ctrl+K` opens the command palette, and `Esc` closes dialogs; the
   palette covers switching workspaces, adding directories, refreshing stats and changing modes.
 
 ---
@@ -203,13 +211,14 @@ Update after changing source: `pnpm build`, then remove and re-add the plugin.
 4. Open **Advanced** for the workspace mode, the file load mode and snapshots, and the
    **@ command cheat sheet**.
 5. Expand **Injected prompt** to preview exactly what will be sent, and copy it if useful.
-6. Click **New session** — the primary directory is opened, a session is created, the active
-   directories are injected into the system prompt and the sandbox writable roots are synced.
+6. Click **Start task**, describe the goal, and confirm the recommended directories, load
+   mode, and verification requirements. Use **Quick session** to keep the previous behavior.
 7. Watch the **Context budget** card: donut, stat cards and the per-directory column chart.
    Drag the divider above it to trade space with the directory list.
 
-> ⚠️ Directory changes only affect **newly created sessions**; already-open sessions are
-> not re-loaded.
+> Task scope belongs to the newly created session and is never written back to the workspace.
+> Workspace configuration changes refresh sessions already bound in this process and apply
+> from their next request.
 
 ### Injected prompt (appended to the system prompt)
 

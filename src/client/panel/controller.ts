@@ -9,6 +9,8 @@ import { WorkspaceCombinerApi } from '../api.ts'
 import type { CodeIndexEntry, ContextStats, DirectoryAccess, DirectoryCommands, EndpointImpact, GitStatus, LoadMode, TokenUsageReport, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceSnapshot, WorkspaceStandards } from '../../core/types.ts'
 import { emptyLibrary, resolveStandardGroups, type StandardGroup, type StandardsLibrary } from '../../core/standards.ts'
 import type { FileTreeNode } from '../../core/fileTree.ts'
+import { calculateReadiness, type ReadinessReport } from '../../core/readiness.ts'
+import type { SessionTask } from '../../core/task.ts'
 import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_STANDARDS_BUDGET, DEFAULT_TOKEN_BUDGET } from '../../invariant.ts'
 import { renderMultiWorkspacePrompt } from '../../prompt.ts'
 import { tt } from '../locales.ts'
@@ -149,6 +151,8 @@ export interface WorkspaceCombinerState {
   setWorkspaceMode(mode: WorkspaceMode): void
   setLoadMode(loadMode: LoadMode): void
   contextStats: ContextStats | null
+  /** 当前工作空间就绪度（纯客户端派生，不新增后端请求）。 */
+  readiness: ReadinessReport
   refreshContextStats(): void
   /** 真实 token 用量（provider 上报，含提示词缓存命中率）。 */
   tokenUsage: TokenUsageReport | null
@@ -169,6 +173,7 @@ export interface WorkspaceCombinerState {
   /** 高级配置弹窗：一次性提交草稿（工作空间模式 + 文件加载模式）。 */
   saveAdvanced(mode: WorkspaceMode, loadMode: LoadMode): void
   createSession(): void
+  createTaskSession(task: SessionTask): void
   dismissToast(id: number): void
 }
 
@@ -296,6 +301,18 @@ export function useWorkspaceCombiner(
   }, [sortedWorkspaces, search])
 
   const tokenBudget = budgetOverride ?? currentWorkspace?.tokenBudget ?? DEFAULT_TOKEN_BUDGET
+
+  const readiness = useMemo<ReadinessReport>(() => calculateReadiness({
+    workspace: currentWorkspace,
+    directories: dirs,
+    missingDirectories: missingDirs,
+    gitStatuses,
+    contextStats,
+    codeEntries,
+    codeIndexEnabled: currentWorkspace?.codeIndexEnabled ?? true,
+    tokenBudget,
+    sessions: sessionsByWorkspace[currentWorkspaceId]?.length ?? 0,
+  }), [currentWorkspace, dirs, missingDirs, gitStatuses, contextStats, codeEntries, tokenBudget, sessionsByWorkspace, currentWorkspaceId])
 
   // 上下文统计只受「目录集合 + 访问模式 + 加载模式」影响；改备注/分组/置顶/颜色时不重复扫描。
   const contextStatsKey = useMemo(
@@ -818,6 +835,24 @@ export function useWorkspaceCombiner(
       .catch(error => showToast(tt('createFailed', { error: errText(error) }), 'error'))
   }, [dirs, workspaces, currentWorkspaceId, startSession, showToast])
 
+  const createTaskSession = useCallback((task: SessionTask): void => {
+    const primary = dirs[0]?.path
+    if (primary === undefined || primary === '') {
+      showToast(tt('noPrimary'), 'error')
+      return
+    }
+    const workspaceName = workspaces.find(workspace => workspace.id === currentWorkspaceId)?.name ?? ''
+    const shortTask = task.description.length > 36 ? task.description.slice(0, 36) + '…' : task.description
+    const title = workspaceName === '' ? shortTask : workspaceName + ' · ' + shortTask
+    void startSession(primary, title)
+      .then(async sessionId => {
+        const api = apiRef.current
+        if (api !== null) await api.setSessionTask(sessionId, task)
+        showToast(tt('taskSessionCreated', { name: title }))
+      })
+      .catch(error => showToast(tt('createFailed', { error: errText(error) }), 'error'))
+  }, [dirs, workspaces, currentWorkspaceId, startSession, showToast])
+
   return {
     workspaces,
     currentWorkspaceId,
@@ -883,6 +918,7 @@ export function useWorkspaceCombiner(
     setWorkspaceMode,
     setLoadMode,
     contextStats,
+    readiness,
     refreshContextStats,
     tokenUsage,
     refreshTokenUsage,
@@ -898,6 +934,7 @@ export function useWorkspaceCombiner(
     copyText,
     saveAdvanced,
     createSession,
+    createTaskSession,
     dismissToast,
   }
 }

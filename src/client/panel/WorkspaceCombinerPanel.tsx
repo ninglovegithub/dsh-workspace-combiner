@@ -16,6 +16,8 @@ import { StandardsModal } from './StandardsModal.tsx'
 import { AdvancedModal } from './AdvancedModal.tsx'
 import { PreviewModal } from './PreviewModal.tsx'
 import { BudgetModal } from './BudgetModal.tsx'
+import { ReadinessModal } from './ReadinessModal.tsx'
+import { StartTaskWizard } from './StartTaskWizard.tsx'
 
 /** 侧边栏图标：两个叠放的方块 + 连线，表达「多项目组合」。 */
 export function WorkspaceCombinerIcon({ size, active }: PanelIconProps): ReactElement {
@@ -186,6 +188,8 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
   const [advOpen, setAdvOpen] = useState(false)
   const [standardsOpen, setStandardsOpen] = useState(false)
   const [budgetOpen, setBudgetOpen] = useState(false)
+  const [readinessOpen, setReadinessOpen] = useState(false)
+  const [taskWizardOpen, setTaskWizardOpen] = useState(false)
   const [cmdkOpen, setCmdkOpen] = useState(false)
   const [cmdkQuery, setCmdkQuery] = useState('')
   const [cmdkIndex, setCmdkIndex] = useState(0)
@@ -211,6 +215,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
   // ---------------- 命令面板条目 ----------------
   const commands = useMemo<CmdItem[]>(() => {
     const items: CmdItem[] = [
+      { id: 'start-task', label: tt('startTask'), kind: tt('cmdkKindAction'), run: () => setTaskWizardOpen(true) },
       { id: 'new-session', label: tt('cmdkNewSession'), kind: tt('cmdkKindAction'), run: state.createSession },
       { id: 'new-ws', label: tt('cmdkNewWorkspace'), kind: tt('cmdkKindAction'), run: () => setWizardOpen(true) },
       { id: 'add-dir', label: tt('cmdkAddDir'), kind: tt('cmdkKindAction'), run: state.pickAndAddDirectory },
@@ -247,7 +252,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       const mod = event.metaKey || event.ctrlKey
-      if (mod && event.key.toLowerCase() === 'n') { event.preventDefault(); state.createSession(); return }
+      if (mod && event.key.toLowerCase() === 'n') { event.preventDefault(); setTaskWizardOpen(true); return }
       if (mod && event.key.toLowerCase() === 'k') { event.preventDefault(); setCmdkOpen(v => !v); setCmdkQuery(''); setCmdkIndex(0); return }
       if (event.key === 'Escape') { setCmdkOpen(false) }
     }
@@ -321,7 +326,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
         </div>
 
         <div className="wcb-current">
-          <div className={'wcb-status-dot' + (dirCount === 0 ? ' wcb-status-off' : '')} aria-hidden="true" />
+          <div className={'wcb-status-dot wcb-status-' + state.readiness.status} aria-hidden="true" />
           <div className="wcb-current-text">
             <div className="wcb-current-name" title={currentWs?.name}>{currentWs?.name ?? ''}</div>
             <div className="wcb-current-meta">
@@ -332,7 +337,16 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
               <span>{currentWs?.loadMode === 'full' ? tt('loadModeFull') : currentWs?.loadMode === 'tree' ? tt('loadModeTree') : tt('loadModeSummary')}</span>
             </div>
           </div>
-          <button type="button" className="wcb-btn-new" aria-label={tt('createSession')} disabled={dirCount === 0} onClick={state.createSession}>{tt('createSession')}</button>
+          <button
+            type="button"
+            className={'wcb-readiness-chip wcb-readiness-chip-' + state.readiness.status}
+            aria-label={tt('readinessTitle')}
+            onClick={() => { setReadinessOpen(true); state.reloadWorkspaceSessions(state.currentWorkspaceId) }}
+          >
+            {state.readiness.status === 'blocked' ? tt('readinessBlocked') : state.readiness.status === 'warning' ? tt('readinessWarning') : tt('readinessReady')}
+          </button>
+          <button type="button" className="wcb-linkbtn" title={tt('quickSessionHint')} disabled={dirCount === 0} onClick={state.createSession}>{tt('quickSession')}</button>
+          <button type="button" className="wcb-btn-new" aria-label={tt('startTask')} disabled={dirCount === 0 || state.readiness.status === 'blocked'} onClick={() => setTaskWizardOpen(true)}>{tt('startTask')}</button>
         </div>
       </div>
 
@@ -797,6 +811,27 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
           onBudget={state.setTokenBudget}
           onRefresh={() => { state.refreshContextStats(); state.refreshTokenUsage() }}
           onClose={() => setBudgetOpen(false)}
+        />
+      ) : null}
+      {readinessOpen ? (
+        <ReadinessModal
+          report={state.readiness}
+          onRefresh={() => {
+            state.refreshContextStats()
+            state.refreshEndpointImpact()
+            state.refreshTokenUsage()
+            state.reloadWorkspaceSessions(state.currentWorkspaceId)
+          }}
+          onOpenBudget={() => { setReadinessOpen(false); setBudgetOpen(true) }}
+          onClose={() => setReadinessOpen(false)}
+        />
+      ) : null}
+      {taskWizardOpen ? (
+        <StartTaskWizard
+          directories={state.dirs}
+          codeEntries={state.codeEntries}
+          onCreate={(task) => { state.createTaskSession(task); setTaskWizardOpen(false) }}
+          onClose={() => setTaskWizardOpen(false)}
         />
       ) : null}
       {standardsOpen ? (

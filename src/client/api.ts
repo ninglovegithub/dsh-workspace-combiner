@@ -8,6 +8,7 @@ import { API } from '../invariant.ts'
 import type { CodeIndexEntry, ContextStats, DetectedProject, EndpointImpact, GitStatus, LoadMode, TokenUsageReport, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceStandards } from '../core/types.ts'
 import type { StandardsLibrary } from '../core/standards.ts'
 import type { FileTreeNode } from '../core/fileTree.ts'
+import type { SessionTask } from '../core/task.ts'
 
 /** 统一 JSON 请求/响应。 */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -188,6 +189,11 @@ export class WorkspaceCombinerApi {
   /** 把工作空间的最新配置刷新进某个已加载的会话（下一轮请求生效）。 */
   async refreshSession(sessionId: string): Promise<void> {
     await request<{ ok: boolean }>(API.sessionRefresh, { method: 'POST', body: JSON.stringify({ sessionId }) })
+  }
+
+  /** 把一次性任务范围绑定到新会话，不修改工作空间永久配置。 */
+  async setSessionTask(sessionId: string, task: SessionTask): Promise<void> {
+    await request<{ ok: boolean }>(API.sessionTask, { method: 'POST', body: JSON.stringify({ sessionId, task }) })
   }
 
   /** 由改动文件反查受影响的前后端端点（不传 files 时用 git 工作区变更）。 */

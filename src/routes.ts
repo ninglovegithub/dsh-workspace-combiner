@@ -25,6 +25,7 @@ import { getChangedFiles, getGitStatus } from './host/gitStatus.ts'
 import { syncExtraRoots } from './sandbox-sync.ts'
 import { WorkspaceCombinerStore } from './store.ts'
 import { loadModeMaxDepth, type LoadMode, type WorkspaceMode, type WorkspaceRef } from './core/types.ts'
+import { parseSessionTask, type SessionTask } from './core/task.ts'
 
 /** loopback 字面量 + 浏览器同源标记（dsh-ssh 配对路由栅栏）。 */
 function isLoopbackRequest(request: IncomingMessage): boolean {
@@ -97,6 +98,8 @@ export interface TokenUsageDeps {
   refreshSessions(workspaceId: string): void
   /** 刷新单个会话的上下文快照；返回它绑定的工作空间 id，未绑定返回 undefined。 */
   refreshSession(sessionId: string): string | undefined
+  /** 绑定一次性任务上下文；允许早于 session/created 到达。 */
+  setSessionTask(sessionId: string, task: SessionTask): void
 }
 
 /**
@@ -691,6 +694,27 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
             return
           }
           writeJson(res, 200, { ok: true, workspaceId })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
+    // ---------------------------------------------------------- session-task（一次性任务范围）
+    {
+      kind: 'exact',
+      path: API.sessionTask,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        try {
+          const body = await readJsonBody(req)
+          const sessionId = body === undefined ? '' : typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+          const task = parseSessionTask(body?.task)
+          if (sessionId === '' || task === undefined) {
+            writeJson(res, 400, { error: 'valid sessionId and task are required' })
+            return
+          }
+          usage.setSessionTask(sessionId, task)
+          writeJson(res, 200, { ok: true })
         } catch (error) {
           fail(res, error)
         }
