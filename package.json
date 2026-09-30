@@ -55,7 +55,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "smoke:code-index": "node --experimental-strip-types scripts/code-index-smoke.ts",
     "smoke:task-recommendation": "node --experimental-strip-types scripts/task-recommendation-smoke.ts",
-    "smoke:task-verification": "node --experimental-strip-types scripts/task-verification-smoke.ts"
+    "smoke:task-verification": "node --experimental-strip-types scripts/task-verification-smoke.ts",
+    "smoke:task-preflight": "node --experimental-strip-types scripts/task-preflight-smoke.ts"
   },
   "peerDependencies": {
     "@chaoset/sandbox-extra-roots": "^0.4.12",

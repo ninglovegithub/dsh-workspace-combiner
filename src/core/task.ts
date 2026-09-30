@@ -1,4 +1,4 @@
-import type { CodeIndexEntry, LoadMode, WorkspaceRef } from './types.ts'
+import type { CodeIndexEntry, GitStatus, LoadMode, WorkspaceRef } from './types.ts'
 
 export type TaskType = 'feature' | 'api-change' | 'bugfix' | 'review' | 'refactor' | 'custom'
 export type TaskVerification = 'run' | 'test' | 'build' | 'review-impact'
@@ -19,6 +19,34 @@ export interface TaskRecommendation {
   weakEndpoints: readonly CodeIndexEntry[]
   mode: 'trusted-match' | 'weak-match' | 'default'
   directoryFeatures: Readonly<Record<string, readonly string[]>>
+}
+
+export type TaskPreflightStatus = 'ready' | 'warning' | 'blocked'
+export type TaskPreflightIssueCode = 'missing-directory' | 'dirty-repository' | 'readonly-directory' | 'missing-command' | 'no-code-project' | 'no-verification'
+
+export interface TaskPreflightIssue {
+  code: TaskPreflightIssueCode
+  count?: number
+  verification?: TaskVerification
+}
+
+export interface TaskPreflightResult {
+  status: TaskPreflightStatus
+  issues: readonly TaskPreflightIssue[]
+}
+
+export interface TaskExecutionCheck {
+  verification: TaskVerification
+  command?: string
+}
+
+export interface TaskExecutionProject {
+  name: string
+  path: string
+  primary: boolean
+  access: 'readwrite' | 'readonly'
+  gitStatus: GitStatus | null
+  checks: readonly TaskExecutionCheck[]
 }
 
 const TASK_TYPES = new Set<TaskType>(['feature', 'api-change', 'bugfix', 'review', 'refactor', 'custom'])
@@ -150,6 +178,63 @@ export function taskVerificationLabel(verification: TaskVerification): string {
     case 'test': return '测试'
     case 'build': return '构建'
     case 'review-impact': return '变更影响复核'
+  }
+}
+
+export function taskExecutionPlan(
+  task: SessionTask,
+  directories: readonly WorkspaceRef[],
+  gitStatuses: Readonly<Record<string, GitStatus | null>>,
+): readonly TaskExecutionProject[] {
+  return directories.flatMap((directory, index) => {
+    if (!task.directoryPaths.includes(directory.path)) return []
+    const checks = index === 0 ? [] : task.verification.map(verification => {
+      const commandKey = VERIFICATION_COMMAND[verification]
+      const command = commandKey === undefined ? undefined : directory.commands?.[commandKey]?.trim()
+      return { verification, ...(command === undefined || command === '' ? {} : { command }) }
+    })
+    return [{
+      name: directory.name,
+      path: directory.path,
+      primary: index === 0,
+      access: directory.access === 'readonly' ? 'readonly' : 'readwrite',
+      gitStatus: gitStatuses[directory.path] ?? null,
+      checks,
+    }]
+  })
+}
+
+export function taskPreflight(
+  task: SessionTask,
+  directories: readonly WorkspaceRef[],
+  missingDirectories: ReadonlySet<string>,
+  gitStatuses: Readonly<Record<string, GitStatus | null>>,
+): TaskPreflightResult {
+  const selected = directories.filter(directory => task.directoryPaths.includes(directory.path))
+  const selectedProjects = selected.filter((directory, index) => directories.indexOf(directory) > 0)
+  const issues: TaskPreflightIssue[] = []
+  const missing = selected.filter(directory => missingDirectories.has(directory.path)).length
+  if (missing > 0) issues.push({ code: 'missing-directory', count: missing })
+  const dirty = selected.filter(directory => {
+    const status = gitStatuses[directory.path]
+    return status != null && status.dirty + status.untracked > 0
+  }).length
+  if (dirty > 0) issues.push({ code: 'dirty-repository', count: dirty })
+  if (task.type !== 'review') {
+    const readonly = selectedProjects.filter(directory => directory.access === 'readonly').length
+    if (readonly > 0) issues.push({ code: 'readonly-directory', count: readonly })
+  }
+  if (selectedProjects.length === 0 && task.type !== 'review') issues.push({ code: 'no-code-project' })
+  if (task.verification.length === 0) issues.push({ code: 'no-verification' })
+  for (const verification of task.verification) {
+    const coverage = taskVerificationCoverage(verification, task.directoryPaths, directories)
+    if (coverage !== undefined && coverage.total > 0 && coverage.configured === 0) {
+      issues.push({ code: 'missing-command', verification })
+    }
+  }
+  return {
+    status: missing > 0 ? 'blocked' : issues.length > 0 ? 'warning' : 'ready',
+    issues,
   }
 }
 

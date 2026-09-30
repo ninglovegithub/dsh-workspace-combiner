@@ -8,6 +8,23 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+### Added — task-scope risk check before session creation
+
+- The confirmation step now blocks creation when a selected directory is missing or inaccessible,
+  and warns about dirty Git repositories, read-only code projects, empty code scope, missing checks,
+  and verification-command gaps.
+- Risks are calculated only from the directories and checks selected for this task. Review tasks do
+  not treat read-only projects as a problem.
+- Healthy scopes show a Ready state; blocked scopes disable the create action before a broken
+  session can be started.
+
+### Improved — project-level execution plan on confirmation
+
+- The Start Task confirmation lists each project's role, Git branch and dirty state, plus the
+  concrete command used for every selected verification.
+- Missing commands are explicitly marked for model discovery, while impact review is shown as a
+  manual check so execution gaps are visible before session creation.
+
 ### Improved — editable task verification with command coverage
 
 - Step two of Start Task now exposes Run, Test, Build, and Impact review toggles instead of

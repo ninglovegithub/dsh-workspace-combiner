@@ -5,13 +5,15 @@
  */
 
 import { useEffect, useState, type ChangeEvent, type ReactElement } from 'react'
-import type { CodeIndexEntry, LoadMode, WorkspaceRef } from '../../core/types.ts'
-import { recommendTask, taskVerificationCoverage, type SessionTask, type TaskRecommendation, type TaskType, type TaskVerification } from '../../core/task.ts'
+import type { CodeIndexEntry, GitStatus, LoadMode, WorkspaceRef } from '../../core/types.ts'
+import { recommendTask, taskExecutionPlan, taskPreflight, taskVerificationCoverage, type SessionTask, type TaskPreflightIssue, type TaskRecommendation, type TaskType, type TaskVerification } from '../../core/task.ts'
 import { tt } from '../locales.ts'
 
 interface StartTaskWizardProps {
   directories: readonly WorkspaceRef[]
   codeEntries: readonly CodeIndexEntry[]
+  missingDirectories: ReadonlySet<string>
+  gitStatuses: Readonly<Record<string, GitStatus | null>>
   onCreate(task: SessionTask): void
   onClose(): void
 }
@@ -45,7 +47,16 @@ function verificationLabel(verification: TaskVerification): string {
   return tt('taskVerificationImpact')
 }
 
-export function StartTaskWizard({ directories, codeEntries, onCreate, onClose }: StartTaskWizardProps): ReactElement {
+function preflightIssueLabel(issue: TaskPreflightIssue): string {
+  if (issue.code === 'missing-directory') return tt('taskPreflightMissingDirectory', { n: issue.count ?? 0 })
+  if (issue.code === 'dirty-repository') return tt('taskPreflightDirtyRepository', { n: issue.count ?? 0 })
+  if (issue.code === 'readonly-directory') return tt('taskPreflightReadonlyDirectory', { n: issue.count ?? 0 })
+  if (issue.code === 'missing-command') return tt('taskPreflightMissingCommand', { verification: verificationLabel(issue.verification ?? 'test') })
+  if (issue.code === 'no-code-project') return tt('taskPreflightNoCodeProject')
+  return tt('taskPreflightNoVerification')
+}
+
+export function StartTaskWizard({ directories, codeEntries, missingDirectories, gitStatuses, onCreate, onClose }: StartTaskWizardProps): ReactElement {
   const [step, setStep] = useState<1 | 2 | 3>(1)
   const [description, setDescription] = useState('')
   const [type, setType] = useState<TaskType>('feature')
@@ -86,6 +97,8 @@ export function StartTaskWizard({ directories, codeEntries, onCreate, onClose }:
   }
 
   const enabledDirectories = directories.filter(directory => (directory.access ?? 'readwrite') !== 'disabled')
+  const preflight = taskPreflight(task, directories, missingDirectories, gitStatuses)
+  const executionPlan = taskExecutionPlan(task, directories, gitStatuses)
 
   return (
     <div className="wcb-overlay" onClick={onClose}>
@@ -183,6 +196,41 @@ export function StartTaskWizard({ directories, codeEntries, onCreate, onClose }:
               <div><span>{tt('loadModeLabel')}</span><strong>{task.loadMode}</strong></div>
               <div><span>{tt('taskVerification')}</span><strong>{task.verification.length > 0 ? task.verification.map(verificationLabel).join(' · ') : tt('taskVerificationNone')}</strong></div>
             </div>
+            <div className="wcb-task-plan">
+              <strong>{tt('taskPlanTitle')}</strong>
+              <div className="wcb-task-plan-list">
+                {executionPlan.map(project => {
+                  const pending = project.gitStatus === null ? 0 : project.gitStatus.dirty + project.gitStatus.untracked
+                  return (
+                    <div className="wcb-task-plan-project" key={project.path}>
+                      <div className="wcb-task-plan-head">
+                        <span><b>{project.name}</b><em>{project.primary ? tt('taskPlanPrimary') : project.access === 'readonly' ? tt('taskPlanReadonly') : tt('taskPlanWritable')}</em></span>
+                        {project.gitStatus !== null ? <small>{project.gitStatus.branch} · {pending > 0 ? tt('taskPlanDirty', { n: pending }) : tt('taskPlanClean')}</small> : null}
+                      </div>
+                      <small className="wcb-task-plan-path" title={project.path}>{project.path}</small>
+                      {project.checks.length > 0 ? (
+                        <div className="wcb-task-plan-checks">
+                          {project.checks.map(check => (
+                            <span key={check.verification}>
+                              <b>{verificationLabel(check.verification)}</b>
+                              <code>{check.command ?? (check.verification === 'review-impact' ? tt('taskPlanManualReview') : tt('taskPlanAutoCommand'))}</code>
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+            <div className={'wcb-task-preflight wcb-task-preflight-' + preflight.status}>
+              <strong>
+                {preflight.status === 'ready' ? tt('taskPreflightReady') : preflight.status === 'blocked' ? tt('taskPreflightBlocked') : tt('taskPreflightWarning')}
+              </strong>
+              {preflight.issues.length === 0 ? <span>{tt('taskPreflightReadyHint')}</span> : (
+                <ul>{preflight.issues.map((issue, index) => <li key={issue.code + '|' + (issue.verification ?? '') + '|' + index}>{preflightIssueLabel(issue)}</li>)}</ul>
+              )}
+            </div>
           </div>
         ) : null}
 
@@ -191,7 +239,7 @@ export function StartTaskWizard({ directories, codeEntries, onCreate, onClose }:
           <button type="button" className="wcb-btn-plain" onClick={onClose}>{tt('cancel')}</button>
           {step === 1 ? <button type="button" className="wcb-btn-primary" disabled={description.trim() === ''} onClick={prepareRecommendation}>{tt('wizardNext')}</button> : null}
           {step === 2 ? <button type="button" className="wcb-btn-primary" disabled={task.directoryPaths.length === 0} onClick={() => setStep(3)}>{tt('wizardNext')}</button> : null}
-          {step === 3 ? <button type="button" className="wcb-btn-primary" onClick={() => onCreate(task)}>{tt('taskCreate')}</button> : null}
+          {step === 3 ? <button type="button" className="wcb-btn-primary" disabled={preflight.status === 'blocked'} onClick={() => onCreate(task)}>{tt('taskCreate')}</button> : null}
         </div>
       </div>
     </div>

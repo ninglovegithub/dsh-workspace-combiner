@@ -52,8 +52,9 @@ Layers 1-4 ship today; see [Changelog](./CHANGELOG.md) · [中文](./CHANGELOG.z
 - **Start-task wizard** — describe a feature, API change, bug fix, code review,
   cross-repository refactor, or custom task. Only complete Exact/Normalized endpoint pairs narrow
   the directory scope; inferred or one-sided matches retain the safe full scope. Run/Test/Build/
-  Impact checks are editable and show command coverage across selected projects; all choices remain
-  session-only.
+  Impact checks are editable and show command coverage. The confirmation step adds a per-project
+  execution plan, then checks missing directories, dirty repositories, read-only projects, and
+  verification gaps before session creation.
 - **New-workspace wizard** — pick a name + base path; the host creates the primary folder
   and a scan detects Java / Vue / React / Python / Go projects for multi-select.
 - **Three ways to add a directory** — select from native DSH workspaces, open the host

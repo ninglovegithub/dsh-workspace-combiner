@@ -877,6 +877,8 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
         <StartTaskWizard
           directories={state.dirs}
           codeEntries={state.codeEntries}
+          missingDirectories={state.missingDirs}
+          gitStatuses={state.gitStatuses}
           onCreate={(task) => { state.createTaskSession(task); setTaskWizardOpen(false) }}
           onClose={() => setTaskWizardOpen(false)}
         />
