@@ -1,0 +1,101 @@
+/**
+ * 存储 smoke：验证持久化层的四条纪律。
+ *
+ *   1. 首启（文件不存在）→ 一个默认工作空间，且不视为加载失败。
+ *   2. 目录路径规范化 + 去重：`/a/b`、`/a/b/`、`/a/b//` 是同一个目录；主目录
+ *      保留用户显式设置的 access，只补默认值。
+ *   3. **多进程/多窗口不丢更新**：实例内存快照过期时，落盘前先重读磁盘再应用
+ *      本次变更（rebase），两个实例各自新增的工作空间都要在。
+ *   4. **损坏文件不覆盖**：读到无法解析的文件时隔离为 `.corrupt-*`，并拒绝写入
+ *      ——否则空库会把用户全部工作空间抹掉。
+ *
+ * 全程使用临时目录，不触碰真实 DSH_HOME。
+ * @module dsh-workspace-combiner/scripts/store-smoke
+ */
+
+import assert from 'node:assert/strict'
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+const { WorkspaceCombinerStore } = await import('../src/store.ts')
+
+const dir = await mkdtemp(join(tmpdir(), 'wcb-store-smoke-'))
+const file = join(dir, 'dsh-workspace-combiner.json')
+
+// ------------------------------------------------- 1) 首启：默认工作空间
+{
+  const store = new WorkspaceCombinerStore(file)
+  const state = await store.getState()
+  assert.equal(store.loadFailed(), false, 'missing file is a normal first run')
+  assert.equal(state.workspaces.length, 1, 'first run must materialize one default workspace')
+  assert.equal(state.currentWorkspaceId, state.workspaces[0].id)
+  console.log('first run default workspace OK')
+}
+
+// ------------------------------- 2) 路径规范化 / 去重 / 主目录 access
+{
+  const store = new WorkspaceCombinerStore(file)
+  const ws = await store.createWorkspace('规范', undefined, [
+    { id: 'p', name: 'primary', path: '/a/b/' },
+    { id: 'dup1', name: 'dup', path: '/a/b' },
+    { id: 'dup2', name: 'dup2', path: '/a/b//' },
+    { id: 'other', name: 'other', path: '/c', access: 'readonly' },
+  ])
+  assert.deepEqual(ws.directories.map(d => d.path), ['/a/b', '/c'], 'trailing separators must collapse and duplicates must drop')
+  assert.equal(ws.directories[0].isPrimary, true, 'first entry stays primary')
+  assert.equal(ws.directories[0].access, 'readwrite', 'primary defaults to readwrite')
+  assert.equal(ws.directories[1].access, 'readonly', 'explicit readonly must be preserved')
+
+  const explicit = await store.createWorkspace('显式只读主目录', undefined, [
+    { id: 'p2', name: 'primary', path: '/d', access: 'readonly' },
+  ])
+  assert.equal(explicit.directories[0].access, 'readonly', 'explicit primary access must not be rewritten')
+  console.log('path normalization, dedupe and access preservation OK')
+}
+
+// --------------------------------- 3) 多进程/多窗口：不丢更新
+{
+  const shared = join(dir, 'shared.json')
+  const first = new WorkspaceCombinerStore(shared)
+  await first.getState() // 触发首次加载
+  const second = new WorkspaceCombinerStore(shared)
+  await second.getState() // 两个实例都只加载了一次内存快照
+
+  await first.createWorkspace('来自进程一')
+  // second 的内存快照里没有「来自进程一」；落盘前重读磁盘才能保住它。
+  await second.createWorkspace('来自进程二')
+
+  const final = JSON.parse(await readFile(shared, 'utf8')) as { workspaces: Array<{ name: string }> }
+  const names = final.workspaces.map(w => w.name)
+  assert.ok(names.includes('来自进程一'), 'first process workspace must survive')
+  assert.ok(names.includes('来自进程二'), 'second process workspace must survive')
+  assert.equal(names.filter(name => name === '来自进程一').length, 1, 'no duplicate after re-reading disk')
+  console.log('cross-process lost-update avoidance OK')
+}
+
+// --------------------------------------- 4) 损坏文件：隔离 + 拒绝写入
+{
+  const broken = join(dir, 'broken.json')
+  await writeFile(broken, '{ this is not json', 'utf8')
+  const store = new WorkspaceCombinerStore(broken)
+  await store.getState()
+  assert.equal(store.loadFailed(), true, 'unparsable content must be reported as a load failure')
+
+  const siblings = await readdir(dir)
+  assert.ok(siblings.some(name => name.startsWith('broken.json.corrupt-')), 'the corrupt file must be quarantined, not deleted')
+
+  let rejected = false
+  await store.createWorkspace('不该写进去').catch(() => { rejected = true })
+  assert.equal(rejected, true, 'persist must refuse to run after a load failure')
+
+  // 结构可解析但内容退化（workspaces 全非法）同样按损坏处理。
+  const degraded = join(dir, 'degraded.json')
+  await writeFile(degraded, JSON.stringify({ version: 2, currentWorkspaceId: 'x', workspaces: [{ nope: 1 }] }), 'utf8')
+  const degradedStore = new WorkspaceCombinerStore(degraded)
+  await degradedStore.getState()
+  assert.equal(degradedStore.loadFailed(), true, 'unrecognized structure must not silently become an empty library')
+  console.log('corrupt store quarantine and write refusal OK')
+}
+
+console.log('store smoke: first run, normalization, cross-process merge and corruption safety OK')

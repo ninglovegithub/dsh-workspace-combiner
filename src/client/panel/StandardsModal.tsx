@@ -4,12 +4,14 @@
  * @module dsh-workspace-combiner/client/panel/StandardsModal
  */
 
-import { useMemo, useState, type ChangeEvent, type ReactElement } from 'react'
+import { useMemo, useRef, useState, type ChangeEvent, type ReactElement } from 'react'
 import type { WorkspaceRef, WorkspaceStandards } from '../../core/types.ts'
 import { BUILTIN_STANDARDS, type StandardsLibrary } from '../../core/standards.ts'
 import { estimateTokens } from '../../core/fileTree.ts'
 import { DEFAULT_STANDARDS_BUDGET } from '../../invariant.ts'
 import { tt } from '../locales.ts'
+import { Dialog } from './Dialog.tsx'
+import { NumberInput } from './NumberInput.tsx'
 
 interface StandardsModalProps {
   standards: WorkspaceStandards
@@ -47,6 +49,16 @@ export function StandardsModal({ standards, library, directories, onSaveWorkspac
   const [editScope, setEditScope] = useState<'global' | 'workspace'>('global')
   const [aiHint, setAiHint] = useState<string>('')
   const [aiLoading, setAiLoading] = useState(false)
+  // token 估算按正文缓存：编辑某一行时不必把其它行的正文重新遍历一遍。
+  const tokenCache = useRef<Map<string, number>>(new Map())
+  const tokensOf = (body: string): number => {
+    const cached = tokenCache.current.get(body)
+    if (cached !== undefined) return cached
+    const value = estimateTokens(body)
+    if (tokenCache.current.size > 500) tokenCache.current.clear()
+    tokenCache.current.set(body, value)
+    return value
+  }
 
   const rows = useMemo<Row[]>(() => {
     const workspaceOverrides = draftWs.workspaceOverrides ?? {}
@@ -126,9 +138,9 @@ export function StandardsModal({ standards, library, directories, onSaveWorkspac
     if (name === '') return
     const id = 'custom-' + Math.random().toString(36).slice(2, 10)
     if (newScope === 'global') {
-      setDraftLib(prev => ({ ...prev, custom: [...prev.custom, { id, name, tech: '自定义', summary: '', body: '' }] }))
+      setDraftLib(prev => ({ ...prev, custom: [...prev.custom, { id, name, tech: tt('standardsCustomTech'), summary: '', body: '' }] }))
     } else {
-      setDraftWs(prev => ({ ...prev, workspaceCustom: [...(prev.workspaceCustom ?? []), { id, name, tech: tt('standardsScopeWorkspaceShort'), summary: '', body: '' }] }))
+      setDraftWs(prev => ({ ...prev, workspaceCustom: [...(prev.workspaceCustom ?? []), { id, name, tech: tt('standardsCustomTech'), summary: '', body: '' }] }))
     }
     setSelectedId(id)
     setNewName('')
@@ -152,11 +164,12 @@ export function StandardsModal({ standards, library, directories, onSaveWorkspac
     }
   }
 
-  const selected = rows.find(row => row.id === selectedId) ?? rows[0]
+  // 严格查找：`?? rows[0]` 会让 selectedId 失效时标题显示 A、编辑实际写到 B。
+  const selected = rows.find(row => row.id === selectedId)
   const budget = draftWs.budget ?? DEFAULT_STANDARDS_BUDGET
   const totalTokens = activeIds.reduce((sum, id) => {
     const row = rows.find(item => item.id === id)
-    return sum + (row === undefined ? 0 : estimateTokens(row.body))
+    return sum + (row === undefined ? 0 : tokensOf(row.body))
   }, 0)
 
   const targetDirectory = directories.find(dir => dir.path === target)
@@ -194,16 +207,14 @@ export function StandardsModal({ standards, library, directories, onSaveWorkspac
             {row.name}
             {row.overridden ? <span className="wcb-std-flag">{tt('standardsOverridden')}</span> : null}
           </button>
-          <span className="wcb-std-meta">{'~' + estimateTokens(row.body) + ' t'}</span>
+          <span className="wcb-std-meta">{'~' + tokensOf(row.body) + ' t'}</span>
         </div>
       ))}
     </div>
   )
 
   return (
-    <div className="wcb-overlay" onClick={close}>
-      <div className="wcb-modal wcb-modal-wide wcb-std-modal" role="dialog" aria-modal="true" aria-label={tt('standardsTitle')} onClick={(event) => event.stopPropagation()}>
-        <div className="wcb-modal-title">{tt('standardsTitle')}</div>
+    <Dialog title={tt('standardsTitle')} onClose={close} wide className="wcb-std-modal">
 
         <div className="wcb-std-toolbar">
           <span className="wcb-label" style={{ margin: 0 }}>{tt('standardsTarget')}</span>
@@ -219,7 +230,7 @@ export function StandardsModal({ standards, library, directories, onSaveWorkspac
           </label>
           <div className="wcb-head-actions">
             <span className="wcb-label" style={{ margin: 0 }}>{tt('standardsBudget')}</span>
-            <input className="wcb-budget-input" type="number" min={0} value={budget} aria-label={tt('standardsBudget')} onChange={(event: ChangeEvent<HTMLInputElement>) => setDraftWs(prev => ({ ...prev, budget: Number(event.currentTarget.value) }))} />
+            <NumberInput value={budget} onCommit={(value) => setDraftWs(prev => ({ ...prev, budget: value }))} min={0} label={tt('standardsBudget')} />
           </div>
         </div>
 
@@ -244,7 +255,7 @@ export function StandardsModal({ standards, library, directories, onSaveWorkspac
 
           <div className="wcb-std-pane">
             {selected === undefined ? (
-              <div className="wcb-hint">{tt('standardsNone')}</div>
+              <div className="wcb-hint">{tt('standardsSelectHint')}</div>
             ) : (
               <>
                 <div className="wcb-std-pane-head">
@@ -282,7 +293,6 @@ export function StandardsModal({ standards, library, directories, onSaveWorkspac
           <button type="button" className="wcb-btn-plain" aria-label={tt('cancel')} onClick={close}>{tt('cancel')}</button>
           <button type="button" className="wcb-btn-primary" aria-label={tt('standardsSave')} onClick={save}>{tt('standardsSave')}</button>
         </div>
-      </div>
-    </div>
+    </Dialog>
   )
 }

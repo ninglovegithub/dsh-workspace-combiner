@@ -1,6 +1,7 @@
-import { useEffect, type ReactElement } from 'react'
+import type { ReactElement } from 'react'
 import type { ReadinessIssue, ReadinessReport } from '../../core/readiness.ts'
 import { tt } from '../locales.ts'
+import { Dialog } from './Dialog.tsx'
 
 interface ReadinessModalProps {
   report: ReadinessReport
@@ -35,20 +36,12 @@ function km(value: number): string {
 }
 
 export function ReadinessModal({ report, onRefresh, onOpenBudget, onClose }: ReadinessModalProps): ReactElement {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   const blocked = report.issues.filter(issue => issue.severity === 'blocked')
   const warnings = report.issues.filter(issue => issue.severity === 'warning')
   const summary = report.summary
 
   return (
-    <div className="wcb-overlay" onClick={onClose}>
-      <div className="wcb-modal wcb-modal-wide" role="dialog" aria-modal="true" aria-label={tt('readinessTitle')} onClick={(event) => event.stopPropagation()}>
-        <div className="wcb-modal-title">{tt('readinessTitle')}</div>
+    <Dialog title={tt('readinessTitle')} onClose={onClose} wide>
         <div className={'wcb-readiness-hero wcb-readiness-' + report.status}>
           <span className="wcb-readiness-dot" aria-hidden="true" />
           <div>
@@ -91,7 +84,6 @@ export function ReadinessModal({ report, onRefresh, onOpenBudget, onClose }: Rea
           <button type="button" className="wcb-btn" onClick={onRefresh}>{tt('readinessRefresh')}</button>
           <button type="button" className="wcb-btn-primary" onClick={onClose}>{tt('cancel')}</button>
         </div>
-      </div>
-    </div>
+    </Dialog>
   )
 }

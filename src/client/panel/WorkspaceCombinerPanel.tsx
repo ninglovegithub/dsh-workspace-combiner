@@ -5,12 +5,16 @@
  * @module dsh-workspace-combiner/client/panel/WorkspaceCombinerPanel
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type ReactElement } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState, type ChangeEvent, type DragEvent, type ReactElement } from 'react'
 import type { PanelIconProps, WorkspaceCombinerPanelProps } from '../types.ts'
-import type { CodeIndexConfidence, CodeIndexEntry, DirectoryAccess, GitStatus, LoadMode, ProjectType, Workspace, WorkspaceMode } from '../../core/types.ts'
+import type { CodeIndexConfidence, CodeIndexEntry, DirectoryAccess, GitStatus, LoadMode, Workspace, WorkspaceMode, WorkspaceRef } from '../../core/types.ts'
 import { useWorkspaceCombiner, DEFAULT_TOKEN_BUDGET } from './controller.ts'
 import { injectPanelStyles } from './styles.ts'
 import { tt } from '../locales.ts'
+import { GROUP_CLASS, GROUP_KINDS, dirTypeSquare, groupKindOf, groupLabel } from './groups.ts'
+import { ConfirmModal } from './ConfirmModal.tsx'
+import { Dialog } from './Dialog.tsx'
+import { NumberInput } from './NumberInput.tsx'
 import { NewWorkspaceWizard } from './NewWorkspaceWizard.tsx'
 import { StandardsModal } from './StandardsModal.tsx'
 import { AdvancedModal } from './AdvancedModal.tsx'
@@ -85,27 +89,6 @@ function codeIndexDetail(entry: CodeIndexEntry): string {
 }
 
 
-/** 目录分组 -> 胶囊样式类。 */
-const GROUP_CLASS: Record<string, string> = {
-  [tt('groupDoc')]: 'wcb-cap-doc',
-  [tt('groupBackend')]: 'wcb-cap-backend',
-  [tt('groupFrontend')]: 'wcb-cap-frontend',
-  [tt('groupRef')]: 'wcb-cap-ref',
-  [tt('groupOther')]: 'wcb-cap-other',
-}
-
-/** 目录分组 -> 类型方块字母 + 样式类。 */
-function dirTypeSquare(index: number, group: string | undefined, type: ProjectType | undefined): { letter: string; cls: string } {
-  if (index === 0) return { letter: 'D', cls: 'wcb-type-sq wcb-type-sq-doc' }
-  const g = group ?? ''
-  if (g === tt('groupBackend') || type === 'java' || type === 'python' || type === 'go') return { letter: 'B', cls: 'wcb-type-sq wcb-type-sq-backend' }
-  if (g === tt('groupFrontend') || type === 'frontend' || type === 'frontend-vue' || type === 'frontend-react' || type === 'frontend-webpack' || type === 'frontend-next') return { letter: 'F', cls: 'wcb-type-sq wcb-type-sq-frontend' }
-  if (g === tt('groupRef')) return { letter: 'R', cls: 'wcb-type-sq wcb-type-sq-ref' }
-  if (g === tt('groupDoc')) return { letter: 'D', cls: 'wcb-type-sq wcb-type-sq-doc' }
-  return { letter: 'P', cls: 'wcb-type-sq wcb-type-sq-other' }
-}
-
-
 /** 访问状态 -> 胶囊样式类。 */
 const ACCESS_CLASS: Record<DirectoryAccess, string> = {
   readwrite: 'wcb-cap wcb-cap-rw',
@@ -149,25 +132,6 @@ function GitBadge({ status }: { status: GitStatus | null | undefined }): ReactEl
 }
 
 
-/** 弹窗公共外壳：Esc 关闭 + 点击遮罩关闭 + aria-modal。 */
-function Modal({ title, onClose, wide, children }: { title: string; onClose: () => void; wide?: boolean; children: ReactElement | ReactElement[] }): ReactElement {
-  const ref = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') { event.stopPropagation(); onClose() } }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-  useEffect(() => { ref.current?.focus() }, [])
-  return (
-    <div className="wcb-overlay" onClick={onClose}>
-      <div ref={ref} tabIndex={-1} className={'wcb-modal' + (wide === true ? ' wcb-modal-wide' : '')} role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
-        <div className="wcb-modal-title">{title}</div>
-        {children}
-      </div>
-    </div>
-  )
-}
-
 /** 重命名工作空间弹窗。 */
 function RenameWorkspaceModal({ ws, onConfirm, onClose }: {
   ws: Workspace
@@ -177,7 +141,7 @@ function RenameWorkspaceModal({ ws, onConfirm, onClose }: {
   const [name, setName] = useState(ws.name)
   const submit = (): void => { const trimmed = name.trim(); if (trimmed !== '') onConfirm(trimmed) }
   return (
-    <Modal title={tt('wsRenameTitle')} onClose={onClose}>
+    <Dialog title={tt('wsRenameTitle')} onClose={onClose}>
       <label className="wcb-field">
         <span>{tt('wsCreateName')}</span>
         <input className="wcb-input" value={name} autoFocus aria-label={tt('wsCreateName')} onChange={(event) => setName(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === 'Enter') submit() }} />
@@ -186,7 +150,7 @@ function RenameWorkspaceModal({ ws, onConfirm, onClose }: {
         <button type="button" className="wcb-btn-plain" aria-label={tt('cancel')} onClick={onClose}>{tt('cancel')}</button>
         <button type="button" className="wcb-btn-primary" aria-label={tt('confirm')} disabled={name.trim() === ''} onClick={submit}>{tt('confirm')}</button>
       </div>
-    </Modal>
+    </Dialog>
   )
 }
 
@@ -197,13 +161,13 @@ function DeleteWorkspaceModal({ ws, onConfirm, onClose }: {
   onClose: () => void
 }): ReactElement {
   return (
-    <Modal title={tt('wsDeleteTitle')} onClose={onClose}>
+    <Dialog title={tt('wsDeleteTitle')} onClose={onClose}>
       <div className="wcb-modal-body">{tt('wsDeleteConfirm', { name: ws.name })}</div>
       <div className="wcb-modal-actions">
         <button type="button" className="wcb-btn-plain" aria-label={tt('cancel')} onClick={onClose}>{tt('cancel')}</button>
         <button type="button" className="wcb-btn-danger" aria-label={tt('wsDelete')} onClick={onConfirm}>{tt('wsDelete')}</button>
       </div>
-    </Modal>
+    </Dialog>
   )
 }
 
@@ -240,6 +204,11 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
   const [editingNotePath, setEditingNotePath] = useState<string | null>(null)
   const [editingCmdPath, setEditingCmdPath] = useState<string | null>(null)
   const [ciQuery, setCiQuery] = useState('')
+  /** 端点索引一次最多渲染多少条（长列表不做虚拟化，先限制渲染量）。 */
+  const [ciLimit, setCiLimit] = useState(200)
+  const [confirmBulkRemove, setConfirmBulkRemove] = useState(false)
+  /** 待确认移除的单个目录（null = 无）。 */
+  const [removeTarget, setRemoveTarget] = useState<WorkspaceRef | null>(null)
   const currentWs = state.currentWorkspace
   const dirCount = state.dirs.length
 
@@ -276,7 +245,18 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
       items.push({ id: 'load-' + value, label: tt('cmdkLoadMode', { name: label }), kind: tt('cmdkKindLoadMode'), run: () => state.setLoadMode(value) })
     }
     return items
-  }, [state])
+    // 只依赖真正用到的字段：`state` 每次渲染都是新对象，依赖它等于放弃 memo。
+  }, [
+    state.sortedWorkspaces,
+    state.switchWorkspace,
+    state.setLoadMode,
+    state.createSession,
+    state.pickAndAddDirectory,
+    state.refreshContextStats,
+    state.refreshDiagnostics,
+    state.setPreviewOpen,
+    state.previewOpen,
+  ])
 
   const cmdkFiltered = useMemo(() => {
     const q = cmdkQuery.trim().toLowerCase()
@@ -303,7 +283,8 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [state])
+    // 只用到 setState（引用稳定），不该跟着 state 每次渲染重挂监听。
+  }, [])
 
   useEffect(() => {
     if (!cmdkOpen) return
@@ -450,11 +431,19 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                               <button
                                 type="button"
                                 className="wcb-linkbtn"
+                                title={tt('sessionOpenHint')}
+                                onClick={(event) => { event.stopPropagation(); props.openSession?.(sessionId) }}
+                              >
+                                {tt('sessionOpen')}
+                              </button>
+                              <button
+                                type="button"
+                                className="wcb-linkbtn"
                                 title={tt('sessionRefreshHint')}
-                                disabled={state.refreshingSessionId === sessionId}
+                                disabled={state.refreshingSessionIds.has(sessionId)}
                                 onClick={(event) => { event.stopPropagation(); state.refreshSession(sessionId) }}
                               >
-                                {state.refreshingSessionId === sessionId ? tt('sessionRefreshing') : tt('sessionRefresh')}
+                                {state.refreshingSessionIds.has(sessionId) ? tt('sessionRefreshing') : tt('sessionRefresh')}
                               </button>
                             </div>
                           ))}
@@ -581,10 +570,10 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                                 aria-label={tt("notePlaceholder")}
                                 onClick={(event) => event.stopPropagation()}
                                 onChange={(event: ChangeEvent<HTMLInputElement>) => state.setDirectoryNote(d.path, event.currentTarget.value)}
-                                onBlur={() => setEditingNotePath(null)}
+                                onBlur={() => { state.flushDirectoryWrites(); setEditingNotePath(null) }}
                                 onKeyDown={(event) => {
-                                  if (event.key === "Enter") { event.preventDefault(); state.setDirectoryNote(d.path, event.currentTarget.value); setEditingNotePath(null) }
-                                  else if (event.key === "Escape") { event.preventDefault(); setEditingNotePath(null) }
+                                  if (event.key === "Enter") { event.preventDefault(); state.setDirectoryNote(d.path, event.currentTarget.value); state.flushDirectoryWrites(); setEditingNotePath(null) }
+                                  else if (event.key === "Escape") { event.preventDefault(); state.flushDirectoryWrites(); setEditingNotePath(null) }
                                 }}
                               />
                             ) : (
@@ -614,6 +603,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                                       value={d.commands?.[field] ?? ""}
                                       placeholder={tt('cmdPlaceholder')}
                                       aria-label={label}
+                                      onBlur={() => state.flushDirectoryWrites()}
                                       onChange={(event: ChangeEvent<HTMLInputElement>) => {
                                         const next = { ...(d.commands ?? {}), [field]: event.currentTarget.value.trim() }
                                         const any = Object.values(next).some(v => v !== undefined && v !== '')
@@ -624,7 +614,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                                 ))}
                                 <div className="wcb-dir-cmd-actions">
                                   <span className="wcb-hint">{tt('cmdHint')}</span>
-                                  <button type="button" className="wcb-linkbtn" aria-label={tt('confirm')} onClick={() => setEditingCmdPath(null)}>{tt('confirm')}</button>
+                                  <button type="button" className="wcb-linkbtn" aria-label={tt('confirm')} onClick={() => { state.flushDirectoryWrites(); setEditingCmdPath(null) }}>{tt('confirm')}</button>
                                 </div>
                               </div>
                             ) : (
@@ -650,13 +640,9 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                           </div>
                           {missing ? <span className="wcb-warn-icon" title={tt('dirMissing')} role="img" aria-label={tt('dirMissing')}>⚠</span> : null}
                           {i > 0 ? (
-                            <select className={'wcb-cap ' + (GROUP_CLASS[group] ?? 'wcb-cap-other')} style={{ border: 'none', font: 'inherit', fontSize: '9.5px', cursor: 'pointer' }} value={group === '' ? '' : group} aria-label={tt('groupHint')} onChange={(event) => state.setDirectoryGroup(d.path, event.currentTarget.value)} onDragStart={(event: DragEvent<HTMLSelectElement>) => event.stopPropagation()}>
+                            <select className={'wcb-cap ' + GROUP_CLASS[groupKindOf(group) ?? 'other']} style={{ border: 'none', font: 'inherit', fontSize: '9.5px', cursor: 'pointer' }} value={groupKindOf(group) ?? ''} aria-label={tt('groupHint')} onChange={(event) => state.setDirectoryGroup(d.path, event.currentTarget.value)} onDragStart={(event: DragEvent<HTMLSelectElement>) => event.stopPropagation()}>
                               <option value="">{tt('groupNone')}</option>
-                              <option value={tt('groupDoc')}>{tt('groupDoc')}</option>
-                              <option value={tt('groupBackend')}>{tt('groupBackend')}</option>
-                              <option value={tt('groupFrontend')}>{tt('groupFrontend')}</option>
-                              <option value={tt('groupRef')}>{tt('groupRef')}</option>
-                              <option value={tt('groupOther')}>{tt('groupOther')}</option>
+                              {GROUP_KINDS.map(kind => <option key={kind} value={kind}>{groupLabel(kind)}</option>)}
                             </select>
                           ) : null}
                           {i === 0 ? (
@@ -668,7 +654,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                               <option value="disabled">{tt('accessDisabled')}</option>
                             </select>
                           )}
-                          {i > 0 ? <button type="button" className="wcb-remove" title={tt('removeDirectory')} aria-label={tt('removeDirectory')} onClick={() => state.removeDirectory(d.path)}>✕</button> : <span style={{ width: 20 }} aria-hidden="true" />}
+                          {i > 0 ? <button type="button" className="wcb-remove" title={tt('removeDirectory')} aria-label={tt('removeDirectory')} onClick={() => setRemoveTarget(d)}>✕</button> : <span style={{ width: 20 }} aria-hidden="true" />}
                         </li>
                       )
                     })}
@@ -689,15 +675,11 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                     </div>
                     <div className="wcb-bulk-row">
                       <span className="wcb-label" style={{ margin: 0 }}>{tt('bulkGroup')}</span>
-                      <select className="wcb-input" style={{ flex: 'none', width: 110 }} aria-label={tt('bulkGroup')} value="" onChange={(event) => { state.bulkSetGroup(event.currentTarget.value); event.currentTarget.value = '' }}>
+                      <select className="wcb-input" style={{ flex: 'none', width: 110 }} aria-label={tt('bulkGroup')} value="" onChange={(event) => state.bulkSetGroup(event.currentTarget.value)}>
                         <option value="">{tt('groupNone')}</option>
-                        <option value={tt('groupDoc')}>{tt('groupDoc')}</option>
-                        <option value={tt('groupBackend')}>{tt('groupBackend')}</option>
-                        <option value={tt('groupFrontend')}>{tt('groupFrontend')}</option>
-                        <option value={tt('groupRef')}>{tt('groupRef')}</option>
-                        <option value={tt('groupOther')}>{tt('groupOther')}</option>
+                        {GROUP_KINDS.map(kind => <option key={kind} value={kind}>{groupLabel(kind)}</option>)}
                       </select>
-                      <button type="button" className="wcb-btn-danger" aria-label={tt('bulkDelete')} onClick={state.bulkRemove}>{tt('bulkDelete')}</button>
+                      <button type="button" className="wcb-btn-danger" aria-label={tt('bulkDelete')} onClick={() => setConfirmBulkRemove(true)}>{tt('bulkDelete')}</button>
                     </div>
                   </div>
                 ) : null}
@@ -720,7 +702,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                   {tt('codeIndexToggle')}
                 </label>
                 <span className="wcb-label" style={{ margin: 0 }}>{tt('codeIndexBudget')}</span>
-                <input className="wcb-budget-input" type="number" min={0} title={tt('codeIndexBudgetHint')} value={state.codeIndexBudget} disabled={!state.codeIndexEnabled} aria-label={tt('codeIndexBudgetHint')} onChange={(event: ChangeEvent<HTMLInputElement>) => state.setCodeIndexBudget(Number(event.currentTarget.value))} />
+                <NumberInput value={state.codeIndexBudget} onCommit={state.setCodeIndexBudget} min={0} disabled={!state.codeIndexEnabled} label={tt('codeIndexBudgetHint')} title={tt('codeIndexBudgetHint')} />
                 <span className="wcb-label" style={{ margin: 0 }}>{tt('codeIndexSummaryLabel')}</span>
                 <select className="wcb-input" style={{ width: 'auto' }} value={state.codeIndexSummary} disabled={!state.codeIndexEnabled} aria-label={tt('codeIndexSummaryLabel')} onChange={(event: ChangeEvent<HTMLSelectElement>) => state.setCodeIndexSummary(event.currentTarget.value === 'llm' ? 'llm' : 'off')}>
                   <option value="off">{tt('codeIndexSummaryOff')}</option>
@@ -739,9 +721,9 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
               {state.endpointImpactFiles > 0 && state.endpointImpact.length === 0 ? (
                 <span className="wcb-hint">{tt('impactNone')}</span>
               ) : null}
-              {state.endpointImpact.map(item => (
+              {state.endpointImpact.map((item, index) => (
                 <div
-                  key={item.endpoint + '|' + item.changedFile + '|' + (item.counterpart?.file ?? '')}
+                  key={item.endpoint + '|' + item.changedFile + '|' + (item.counterpart?.file ?? '') + '|' + index}
                   role="button"
                   tabIndex={0}
                   title={tt('codeIndexCopy')}
@@ -763,9 +745,9 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                 <div className="wcb-hint">{tt('codeIndexEmpty')}</div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                  {codeEntriesFiltered.map(entry => (
+                  {codeEntriesFiltered.slice(0, ciLimit).map((entry, index) => (
                     <div
-                      key={entry.feature + '|' + entry.endpoint}
+                      key={entry.feature + '|' + entry.endpoint + '|' + index}
                       role="button"
                       tabIndex={0}
                       title={tt('codeIndexCopy')}
@@ -787,6 +769,11 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                       {entry.summary !== undefined && entry.summary !== '' ? <span style={{ color: 'var(--wcb-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.summary}</span> : null}
                     </div>
                   ))}
+                  {codeEntriesFiltered.length > ciLimit ? (
+                    <button type="button" className="wcb-linkbtn" onClick={() => setCiLimit(limit => limit + 200)}>
+                      {tt('listMore', { n: codeEntriesFiltered.length - ciLimit })}
+                    </button>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -801,6 +788,9 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
           {([['#5dd8a3', tt('legendReadwrite')], ['#d2a8ff', tt('legendReadonly')], ['#8b949e', tt('legendDisabled')]] as Array<[string, string]>).map(([color, label]) => (
             <span className="wcb-legend-item" key={label}><span className="wcb-legend-dot" style={{ background: color }} aria-hidden="true" />{label}</span>
           ))}
+        </div>
+        <div className="wcb-legend">
+          <span className="wcb-legend-item"><span className="wcb-legend-text">{tt('legendTypes')}</span></span>
         </div>
         {dirCount > 0 ? (
           <div className="wcb-sandbox" title={tt('sandboxTitle', { cur: sandboxCount })}>
@@ -839,6 +829,26 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
           pickDirectory={pickDirectory}
           onClose={() => setWizardOpen(false)}
           onCreate={(name, basePath, directories, mode) => { state.createWorkspace(name, basePath, directories, mode); setWizardOpen(false) }}
+        />
+      ) : null}
+      {removeTarget !== null ? (
+        <ConfirmModal
+          title={tt('removeDirectory')}
+          message={tt('removeDirectoryConfirm', { name: removeTarget.name })}
+          confirmLabel={tt('removeDirectory')}
+          danger
+          onConfirm={() => { state.removeDirectory(removeTarget.path); setRemoveTarget(null) }}
+          onClose={() => setRemoveTarget(null)}
+        />
+      ) : null}
+      {confirmBulkRemove ? (
+        <ConfirmModal
+          title={tt('bulkDelete')}
+          message={tt('bulkRemoveConfirm', { n: state.selectedDirs.size })}
+          confirmLabel={tt('bulkDelete')}
+          danger
+          onConfirm={() => { state.bulkRemove(); setConfirmBulkRemove(false) }}
+          onClose={() => setConfirmBulkRemove(false)}
         />
       ) : null}
       {renameTarget !== null ? (

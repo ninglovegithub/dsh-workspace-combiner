@@ -1,7 +1,7 @@
 {
   "name": "dsh-workspace-combiner",
   "description": "DSH 工作区组合器：管理主目录与多个代码项目，自动识别 Java/Vue/React/Python/Go 及 pnpm/Turbo/Nx/Maven/Gradle Monorepo，把项目和内部包绝对路径注入会话并联动沙盒白名单。",
-  "version": "0.8.3",
+  "version": "0.8.5",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "engines": {
@@ -33,51 +33,58 @@
     "docs/**"
   ],
   "dsh": {
-    "host": "0.1.5-rc.2",
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
     "client": {
       "platform": "web",
       "inject": [
-        "slots",
-        "locale",
-        "sessions",
-        "workspaces",
-        "remote",
-        "remote.directoryPicker"
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-api-workspace-controller",
+        "@deepseek-ai/dsh-api-gateway",
+        "@deepseek-ai/dsh-client-ui-workspace"
       ]
     }
   },
   "scripts": {
     "build": "tsdown",
-    "watch": "tsdown --watch",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "smoke:client-contract": "node --experimental-strip-types scripts/client-contract-smoke.ts",
     "smoke:code-index": "node --experimental-strip-types scripts/code-index-smoke.ts",
-    "smoke:task-recommendation": "node --experimental-strip-types scripts/task-recommendation-smoke.ts",
-    "smoke:task-verification": "node --experimental-strip-types scripts/task-verification-smoke.ts",
-    "smoke:task-preflight": "node --experimental-strip-types scripts/task-preflight-smoke.ts",
-    "smoke:project-defaults": "node --experimental-strip-types scripts/project-defaults-smoke.ts",
-    "smoke:monorepo": "node --experimental-strip-types scripts/monorepo-smoke.ts",
-    "smoke:on-demand-context": "node --experimental-strip-types scripts/on-demand-context-smoke.ts",
+    "smoke:code-index-java": "node --experimental-strip-types scripts/code-index-java-smoke.ts",
     "smoke:context-budget": "node --experimental-strip-types scripts/context-budget-smoke.ts",
     "smoke:diagnostics": "node --experimental-strip-types scripts/diagnostics-smoke.ts",
-    "smoke:task-mode": "node --experimental-strip-types scripts/task-mode-smoke.ts"
+    "smoke:dsh-compat": "node --experimental-strip-types scripts/dsh-compat-smoke.ts",
+    "smoke:groups": "node --experimental-strip-types scripts/groups-smoke.ts",
+    "smoke:monorepo": "node --experimental-strip-types scripts/monorepo-smoke.ts",
+    "smoke:on-demand-context": "node --experimental-strip-types scripts/on-demand-context-smoke.ts",
+    "smoke:on-demand-lifecycle": "node --experimental-strip-types scripts/on-demand-lifecycle-smoke.ts",
+    "smoke:project-defaults": "node --experimental-strip-types scripts/project-defaults-smoke.ts",
+    "smoke:project-scan": "node --experimental-strip-types scripts/project-scan-smoke.ts",
+    "smoke:sandbox-sync": "node --experimental-strip-types scripts/sandbox-sync-smoke.ts",
+    "smoke:store": "node --experimental-strip-types scripts/store-smoke.ts",
+    "smoke:task-capsule": "node --experimental-strip-types scripts/task-capsule-smoke.ts",
+    "smoke:task-mode": "node --experimental-strip-types scripts/task-mode-smoke.ts",
+    "smoke:task-preflight": "node --experimental-strip-types scripts/task-preflight-smoke.ts",
+    "smoke:task-recommendation": "node --experimental-strip-types scripts/task-recommendation-smoke.ts",
+    "smoke:task-verification": "node --experimental-strip-types scripts/task-verification-smoke.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "watch": "tsdown --watch"
   },
   "peerDependencies": {
-    "@chaoset/sandbox-extra-roots": "^0.4.12",
-    "@deepseek-ai/dsh-client-locale": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-session": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-client-locale": ">=0.2.0-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-host-webserver": ">=0.2.0-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-session": ">=0.2.0-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-system-prompt": ">=0.2.0-rc.1 <0.3.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-session": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
     "@types/node": "^22.20.0",
     "@types/react": "~18.3.1",
     "@types/react-dom": "^18.3.5",
@@ -101,5 +108,8 @@
     "type": "git",
     "url": "git+https://github.com/ninglovegithub/dsh-workspace-combiner.git"
   },
-  "homepage": "https://github.com/ninglovegithub/dsh-workspace-combiner#readme"
+  "homepage": "https://github.com/ninglovegithub/dsh-workspace-combiner#readme",
+  "dependencies": {
+    "yaml": "^2.9.1"
+  }
 }

@@ -22,7 +22,6 @@ import { resolveStandardGroups } from './core/standards.ts'
 import { parseWorkspaceRefs } from './core/validate.ts'
 import { computeContextStats } from './host/contextStats.ts'
 import { getChangedFiles, getGitStatus } from './host/gitStatus.ts'
-import { syncExtraRoots } from './sandbox-sync.ts'
 import { WorkspaceCombinerStore } from './store.ts'
 import { loadModeMaxDepth, type DiagnosticAction, type LoadMode, type TokenUsageReport, type WorkspaceMode, type WorkspaceRef } from './core/types.ts'
 import { parseSessionTask, type SessionTask } from './core/task.ts'
@@ -85,10 +84,28 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   }
 }
 
-/** 生成可用的文件系统文件夹名（去路径分隔符 / Windows 非法字符 / 控制字符）。 */
+/**
+ * `child` 是否等于 `parent` 或位于 `parent` 之内。
+ * 用 `relative` 判断而不是字符串前缀：Windows 上 `C:\proj` 与 `C:/proj/x`
+ * 分隔符不同，硬编码 '/' 的 `startsWith` 永远不成立（改动反查会恒为空）。
+ */
+function isSameOrInside(parent: string, child: string): boolean {
+  const rel = relative(parent, child)
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+/**
+ * 生成可用的文件系统文件夹名（去路径分隔符 / Windows 非法字符 / 控制字符）。
+ *
+ * 必须显式拒绝 `.` / `..` / 纯点名称：它们能通过字符过滤，然后 `join(basePath, '..')`
+ * 会让主目录变成 basePath 的**父目录**，并被当成可写根写进 prompt 与沙盒白名单。
+ * Windows 另需拒绝设备保留名与结尾的点/空格。
+ */
 function sanitizeFolderName(name: string): string {
-  const cleaned = name.replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, '').trim()
-  return cleaned === '' ? DEFAULT_WORKSPACE_NAME : cleaned.slice(0, 80)
+  const cleaned = name.replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, '').trim().replace(/[. ]+$/, '')
+  if (cleaned === '' || /^\.+$/.test(cleaned)) return DEFAULT_WORKSPACE_NAME
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(cleaned)) return DEFAULT_WORKSPACE_NAME
+  return cleaned.slice(0, 80)
 }
 
 /** token 用量路由所需的宿主侧依赖。 */
@@ -101,9 +118,15 @@ export interface TokenUsageDeps {
   /** 工作空间配置变化后刷新其在跑会话的上下文快照（新增项目立即可用，无需新建会话）。 */
   refreshSessions(workspaceId: string): void
   /** 刷新单个会话的上下文快照；返回它绑定的工作空间 id，未绑定返回 undefined。 */
-  refreshSession(sessionId: string): string | undefined
+  refreshSession(sessionId: string): Promise<string | undefined>
   /** 绑定一次性任务上下文；允许早于 session/created 到达。 */
   setSessionTask(sessionId: string, task: SessionTask): void
+  /**
+   * 重算并写入沙盒额外可写根白名单。范围是「当前工作空间 ∪ 全部活动会话绑定的
+   * 工作空间」的可写目录——只跟随当前工作空间会把另一个活会话的写权限静默吊销。
+   * @returns 是否写入成功。
+   */
+  syncSandbox(): Promise<boolean>
 }
 
 /**
@@ -129,18 +152,24 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
     writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
   }
 
-  // 沙盒联动：跟踪本插件上次贡献的路径，当前工作空间目录变化时调和白名单。
-  // 只有「读写」目录进入可写白名单；只读/禁用目录保持不可写（读本就不受限）。
-  const writablePaths = (dirs: readonly WorkspaceRef[]): string[] =>
-    dirs.filter(d => (d.access ?? 'readwrite') === 'readwrite').map(d => d.path)
-  let lastSyncedPaths: string[] = []
-  void store.getCurrentWorkspace().then(ws => { lastSyncedPaths = writablePaths(ws?.directories ?? []) })
-  const syncCurrent = async (): Promise<void> => {
-    const ws = await store.getCurrentWorkspace()
-    const next = writablePaths(ws?.directories ?? [])
-    await syncExtraRoots(ctx, lastSyncedPaths, next)
-    lastSyncedPaths = next
+  /**
+   * 工作空间是否存在。store 的变更方法对未知 id 是静默 no-op，路由若照样回
+   * `ok: true`，客户端就分不清「改成功了」和「什么都没改」。未知 id 一律 404。
+   */
+  const workspaceExists = async (id: string): Promise<boolean> =>
+    (await store.getWorkspaces()).some(workspace => workspace.id === id)
+
+  /** 未知工作空间 id 时回 404 并返回 false。 */
+  const guardWorkspace = async (res: ServerResponse, id: string): Promise<boolean> => {
+    if (await workspaceExists(id)) return true
+    writeJson(res, 404, { error: 'unknown workspace id' })
+    return false
   }
+
+  // 沙盒联动：白名单的「当前工作空间 ∪ 全部活动会话绑定的工作空间」并集由宿主
+  // 计算（见 host/index.ts 的 syncSandbox），这里只负责调用并把结果如实回给客户端
+  // ——静默吞掉失败会让人以为写权限已经放开。
+  const syncCurrent = async (): Promise<boolean> => await usage.syncSandbox()
 
   const contextStatsOf = async () => {
     const ws = await store.getCurrentWorkspace()
@@ -162,6 +191,7 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
       standardGroups,
       standardsBudget: context.standardsBudget,
       commandsBudget: context.commandsBudget,
+      contextScope: 'workspace-preview:' + ws.id,
     })
   }
 
@@ -227,8 +257,8 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
           const primary: WorkspaceRef = { id: targetPath, name: folderName, path: targetPath, isPrimary: true, access: 'readwrite' }
           const allDirectories: WorkspaceRef[] = [primary, ...directories.filter(d => d.path !== targetPath)]
           const workspace = await store.createWorkspace(name, undefined, allDirectories, mode, loadMode)
-          await syncCurrent()
-          writeJson(res, 201, { workspace, currentWorkspaceId: workspace.id })
+          const sandboxSynced = await syncCurrent()
+          writeJson(res, 201, { workspace, currentWorkspaceId: workspace.id, sandboxSynced })
         } catch (error) {
           fail(res, error)
         }
@@ -268,6 +298,7 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
           return
         }
         try {
+          if (!(await guardWorkspace(res, id))) return
           await store.renameWorkspace(id, name)
           writeJson(res, 200, { ok: true })
         } catch (error) {
@@ -288,9 +319,10 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
           return
         }
         try {
+          if (!(await guardWorkspace(res, id))) return
           const nextCurrent = await store.deleteWorkspace(id)
-          await syncCurrent()
-          writeJson(res, 200, { ok: true, currentWorkspaceId: nextCurrent })
+          const sandboxSynced = await syncCurrent()
+          writeJson(res, 200, { ok: true, currentWorkspaceId: nextCurrent, sandboxSynced })
         } catch (error) {
           fail(res, error)
         }
@@ -309,9 +341,10 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
           return
         }
         try {
+          if (!(await guardWorkspace(res, id))) return
           await store.switchWorkspace(id)
-          await syncCurrent()
-          writeJson(res, 200, { ok: true })
+          const sandboxSynced = await syncCurrent()
+          writeJson(res, 200, { ok: true, sandboxSynced })
         } catch (error) {
           fail(res, error)
         }
@@ -331,11 +364,12 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
           return
         }
         try {
+          if (!(await guardWorkspace(res, id))) return
           await store.setWorkspaceDirectories(id, directories)
-          if (id === (await store.getCurrentWorkspaceId())) await syncCurrent()
+          const sandboxSynced = id === (await store.getCurrentWorkspaceId()) ? await syncCurrent() : true
           // 增删项目后刷新在跑的会话：下一个模型步就能看到新目录，不必新建会话。
           usage.refreshSessions(id)
-          writeJson(res, 200, { ok: true })
+          writeJson(res, 200, { ok: true, sandboxSynced })
         } catch (error) {
           fail(res, error)
         }
@@ -355,6 +389,7 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
           return
         }
         try {
+          if (!(await guardWorkspace(res, id))) return
           await store.setWorkspaceMode(id, mode)
           // 模式会改变注入内容（锚点/单项目），同样刷新在跑的会话。
           usage.refreshSessions(id)
@@ -450,14 +485,16 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
           writeJson(res, 400, { error: 'id and action are required' })
           return
         }
+        let sandboxSynced = true
         try {
           if (action === 'save') {
             if (name === '') { writeJson(res, 400, { error: 'name is required' }); return }
-            await store.saveSnapshot(id, name)
+            if (!(await guardWorkspace(res, id))) return
+          await store.saveSnapshot(id, name)
           } else if (action === 'restore') {
             if (snapshotId === '') { writeJson(res, 400, { error: 'snapshotId is required' }); return }
             await store.restoreSnapshot(id, snapshotId)
-            if (id === (await store.getCurrentWorkspaceId())) await syncCurrent()
+            sandboxSynced = id === (await store.getCurrentWorkspaceId()) ? await syncCurrent() : true
             // 还快照换的是目录列表，同样刷新在跑的会话。
             usage.refreshSessions(id)
           } else if (action === 'delete') {
@@ -467,7 +504,7 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
             writeJson(res, 400, { error: 'unknown action' })
             return
           }
-          writeJson(res, 200, { ok: true })
+          writeJson(res, 200, { ok: true, sandboxSynced })
         } catch (error) {
           fail(res, error)
         }
@@ -606,6 +643,7 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
           return
         }
         try {
+          if (!(await guardWorkspace(res, id))) return
           await store.setWorkspaceStandards(id, standards as never)
           // 开发规范也是注入内容的一部分，改了同样刷新在跑的会话。
           usage.refreshSessions(id)
@@ -716,7 +754,10 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
               codeIndexCache.get(workspace.directories),
             ])
           } else if (action === 'sync-sandbox') {
-            await syncCurrent()
+            if (!(await syncCurrent())) {
+              writeJson(res, 500, { error: 'sandbox whitelist write failed (see host log)' })
+              return
+            }
           } else if (action === 'refresh-sessions') {
             if (workspace !== undefined) usage.refreshSessions(workspace.id)
           } else {
@@ -760,7 +801,7 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
             writeJson(res, 400, { error: 'sessionId is required' })
             return
           }
-          const workspaceId = usage.refreshSession(sessionId)
+          const workspaceId = await usage.refreshSession(sessionId)
           if (workspaceId === undefined) {
             writeJson(res, 404, { error: 'session is not loaded in this process' })
             return
@@ -818,7 +859,7 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
             for (const raw of requested) {
               const file = raw.trim()
               if (isAbsolute(file)) {
-                const dir = dirs.find(d => file === d.path || file.startsWith(d.path + '/'))
+                const dir = dirs.find(d => isSameOrInside(d.path, file))
                 if (dir !== undefined) changed.push({ dir: dir.path, file: relative(dir.path, file) })
               } else {
                 for (const dir of dirs) changed.push({ dir: dir.path, file })

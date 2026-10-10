@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path'
 import { emptyLibrary, parseCustomStandard, type StandardsLibrary } from '../core/standards.ts'
 import type { CustomStandard } from '../core/types.ts'
 import { dshHome } from '../store.ts'
+import { warnIoFailure } from './fileIndex.ts'
 
 /** 规范库文件路径。 */
 export function standardsLibraryFile(): string {
@@ -34,7 +35,11 @@ export function parseLibrary(raw: unknown): StandardsLibrary {
 /** 规范库：读一次缓存，整份替换写盘。 */
 export class StandardsLibraryStore {
   private readonly file: string
-  private loaded = false
+  /**
+   * 首次读盘的共享 promise。旧实现用一个布尔位在 await 之前置位：并发首个
+   * get()（面板读库 / 会话创建解析规范）会让后到者拿到半初始化的空库。
+   */
+  private loading: Promise<void> | undefined
   private library: StandardsLibrary = emptyLibrary()
   private chain: Promise<void> = Promise.resolve()
 
@@ -44,14 +49,8 @@ export class StandardsLibraryStore {
 
   /** 读取库（首次读盘，之后走内存）。 */
   async get(): Promise<StandardsLibrary> {
-    if (!this.loaded) {
-      this.loaded = true
-      try {
-        this.library = parseLibrary(JSON.parse(await readFile(this.file, 'utf8')))
-      } catch {
-        this.library = emptyLibrary()
-      }
-    }
+    if (this.loading === undefined) this.loading = this.load()
+    await this.loading
     return this.library
   }
 
@@ -64,15 +63,26 @@ export class StandardsLibraryStore {
     await this.chain
   }
 
+  /** 一次性读盘；缺失（ENOENT）静默，损坏/不可读告警一次。 */
+  private async load(): Promise<void> {
+    try {
+      this.library = parseLibrary(JSON.parse(await readFile(this.file, 'utf8')))
+    } catch (error) {
+      warnIoFailure('standards-library', this.file, error)
+      this.library = emptyLibrary()
+    }
+  }
+
   private async persist(): Promise<void> {
     try {
       await mkdir(dirname(this.file), { recursive: true, mode: 0o700 })
-      const tmp = this.file + '.' + process.pid + '.tmp'
+      const tmp = this.file + '.' + process.pid + '.' + Math.random().toString(36).slice(2, 8) + '.tmp'
       await writeFile(tmp, JSON.stringify(this.library, null, 2), { mode: 0o600 })
       await rename(tmp, this.file)
       await chmod(this.file, 0o600).catch(() => {})
-    } catch {
-      // 落盘失败不影响本次使用。
+    } catch (error) {
+      // 落盘失败不影响本次使用，但要能看见。
+      warnIoFailure('standards-library', this.file, error)
     }
   }
 }

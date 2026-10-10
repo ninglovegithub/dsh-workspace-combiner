@@ -7,24 +7,30 @@
  * @module dsh-workspace-combiner/client/panel/BudgetModal
  */
 
-import { useEffect, type ChangeEvent, type ReactElement } from 'react'
-import type { ContextPreset, ContextStats, ProjectType, TokenUsageReport, WorkspaceRef } from '../../core/types.ts'
+import type { ReactElement } from 'react'
+import type { ContextDegradation, ContextPreset, ContextStats, TokenUsageReport, WorkspaceRef } from '../../core/types.ts'
 import { tt } from '../locales.ts'
+import { dirTypeColor } from './groups.ts'
+import { Dialog } from './Dialog.tsx'
+import { NumberInput } from './NumberInput.tsx'
+
+/**
+ * 降级原因 -> 文案 key。用 Record 而不是三元链：`ContextDegradation` 新增成员时
+ * tsc 会直接报缺键（三元链会静默 fallback 到「AI 摘要已跳过」，语义是错的）。
+ */
+const DEGRADATION_KEYS: Record<ContextDegradation, Parameters<typeof tt>[0]> = {
+  'file-index-truncated': 'budgetDegradeFile',
+  'code-index-truncated': 'budgetDegradeCode',
+  'commands-truncated': 'budgetDegradeCommands',
+  'standards-truncated': 'budgetDegradeStandards',
+  'ai-content-skipped': 'budgetDegradeAi',
+  'capsule-truncated': 'budgetDegradeCapsule',
+}
 
 /** 千分位 token 简写（36200 -> 36.2k）。 */
 function kmTokens(n: number): string {
   if (n < 1000) return String(n)
   return (n / 1000).toFixed(1) + 'k'
-}
-
-/** 目录索引 -> 条形图颜色。 */
-function dirColor(index: number, group: string | undefined, type: ProjectType | undefined): string {
-  if (index === 0) return '#d4a017'
-  if (group === tt('groupBackend') || type === 'java' || type === 'python' || type === 'go') return '#8b5cf6'
-  if (group === tt('groupFrontend') || type === 'frontend' || type === 'frontend-vue' || type === 'frontend-react' || type === 'frontend-webpack' || type === 'frontend-next') return '#3b82f6'
-  if (group === tt('groupRef')) return '#2aa8b4'
-  if (group === tt('groupDoc')) return '#d4a017'
-  return '#8b949e'
 }
 
 /** 环形进度图：SVG donut，中间显示百分比。 */
@@ -141,12 +147,6 @@ interface BudgetModalProps {
 }
 
 export function BudgetModal({ stats, preset, budget, fileIndexBudget, codeIndexBudget, standardsBudget, commandsBudget, dirs, usage, onPreset, onBudget, onFileIndexBudget, onCodeIndexBudget, onStandardsBudget, onCommandsBudget, onRefresh, onClose }: BudgetModalProps): ReactElement {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   const total = (stats?.fileIndexTokens ?? 0) + (stats?.promptOverheadTokens ?? 0) + (stats?.standardsTokens ?? 0)
     + (stats?.codeIndexTokens ?? 0) + (stats?.commandsTokens ?? 0)
   const ratio = budget > 0 ? total / budget : 0
@@ -154,9 +154,7 @@ export function BudgetModal({ stats, preset, budget, fileIndexBudget, codeIndexB
   const maxDirTokens = Math.max(1, ...(stats?.directories ?? []).map(d => d.tokens))
 
   return (
-    <div className="wcb-overlay" onClick={onClose}>
-      <div className="wcb-modal wcb-modal-wide wcb-budget-modal" role="dialog" aria-modal="true" aria-label={tt('budgetTitle')} onClick={(event) => event.stopPropagation()}>
-        <div className="wcb-modal-title">{tt('budgetTitle')}</div>
+    <Dialog title={tt('budgetTitle')} onClose={onClose} wide className="wcb-budget-modal">
 
         <div className="wcb-tabs" role="tablist" aria-label={tt('contextPresetLabel')}>
           {([['economy', tt('contextPresetEconomy')], ['balanced', tt('contextPresetBalanced')], ['deep', tt('contextPresetDeep')], ['custom', tt('contextPresetCustom')]] as Array<[ContextPreset, string]>).map(([value, label]) => (
@@ -168,7 +166,7 @@ export function BudgetModal({ stats, preset, budget, fileIndexBudget, codeIndexB
         <div className="wcb-std-toolbar">
           <div className="wcb-head-actions">
             <span className="wcb-label" style={{ margin: 0 }}>{tt('budgetLimit')}</span>
-            <input className="wcb-budget-input" type="number" min={1} value={budget} aria-label={tt('budgetLimit')} onChange={(event: ChangeEvent<HTMLInputElement>) => onBudget(Number(event.currentTarget.value))} />
+            <NumberInput value={budget} onCommit={onBudget} min={1} label={tt('budgetLimit')} />
             <button type="button" className="wcb-linkbtn" aria-label={tt('monitorRefresh')} onClick={onRefresh}>{'↻ ' + tt('monitorRefresh')}</button>
           </div>
         </div>
@@ -183,7 +181,7 @@ export function BudgetModal({ stats, preset, budget, fileIndexBudget, codeIndexB
             ] as Array<[string, number, (value: number) => void]>).map(([label, value, update]) => (
               <label className="wcb-stat-card" key={label}>
                 <span className="wcb-stat-label">{label}</span>
-                <input className="wcb-budget-input" type="number" min={0} value={value} aria-label={label} onChange={(event: ChangeEvent<HTMLInputElement>) => update(Number(event.currentTarget.value))} />
+                <NumberInput value={value} onCommit={update} min={0} label={label} />
               </label>
             ))}
           </div>
@@ -206,7 +204,7 @@ export function BudgetModal({ stats, preset, budget, fileIndexBudget, codeIndexB
               {stats.degradations.length > 0 ? (
                 <div className="wcb-alert">
                   <strong>{tt('budgetDegraded')}</strong>
-                  {' ' + stats.degradations.map(item => tt(item === 'file-index-truncated' ? 'budgetDegradeFile' : item === 'code-index-truncated' ? 'budgetDegradeCode' : item === 'commands-truncated' ? 'budgetDegradeCommands' : item === 'standards-truncated' ? 'budgetDegradeStandards' : 'budgetDegradeAi')).join('；')}
+                  {' ' + stats.degradations.map(item => tt(DEGRADATION_KEYS[item] ?? 'budgetDegradeAi')).join(tt('listSeparator'))}
                 </div>
               ) : null}
               <div className="wcb-stat-grid">
@@ -246,7 +244,7 @@ export function BudgetModal({ stats, preset, budget, fileIndexBudget, codeIndexB
                   {activeDirs.map(d => {
                     const idx = dirs.findIndex(x => x.path === d.path)
                     const ref = dirs.find(x => x.path === d.path)
-                    const color = dirColor(idx, ref?.group, ref?.projectType)
+                    const color = dirTypeColor(idx, ref?.group, ref?.projectType)
                     const pct = maxDirTokens > 0 ? d.tokens / maxDirTokens : 0
                     const w = d.tokens > 0 ? Math.max(3, Math.round(pct * 100)) : 1
                     return (
@@ -269,7 +267,6 @@ export function BudgetModal({ stats, preset, budget, fileIndexBudget, codeIndexB
         <div className="wcb-modal-actions">
           <button type="button" className="wcb-btn-plain" aria-label={tt('cancel')} onClick={onClose}>{tt('cancel')}</button>
         </div>
-      </div>
-    </div>
+    </Dialog>
   )
 }

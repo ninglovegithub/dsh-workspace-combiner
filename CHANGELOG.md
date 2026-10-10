@@ -8,6 +8,112 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-10-10
+
+### Fixed — DSH 0.2.0-rc.2 compatibility (client half was broken)
+
+- **Client session/workspace API regression.** The client half had been rewritten against a
+  non-existent API (`sessions.list()` as a method, `sessions.create(id, opts)` returning a
+  live session, `sessions.get()`, `session.append()`/`session.snapshotEvents()`,
+  `workspaces.create(path)`). On DSH `0.2.0-rc.2` that made "new session" land in the wrong
+  directory with no title, and session count/title silently read as empty. Restored the real
+  contracts: `sessions.list.getSnapshot()`, `await sessions.create({ workspaceId, cwd })`,
+  `sessions.binding(id).session.rename(title)`, `workspaces.create({ path })`.
+- `src/client/types.ts` mirrors are now shape-checked against those contracts, and
+  `smoke:dsh-compat` plus the new client contract test pin them.
+- **`fileIndexBudget = 0` meant two opposite things** (unlimited while rendering, "nothing to
+  trim" while trimming), which disabled the global budget gate for the file index. `0` now
+  consistently means "not resident", like the other three blocks.
+- **Blank directory paths are rejected.** An empty `path` used to be written into
+  `dsh-write-protect`'s `writablePaths`, whose constructor throws on blank entries — taking the
+  whole sandbox policy half down while the REST call still answered `200`.
+- **A corrupt store no longer wipes user data.** A failed read used to degrade to an empty
+  in-memory store, and the next `session/created` persisted that emptiness over the real file.
+  The file is now quarantined as `.corrupt-<ts>` and writes are refused until restart.
+- **Unhandled rejections removed** on the `session/created` path (a failed disk write could
+  terminate the host process under Node's default policy).
+- **Sandbox whitelist covers every live session**, not just the current workspace: switching
+  workspaces no longer silently revokes write access from a session whose prompt still marks
+  those directories writable.
+- **`dsh-write-protect` settings override is reconciled.** Its effective roots come from
+  `writablePatterns` when the settings page has been saved, which shadows the patch's
+  `writablePaths`; both are now kept in sync, so "synced" in diagnostics means "effective".
+- **Path normalization** (trailing separators, repeated separators, Windows case) for the
+  whitelist and directory lists: `/a/b` and `/a/b/` are one directory, no duplicate entries,
+  no permanent "missing" diagnostics.
+- The file-index group heading is no longer dropped when an ungrouped directory sits between
+  two directories of the same group.
+- `sanitizeFolderName` rejects `.`/`..`/device names, which previously let the workspace
+  primary directory escape to the parent of the chosen base path.
+- Unknown workspace ids now return `404` instead of a silent `ok: true` no-op; the sandbox
+  sync result is reported back as `sandboxSynced`.
+- **Per-session on-demand context writes are serialized with cleanup.** The cleanup path
+  (`rm -rf` of the session directory) used to run concurrently with an in-flight persist that
+  creates temp files and renames them into that same directory. On macOS that surfaces as
+  `EINVAL` from `open`/`rename`, which the write helper swallowed into "file not written", so
+  the surviving generation silently lost its index files (measured 61/200 in a stress loop,
+  0/200 after serializing). `smoke:on-demand-lifecycle` now stress-covers the pattern.
+- Host-side index/scan hardening: cache LRU bounds, in-flight de-duplication, promise-based
+  load sharing, streamed/size-aware git status, Java/Kotlin dependency lookup without the
+  quadratic scan, and non-`ENOENT` filesystem errors are logged instead of silently becoming
+  "empty project".
+- Client-side robustness: request sequencing and cancellation guards, rollback on failed
+  optimistic writes, fetch timeouts, overlay close on the correct mouse-down target, modal
+  focus/Esc fixes, debounced note/command saves, and localized group kinds no longer stored
+  as data.
+
+### Changed — DSH 0.2.0-rc.2 compatibility
+
+- Peer dependencies now declare a range (`>=0.2.0-rc.1 <0.3.0`) instead of exact seam versions,
+  and dev dependencies track `0.2.0-rc.2`.
+- `dsh.client.inject` lists **package** names (module-graph/prefetch metadata) as DSH expects,
+  while the browser entry keeps its cordis service list in the exported `inject`.
+- `smoke:dsh-compat` validates the peer range and the package-name inject list; added
+  `smoke:sandbox-sync` for the write-protect reconciliation rules.
+
+
+### Changed — DSH 0.1.7 compatibility
+
+- Updated the plugin manifest for DSH `0.1.7-rc.2`: removed the legacy `dsh.host` field and pinned all imported DSH seam packages to the exact runtime version required by the new plugin compatibility gate.
+- Disabled peer auto-installation in the development workspace so packaging does not bundle duplicate host seam packages; DSH provides those services at runtime.
+- Added `smoke:dsh-compat` to verify the modern manifest, exact seam versions, required client services, bundle patch, and Node runtime floor.
+
+### Added — symbol-level code skeletons
+
+- Symbol indexing now stores a compact declaration signature for each matched function, class, interface, type, enum, or component while reusing the existing source read.
+- Task capsules show the signature beside each matched symbol, giving the model parameters and type boundaries before it decides whether implementation details are necessary.
+- The session-scoped symbol file now acts as an on-demand code skeleton; prompt guidance tells the model to inspect signatures first and read only the relevant location instead of entire files.
+
+### Added — precise test mapping
+
+- The source scan now maps implementation files to tests through direct test imports first, then conservative filename matching such as `service.ts` ↔ `service.test.ts`, `LoginService.java` ↔ `LoginServiceTest.java`, and `module.py` ↔ `test_module.py`.
+- Task capsules include only tests covering changed files, matched symbols, endpoint files, or their one-hop dependency neighborhood; unrelated tests remain outside resident context.
+- The complete source-to-test map stays in the session-scoped `test-map.md`, and the prompt tells the model to run targeted tests before widening to larger suites.
+
+### Added — minimal dependency neighborhoods
+
+- The existing source scan now resolves deterministic local imports for TS/JS/Vue, Java/Kotlin, and Python relative modules without adding another repository traversal.
+- Task capsules include only the direct dependencies and direct dependents of changed files, matched symbols, and matched endpoint files, then place those neighbors into the recommended reading order.
+- The complete dependency graph stays in the session-scoped `dependency-index.md`, so the model can expand impact one hop at a time instead of loading or searching an entire module.
+
+### Added — general symbol index
+
+- The existing endpoint scan now also extracts functions, classes, interfaces, types, enums, and common component declarations without a second repository traversal.
+- Complete symbol locations are written to each session's on-demand `symbol-index.md`; the resident prompt keeps only one lookup instruction.
+- Task capsules promote only symbols matched by the task description into the recommended reading order, reducing blind repository searches without loading a full symbol table into every turn.
+
+### Added — task context capsules
+
+- Task sessions no longer keep the complete file tree resident. A high-signal capsule summarizes project roles, stacks, entry/build manifests, key configuration, test locations, current changes, commands, and matched endpoint locations.
+- Capsules derive a recommended reading order from Git changes, endpoint evidence, and entrypoints. The complete file index moves to the session-scoped on-demand file and is queried only when the capsule is insufficient.
+- Quick sessions retain the existing directory-loading behavior. A large-project smoke test requires capsule mode to cut resident tokens by at least 45%.
+
+### Fixed — session-scoped on-demand context
+
+- Standards, project commands, and the feature index now use hashed per-session directories instead of shared global text files, preventing concurrent workspaces from overwriting one another.
+- Each session writes a manifest describing its workspace and directory scope; normal disposal removes it immediately and stale crash leftovers are reclaimed after 24 hours.
+- Context-budget previews use the same isolated path shape as real sessions instead of displaying a potentially unrelated global path.
+
 ## [0.8.3] - 2026-09-30
 
 ### Added — Monorepo support

@@ -11,7 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { emptyStore, type ContextPreset, type CustomStandard, type LoadMode, type StoreShape, type Workspace, type WorkspaceMode, type WorkspaceRef, type WorkspaceSnapshot, type WorkspaceStandards } from './core/types.ts'
 import { contextPresetConfig } from './core/contextPreset.ts'
 import { parseCustomStandard } from './core/standards.ts'
@@ -30,18 +30,54 @@ export function defaultStoreFile(): string {
 }
 
 /**
+ * 规范化目录绝对路径：解析相对/冗余段并去掉尾部分隔符。
+ *
+ * 不这样做的话，`/a/b` 与 `/a/b/` 会被当成两个不同目录：沙盒白名单会出现只差
+ * 一个斜杠的重复项，「期望目录是否已同步」的精确比较永远判缺失（诊断项长期误
+ * 报），按路径查重的逻辑也会失效。
+ */
+function normalizeDirPath(path: string): string {
+  const trimmed = path.trim()
+  if (trimmed === '') return ''
+  const resolved = resolve(trimmed)
+  if (resolved === sep) return resolved
+  const stripped = resolved.replace(/[\\/]+$/, '')
+  if (stripped === '') return resolved
+  // Windows 盘根 'C:\' 去掉尾分隔符会变成没有意义的 'C:'，要补回来。
+  return stripped.endsWith(':') ? stripped + sep : stripped
+}
+
+/** 路径比较键：Windows 下大小写不敏感。 */
+function pathKey(path: string): string {
+  return process.platform === 'win32' ? path.toLowerCase() : path
+}
+
+/**
  * 目录列表的唯一事实来源是数组顺序：第一项就是主目录。把历史字段也随之
  * 规范化，避免拖拽重排后 isPrimary / access 仍留在旧主目录上，导致持久化
  * 数据与实际建会话目录、沙盒白名单相互矛盾。
+ *
+ * 主目录只补默认的 readwrite，不覆盖用户显式设置的 access；同一路径只保留
+ * 第一次出现（重复项会让仓库被重复扫描、重复注入、重复写进沙盒白名单）。
  */
 function normalizeDirectories(directories: readonly WorkspaceRef[]): WorkspaceRef[] {
-  return directories.map((directory, index) => {
-    if (index === 0) {
-      return { ...directory, isPrimary: true, access: 'readwrite' }
+  const seen = new Set<string>()
+  const out: WorkspaceRef[] = []
+  for (const directory of directories) {
+    const path = normalizeDirPath(directory.path)
+    if (path === '') continue
+    const key = pathKey(path)
+    if (seen.has(key)) continue
+    seen.add(key)
+    const normalized = path === directory.path ? directory : { ...directory, path }
+    if (out.length === 0) {
+      out.push({ ...normalized, isPrimary: true, access: normalized.access ?? 'readwrite' })
+    } else {
+      const { isPrimary: _isPrimary, ...secondary } = normalized
+      out.push(secondary)
     }
-    const { isPrimary: _isPrimary, ...secondary } = directory
-    return secondary
-  })
+  }
+  return out
 }
 
 /** 校验并规范化一条快照。 */
@@ -129,6 +165,32 @@ function makeDefaultWorkspace(directories: readonly WorkspaceRef[] = []): Worksp
 }
 
 /**
+ * 把已解析的 JSON 值转换成 StoreShape（含 v1 -> v2 迁移）。
+ * 结构不可识别时返回 undefined，由调用方按「损坏」处理——绝不返回空库。
+ */
+function parseShape(parsed: unknown): StoreShape | undefined {
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+  const record = parsed as Record<string, unknown>
+  if (record.version === 1 || Array.isArray(record.selection)) {
+    // v1 -> v2：旧的全局 selection 迁入一个默认工作空间。
+    const dirs = Array.isArray(record.selection)
+      ? record.selection.map(parseWorkspaceRef).filter((r): r is WorkspaceRef => r !== undefined)
+      : []
+    const ws = makeDefaultWorkspace(normalizeDirectories(dirs))
+    return { version: 2, currentWorkspaceId: ws.id, workspaces: [ws] }
+  }
+  const workspaces = Array.isArray(record.workspaces)
+    ? record.workspaces.map(parseWorkspace).filter((w): w is Workspace => w !== undefined)
+    : []
+  // 有 workspaces 字段却一条都没解析出来 = 结构被破坏，不当成空库处理。
+  if (Array.isArray(record.workspaces) && record.workspaces.length > 0 && workspaces.length === 0) return undefined
+  const current = typeof record.currentWorkspaceId === 'string' && workspaces.some(w => w.id === record.currentWorkspaceId)
+    ? record.currentWorkspaceId
+    : workspaces[0]?.id ?? ''
+  return { version: 2, currentWorkspaceId: current, workspaces }
+}
+
+/**
  * 持久化存储：构造时一次性加载，所有公开方法先 await readiness，
  * 避免慢磁盘与早到调用产生竞态。
  */
@@ -137,6 +199,8 @@ export class WorkspaceCombinerStore {
   private shape: StoreShape = emptyStore()
   private readonly ready: Promise<void>
   private chain: Promise<void> = Promise.resolve()
+  /** 加载失败的原因；undefined = 正常。非 undefined 时禁止落盘。 */
+  private loadFailure: unknown = undefined
 
   constructor(file: string = defaultStoreFile()) {
     this.file = file
@@ -209,11 +273,15 @@ export class WorkspaceCombinerStore {
   /** 删除工作空间；删除当前工作空间时自动切到首个剩余工作空间。返回新的当前 id。 */
   async deleteWorkspace(id: string): Promise<string> {
     await this.ready
-    let nextCurrent = this.shape.currentWorkspaceId
+    // currentWorkspaceId 必须在闭包内读取：mutate 会先重读磁盘，闭包外的快照可能已过期。
+    let nextCurrent = ''
     await this.mutate(() => {
       const rest = this.shape.workspaces.filter(w => w.id !== id)
-      if (rest.length === this.shape.workspaces.length) return
-      if (nextCurrent === id) nextCurrent = rest[0]?.id ?? ''
+      if (rest.length === this.shape.workspaces.length) {
+        nextCurrent = this.shape.currentWorkspaceId
+        return
+      }
+      nextCurrent = this.shape.currentWorkspaceId === id ? rest[0]?.id ?? '' : this.shape.currentWorkspaceId
       this.shape = { ...this.shape, workspaces: rest, currentWorkspaceId: nextCurrent }
     })
     return nextCurrent
@@ -361,43 +429,75 @@ export class WorkspaceCombinerStore {
     })
   }
 
-    /** 一次性加载：缺失/损坏退化为空存储；v1 结构自动迁移为 v2。 */
+  /**
+   * 一次性加载：文件不存在（首启）退化为空存储；v1 结构自动迁移为 v2。
+   *
+   * 关键纪律：读取/解析失败**不等于**空存储。若把损坏文件当成空库继续跑，
+   * 紧接着的 session/created 会触发 touchWorkspaceSession → persist，用空数据
+   * 覆盖用户原有文件，工作空间会静默全部丢失。因此这里把原文件改名为
+   * `.corrupt-<时间戳>` 留证，并置 loadFailure 让 persist 拒绝写入。
+   */
   private async load(): Promise<void> {
+    let raw: string
     try {
-      const raw = await readFile(this.file, 'utf8')
-      const parsed: unknown = JSON.parse(raw)
-      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        const record = parsed as Record<string, unknown>
-        if (record.version === 1 || Array.isArray(record.selection)) {
-          // v1 -> v2：旧的全局 selection 迁入一个默认工作空间。
-          const dirs = Array.isArray(record.selection)
-            ? record.selection.map(parseWorkspaceRef).filter((r): r is WorkspaceRef => r !== undefined)
-            : []
-          const ws = makeDefaultWorkspace(normalizeDirectories(dirs))
-          this.shape = { version: 2, currentWorkspaceId: ws.id, workspaces: [ws] }
-        } else {
-          const workspaces = Array.isArray(record.workspaces)
-            ? record.workspaces.map(parseWorkspace).filter((w): w is Workspace => w !== undefined)
-            : []
-          const current = typeof record.currentWorkspaceId === 'string' && workspaces.some(w => w.id === record.currentWorkspaceId)
-            ? record.currentWorkspaceId
-            : workspaces[0]?.id ?? ''
-          this.shape = { version: 2, currentWorkspaceId: current, workspaces }
-        }
+      raw = await readFile(this.file, 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.loadFailure = error
+        await this.quarantine()
       }
-    } catch {
-      // 缺失或损坏：从空存储开始。
+      return this.ensureDefaultWorkspace()
     }
-    // 兜底：始终至少存在一个工作空间，保证「新建会话」有归属。
+    try {
+      const parsed = parseShape(JSON.parse(raw) as unknown)
+      if (parsed === undefined) throw new Error('store structure is not recognized')
+      this.shape = parsed
+    } catch (error) {
+      // 损坏：隔离原文件，本次会话只读内存，不覆盖磁盘。
+      this.loadFailure = error
+      await this.quarantine()
+    }
+    this.ensureDefaultWorkspace()
+  }
+
+  /** 兜底：始终至少存在一个工作空间，保证「新建会话」有归属。 */
+  private ensureDefaultWorkspace(): void {
     if (this.shape.workspaces.length === 0) {
       const ws = makeDefaultWorkspace()
       this.shape = { ...this.shape, workspaces: [ws], currentWorkspaceId: ws.id }
     }
   }
 
-  /** 串行化一次变更（内存更新 + 原子落盘）。 */
+  /** 把无法解析的存储文件改名留证（失败只告警，不阻断启动）。 */
+  private async quarantine(): Promise<void> {
+    try {
+      await rename(this.file, `${this.file}.corrupt-${Date.now()}`)
+    } catch {
+      // 改名失败（权限/已被移走）不影响只读降级本身。
+    }
+  }
+
+  /** 上次加载是否失败（失败后禁止落盘，避免用空数据覆盖用户文件）。 */
+  loadFailed(): boolean {
+    return this.loadFailure !== undefined
+  }
+
+  /** 上次加载失败的原因（正常加载为 undefined）。 */
+  loadError(): unknown {
+    return this.loadFailure
+  }
+
+  /**
+   * 串行化一次变更：**先重读磁盘**，再应用更新，最后原子落盘。
+   *
+   * 重读这一步是多进程/多窗口下的正确性关键：桌面端与 `dsh web` CLI 共享同一个
+   * `~/.dsh/dsh-workspace-combiner.json`，而本实例只在构造时加载过一次。若直接
+   * 用内存快照整份覆盖，后写者会把对方刚做的改动全部抹掉（丢更新）。重读后让
+   * 更新闭包作用在最新状态上，等于把本次变更 rebase 到磁盘现状。
+   */
   private mutate(update: () => void): Promise<void> {
     const run = async (): Promise<void> => {
+      await this.reloadFromDisk()
       update()
       await this.persist()
     }
@@ -405,10 +505,41 @@ export class WorkspaceCombinerStore {
     return this.chain
   }
 
-  /** 原子落盘：临时文件 + rename，目录 0700、文件 0600。 */
+  /**
+   * 落盘前重读磁盘（仅当文件仍可解析）。失败时保持内存现状并把错误交给 persist
+   * 拒绝写入——宁可本次改不动，也不要用过期快照覆盖别人的数据。
+   */
+  private async reloadFromDisk(): Promise<void> {
+    if (this.loadFailure !== undefined) return
+    let raw: string
+    try {
+      raw = await readFile(this.file, 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      this.loadFailure = error
+      return
+    }
+    try {
+      const parsed = parseShape(JSON.parse(raw) as unknown)
+      if (parsed === undefined) throw new Error('store structure is not recognized')
+      this.shape = parsed
+    } catch (error) {
+      // 不隔离文件（可能属于另一个仍在运行的进程），只拒绝本次写入。
+      this.loadFailure = error
+    }
+  }
+
+  /**
+   * 原子落盘：临时文件 + rename，目录 0700、文件 0600。
+   * 加载失败时直接拒绝写入——内存里是空库，写下去就等于删掉用户数据。
+   */
   private async persist(): Promise<void> {
+    if (this.loadFailure !== undefined) {
+      throw new Error(`store load failed (${String(this.loadFailure)}); refusing to overwrite ${this.file}`)
+    }
     await mkdir(dirname(this.file), { recursive: true, mode: 0o700 })
-    const tmp = this.file + '.' + process.pid + '.tmp'
+    // 临时名带随机后缀：同进程内多个 store 实例（重复 apply / 测试）不会互相踩。
+    const tmp = `${this.file}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`
     await writeFile(tmp, JSON.stringify(this.shape, null, 2), { mode: 0o600 })
     await rename(tmp, this.file)
     await chmod(this.file, 0o600).catch(() => {

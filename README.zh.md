@@ -4,6 +4,8 @@
   <img src="./docs/images/hero.png" alt="工作区组合器 — 全栈前后端，一个会话搞定" width="900">
 </p>
 
+当前插件 manifest 已适配 DSH `0.2.0-rc.2` seam API，peer 版本用范围（`>=0.2.0-rc.1 <0.3.0`）而非精确锁定，同一 rc 线内的后续版本无需重新发布即可加载；`pnpm smoke:dsh-compat` 守住这一声明。DSH 宿主已经提供的服务不会重复打包进插件。
+
 <p align="center">
   <em>为全栈开发者而生：把前端仓库、后端仓库与文档锚点捆进同一个 AI 会话。绝对路径注入、沙盒可写根自动同步，接口变更在同一轮对话里前后端一起改。</em>
 </p>
@@ -16,7 +18,7 @@
 
 一个用于 DSH（DeepSeek Harness）的 [Cordis](https://github.com/cordiverse/cordis) 双面插件，把一组仓库组织成协同的 **多工作区联合开发** 上下文。
 
-插件在左侧边栏注册一个 **工作区组合器** 面板。每个「工作空间」绑定一个主目录（工作区锚点——放文档与非代码资产）加一组有序的 **代码项目** 目录（例如一个后端仓库、一个前端仓库）。新建会话时，插件把所有生效目录的绝对路径注入 system prompt，并把可写目录同步进 [@chaoset/sandbox-extra-roots](https://github.com/winliyou/dsh-plugins) 白名单。
+插件在左侧边栏注册一个 **工作区组合器** 面板。每个「工作空间」绑定一个主目录（工作区锚点——放文档与非代码资产）加一组有序的 **代码项目** 目录（例如一个后端仓库、一个前端仓库）。新建会话时，插件把所有生效目录的绝对路径注入 system prompt，并把可写目录同步进 [dsh-write-protect](https://github.com/azazo1/dsh-write-protect) 白名单。
 
 为抑制注入上下文膨胀，插件提供 **五层上下文控制**：
 
@@ -43,6 +45,9 @@
 - **目录快照** — 保存 / 恢复 / 删除目录配置；恢复后立即重新同步沙盒白名单。
 - **文件索引 + 加载模式** — 感知 `.gitignore` 的有界文件树扫描 + mtime 缓存；按工作空间选择加载模式控制注入细节。
 - **功能/接口索引** — 从代码里抽取 HTTP 端点，并联结 **服务端注册处** 与 **前端调用处** 的 `文件:行号`；覆盖 TS/JS/TSX/JSX/Vue 与 Java/Kotlin/Go/Python/Ruby/C#。每条结果显示「精确 / 标准化 / 推断 / 单边」置信度，悬停可查看来源、匹配依据和索引时间。
+- **符号级代码骨架** — 复用同一遍源码扫描抽取函数、类、接口、类型、枚举和常见组件，并保存压缩声明签名；任务胶囊只常驻命中的骨架，完整清单按会话隔离并按需查询，让 AI 先理解参数与类型边界，再决定是否读取源码。
+- **最小依赖邻域** — 确定性解析本地导入，只把任务证据周围的一跳直接依赖与直接调用方常驻；完整依赖图按需查询，避免一个相关文件触发整模块读取。
+- **精准测试映射** — 通过测试直接导入或保守的文件名规则关联源码与测试；任务胶囊只推荐相关测试，完整映射按需查询，验证先小范围执行再逐步扩大。
 - **可解释端点关联** — 确定性优先、标准化匹配、启发式降级、结果可解释：`/api/user/detail` 与 `/user/detail` 可在剥一层 `/api`（可跟 `/vN`）后联结；Spring 类级与方法级路由会组合；命名端点引用则明确标为推断。动态或生成式路由仍应以实际代码为准。
 - **本次变更涉及的端点** — 从 git 工作区变更出发，用同一遍扫描产出的「文件 → 端点」反向索引，列出这些改动文件声明或调用的端点及**对端文件**。这是「影响分析」的确定性版本：只查表，不预测。
 - **逐项目命令手册** — 每个目录可填 `run` / `test` / `build` 三条命令（卡片内联编辑）；Node 项目读取包管理器、锁文件和真实 `scripts`，Java 识别 Maven/Gradle wrapper，Go/Python 使用保守默认值。命令带**绝对路径**注入 prompt，让模型知道在哪个目录自启与自证。
@@ -52,7 +57,9 @@
 - **统一诊断中心** — 一次检查目录、沙盒白名单、DSH 服务、关联会话配置、索引缓存、token 偏差、项目命令、超大目录和配置版本；安全问题可一键刷新，复制报告会自动隐藏用户名和密钥。
 - **真实 token 用量（实测）** — 同一弹窗顶部显示模型上报的真实消耗：未命中输入 / 缓存读 / 缓存写 / 输出 / **缓存命中率** / 上下文占用条，以及 **插件注入占比**（注入估算 ÷ 最近一次请求的 prompt 总量）。估算与实测并排，差距大就意味着估算模型要修。
 - **@ 指令动态范围** — prompt 分节教会模型把 `@` 前缀 token 解析为显式引用路径（`@dir/`、`@file`、`@"含空格的路径"`、`@功能名`），按需把文件纳入范围。
-- **沙盒联动** — 读写目录被推入 `sandbox-extra-roots` 的 `extraWritableRoots`（优先热更新，回退为原子写 `~/.dsh/plugins/sandbox-extra-roots/config.json`）；底部图例显示实际进入白名单的目录数。
+- **会话级按需上下文隔离** — 开发规范、项目命令和功能索引写入 `~/.dsh/dsh-workspace-combiner/sessions/<会话哈希>/`；并行会话互不覆盖，关闭后自动清理。
+- **任务上下文胶囊** — 开始任务后只常驻项目入口、配置、测试位置、当前改动、命中接口和建议读取顺序；完整文件树转为会话级按需文件，大型项目显著降低常驻 token。
+- **沙盒联动** — 读写目录被推入 `dsh-write-protect` 的 `writablePaths`（写入 desktop profile 的 `cordis.patch.yml`，靠 `patchReload: live` 热生效）；底部图例显示实际进入白名单的目录数。
 - **逐目录 Git 状态** — 每行显示分支，有未提交/未跟踪改动时以琥珀色 `*N` 标注，干净时为灰色，领先上游时 `↑N`；非仓库目录不显示。
 - **目录备注** — 任意目录可挂一段随手备注，行内编辑，随目录配置一起持久化。
 - **目录角色徽标** — 主目录标记 **Docs only**、其余标记 **Code**，一眼区分锚点与源码（悬停有说明）。
@@ -75,7 +82,7 @@ dsh-workspace-combiner/
     ├── invariant.ts        # 共享常量（插件 id / API 路径 / prompt 排序 / 默认预算）
     ├── prompt.ts           # 多工作区 prompt + 文件索引 + 功能索引渲染
     ├── store.ts            # 宿主持久化（~/.dsh/dsh-workspace-combiner.json）
-    ├── sandbox-sync.ts     # sandbox-extra-roots 可写根同步
+    ├── sandbox-sync.ts     # dsh-write-protect 可写根同步
     ├── routes.ts           # /api/dsh-workspace-combiner 路由（仅 loopback）
     ├── core/
     │   ├── types.ts        # 共享类型（WorkspaceRef / Workspace / CodeIndexEntry / ...）
@@ -118,9 +125,9 @@ dsh-workspace-combiner/
    注入「多工作区联合开发模式生效」+ 目录清单 + 文件索引 + 功能/接口索引 + @规则
 ~~~
 
-目录变化时宿主还会调用 `sandbox-extra-roots` 的
-`sandboxExtraRootsConfig.set({ extraWritableRoots })` 做热更新；远程不可用时回退为原子写
-`~/.dsh/plugins/sandbox-extra-roots/config.json`。
+目录变化时宿主会更新 desktop profile 的 `cordis.patch.yml` 中
+`dsh-write-protect-policy` 的 `writablePaths`；DSH 以 `patchReload: live` 热加载，
+无需重启即生效（不再依赖任何第三方私有远程服务）。
 
 ---
 
@@ -130,7 +137,7 @@ dsh-workspace-combiner/
 
 ~~~bash
 # 0) 依赖插件（必需）
-dsh plugin --profile desktop add @chaoset/sandbox-extra-roots
+dsh plugin --profile desktop add dsh-write-protect
 
 # 1) 构建 lib/（host + client）
 cd /path/to/dsh-workspace-combiner
@@ -255,8 +262,8 @@ workspace-combiner:
 
 1. **会话 shell 只有一个不可改的 cwd。** 插件不改 cwd，而是靠 prompt 规则强制绝对路径。
 2. **只对新建会话生效。** `session/created` 时快照勾选并绑定到该会话 id；旧会话与子/分支会话（带 `parentSession`）不注入。
-3. **读模型** — DSH 沙盒的读本就不受限；三态访问只约束 **写**（经 `extraWritableRoots`）与 **是否进 prompt**。
-4. **依赖** 声明在 `package.json` 的 `dsh.client.inject` 与 `peerDependencies`（`@chaoset/sandbox-extra-roots` 与 DSH host 服务）。
+3. **读模型** — DSH 沙盒的读本就不受限；三态访问只约束 **写**（经 `writablePaths`）与 **是否进 prompt**。
+4. **依赖** 声明在 `package.json` 的 `dsh.client.inject` 与 `dependencies`/`peerDependencies`（`yaml` 运行时依赖 + DSH host 服务）。沙盒可写根由 `dsh-write-protect` 提供，不再依赖 `@chaoset/sandbox-extra-roots`。
 5. **功能索引不使用 AST**：它按「精确 → 标准化 → 启发式 → 单边」标注可信等级与来源；动态路由、别名导入、生成的客户端仍可能漏，同名常量仍可能误联。注入文本会标出推断/单边结果并注明「以实际代码为准」。
 6. **辅助路由**（仅 loopback）：`scan`、`stat`、`file-index`、`code-index`、`git-status`、`context-stats`、`workspace-patch`，以及 state / 工作空间 CRUD。
 
@@ -275,7 +282,7 @@ pnpm watch         # 监视重建
 - 持久化：`~/.dsh/dsh-workspace-combiner.json`。
 - 功能索引缓存：`~/.dsh/dsh-workspace-combiner-code-index.json`。
 - 功能摘要缓存：`~/.dsh/dsh-workspace-combiner-feature-summaries.json`。
-- 沙盒配置：`~/.dsh/plugins/sandbox-extra-roots/config.json`。
+- 沙盒配置：desktop profile 的 `cordis.patch.yml`（`dsh-write-protect-policy` 的 `writablePaths`）。
 
 ## 变更日志
 

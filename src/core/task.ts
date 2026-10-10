@@ -123,7 +123,7 @@ export function parseSessionTask(raw: unknown): SessionTask | undefined {
   }
 }
 
-function matchesEntry(description: string, entry: CodeIndexEntry): boolean {
+export function matchesTaskCodeEntry(description: string, entry: CodeIndexEntry): boolean {
   const text = description.toLowerCase()
   const endpoint = entry.endpoint.toLowerCase()
   const feature = entry.feature.toLowerCase()
@@ -142,7 +142,7 @@ function isTrustedMatch(entry: CodeIndexEntry): boolean {
 export function recommendTask(taskMode: TaskMode, description: string, directories: readonly WorkspaceRef[], entries: readonly CodeIndexEntry[]): TaskRecommendation {
   const config = taskModeConfig(taskMode)
   const enabled = directories.filter(directory => (directory.access ?? 'readwrite') !== 'disabled')
-  const matchedEndpoints = entries.filter(entry => matchesEntry(description, entry))
+  const matchedEndpoints = entries.filter(entry => matchesTaskCodeEntry(description, entry))
   const trustedEndpoints = matchedEndpoints.filter(isTrustedMatch)
   const weakEndpoints = matchedEndpoints.filter(entry => !isTrustedMatch(entry))
   const matchedPaths = new Set<string>()

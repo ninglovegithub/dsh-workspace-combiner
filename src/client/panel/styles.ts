@@ -342,6 +342,7 @@ const PANEL_CSS = String.raw`
 .wcb-legend-row{display:flex;align-items:center;justify-content:space-between;flex:none;padding:8px 12px 10px}
 .wcb-legend{display:flex;gap:10px}
 .wcb-legend-item{display:flex;align-items:center;gap:4px;color:var(--wcb-dim);font-size:9.5px}
+.wcb-legend-text{color:var(--wcb-dim);font-size:9.5px;white-space:nowrap}
 .wcb-legend-dot{width:5px;height:5px;border-radius:50%;flex:none}
 .wcb-sandbox{font-size:9.5px;color:var(--wcb-ok);display:flex;align-items:center;gap:4px}
 .wcb-sandbox-dot{width:5px;height:5px;border-radius:50%;background:var(--wcb-ok);box-shadow:0 0 4px rgba(93,216,163,.5)}

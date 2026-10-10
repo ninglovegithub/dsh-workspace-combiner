@@ -51,7 +51,9 @@ export async function buildDiagnosticReport(deps: DiagnosticDeps): Promise<Diagn
   const writable = directories.filter(directory => (directory.access ?? 'readwrite') === 'readwrite').map(directory => directory.path)
   const sandbox = await inspectExtraRoots(ctx, writable)
   items.push({ id: 'sandbox-service', status: sandbox.remoteAvailable ? 'ok' : sandbox.configReadable ? 'warning' : 'error', data: { remote: sandbox.remoteAvailable, configExists: sandbox.configExists, configReadable: sandbox.configReadable }, action: 'sync-sandbox' })
-  items.push({ id: 'writable-roots', status: sandbox.missingExpected.length === 0 ? 'ok' : 'error', data: { expected: writable.length, synced: writable.length - sandbox.missingExpected.length }, ...(sandbox.missingExpected.length > 0 ? { paths: sandbox.missingExpected } : {}), action: 'sync-sandbox' })
+  // 与「实际生效」的集合比较（dsh-write-protect 设置页保存过额外可写根时，
+  // patch 的 writablePaths 会被整体遮蔽；拿 base 比对会假报「已同步」）。
+  items.push({ id: 'writable-roots', status: sandbox.missingExpected.length === 0 ? 'ok' : 'error', data: { expected: writable.length, synced: writable.length - sandbox.missingExpected.length, source: sandbox.effectiveSource, overrideRow: sandbox.overrideRowPresent }, ...(sandbox.missingExpected.length > 0 ? { paths: sandbox.missingExpected } : {}), action: 'sync-sandbox' })
 
   const requiredServices = ['webServer', 'systemPrompt']
   const availableServices = requiredServices.filter(name => serviceAvailable(ctx, name)).length

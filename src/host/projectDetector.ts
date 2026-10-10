@@ -10,6 +10,7 @@ import { readdir, readFile } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { basename, join, relative } from 'node:path'
 import type { DetectedProject, DirectoryCommands, MonorepoInfo, MonorepoKind, ProjectType } from '../core/types.ts'
+import { isIgnored, loadGitignore, warnIoFailure } from './fileIndex.ts'
 
 /** 最大扫描深度（根 = 0，向下到第 2 层子目录）。 */
 const MAX_SCAN_DEPTH = 2
@@ -53,7 +54,9 @@ async function readPackageInfo(dir: string): Promise<PackageInfo> {
       ...(typeof pkg.packageManager === 'string' ? { packageManager: pkg.packageManager } : {}),
       workspaces,
     }
-  } catch {
+  } catch (error) {
+    // 缺失（ENOENT）是常态；权限/JSON 损坏要能看见，否则会表现成"未识别到项目"。
+    warnIoFailure('package-json', join(dir, 'package.json'), error)
     return { deps: [], scripts: new Set(), workspaces: [] }
   }
 }
@@ -77,18 +80,21 @@ function globPattern(pattern: string): RegExp {
 }
 
 async function readText(path: string): Promise<string | undefined> {
-  try { return await readFile(path, 'utf8') } catch { return undefined }
+  try { return await readFile(path, 'utf8') } catch (error) { warnIoFailure('project-scan', path, error); return undefined }
 }
 
 async function childDirectories(root: string, maxDepth = 4): Promise<string[]> {
   const output: string[] = []
+  // 与文件索引共用同一套忽略规则：否则 dist/ build/ target/ 里的源码会被当成包。
+  const patterns = await loadGitignore(root)
   const walk = async (dir: string, depth: number): Promise<void> => {
     if (depth > maxDepth || output.length >= MAX_VISITED_DIRS) return
     let entries: Dirent[]
-    try { entries = await readdir(dir, { withFileTypes: true }) } catch { return }
+    try { entries = await readdir(dir, { withFileTypes: true }) } catch (error) { warnIoFailure('monorepo-scan', dir, error); return }
     for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'target' || entry.name === 'dist' || entry.name === 'build') continue
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue
       const child = join(dir, entry.name)
+      if (isIgnored(normalizeRelative(relative(root, child)), true, patterns)) continue
       output.push(child)
       await walk(child, depth + 1)
     }
@@ -166,7 +172,7 @@ async function detectMonorepo(root: string, entries: readonly string[]): Promise
   const packages = []
   for (const dir of packageDirs) {
     let childEntries: Dirent[]
-    try { childEntries = await readdir(dir, { withFileTypes: true }) } catch { continue }
+    try { childEntries = await readdir(dir, { withFileTypes: true }) } catch (error) { warnIoFailure('monorepo-scan', dir, error); continue }
     const childNames = childEntries.map(entry => entry.name)
     const projectType = await detectType(dir, childNames)
     if (projectType === 'none') continue
@@ -280,24 +286,31 @@ async function detectedCommands(dir: string, type: ProjectType, entries: readonl
   return defaultCommands(type)
 }
 
-/** 从根目录向下扫描（最多 2 层），返回识别到的项目列表。 */
+/**
+ * 从根目录向下扫描（最多 2 层），返回识别到的项目列表。
+ *
+ * 命中项目后**继续下钻**：父目录本身像项目（≥3 个源码文件）时，旧实现会直接
+ * return，把真正的子项目整片漏掉。唯一的例外是 Monorepo 已声明并收进
+ * `monorepo.packages` 的包目录——它们不再是独立工作区根，避免重复上报。
+ */
 export async function scanDirectory(root: string): Promise<DetectedProject[]> {
   const found: DetectedProject[] = []
   let visited = 0
 
-  const walk = async (dir: string, depth: number): Promise<void> => {
+  const walk = async (dir: string, depth: number, monorepo: { root: string; packages: ReadonlySet<string> } | undefined): Promise<void> => {
     if (depth > MAX_SCAN_DEPTH || visited >= MAX_VISITED_DIRS) return
     visited++
     let entries: Dirent[]
     try {
       entries = await readdir(dir, { withFileTypes: true })
-    } catch {
+    } catch (error) {
+      warnIoFailure('project-scan', dir, error)
       return
     }
     const names = entries.map(e => e.name)
     const type = await detectType(dir, names)
-    const monorepo = await detectMonorepo(dir, names)
-    if (type !== 'none' || monorepo !== undefined) {
+    const detected = await detectMonorepo(dir, names)
+    if (type !== 'none' || detected !== undefined) {
       const name = basename(dir)
       const resolvedType = type === 'none' ? 'generic' : type
       const commands = await detectedCommands(dir, resolvedType, names)
@@ -305,20 +318,26 @@ export async function scanDirectory(root: string): Promise<DetectedProject[]> {
         root: dir,
         name,
         type: resolvedType,
-        evidence: monorepo === undefined ? evidenceFor(resolvedType) : `${monorepo.kind} monorepo · ${monorepo.packages.length} packages`,
+        evidence: detected === undefined ? evidenceFor(resolvedType) : `${detected.kind} monorepo · ${detected.packages.length} packages`,
         suggestedGroup: suggestedGroup(resolvedType, name),
         ...(commands === undefined ? {} : { commands }),
-        ...(monorepo === undefined ? {} : { monorepo }),
+        ...(detected === undefined ? {} : { monorepo: detected }),
       })
-      return
     }
     if (depth >= MAX_SCAN_DEPTH) return
+    // 本目录新发现了 Monorepo：以它为基准判断后续子目录是否为已声明的包。
+    const context = detected === undefined ? monorepo : { root: dir, packages: new Set(detected.packages.map(pkg => pkg.path)) }
+    const patterns = await loadGitignore(dir)
     for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules') continue
-      await walk(join(dir, entry.name), depth + 1)
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+      // 与文件索引共用忽略规则：dist/ build/ target/ .venv 等不再被当成项目。
+      if (isIgnored(entry.name, true, patterns)) continue
+      const child = join(dir, entry.name)
+      if (context !== undefined && context.packages.has(normalizeRelative(relative(context.root, child)))) continue
+      await walk(child, depth + 1, context)
     }
   }
 
-  await walk(root, 0)
+  await walk(root, 0, undefined)
   return found
 }

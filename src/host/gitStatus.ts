@@ -7,6 +7,7 @@
 
 import { execFile } from 'node:child_process'
 import type { GitStatus } from '../core/types.ts'
+import { warnIoFailure } from './fileIndex.ts'
 
 export type { GitStatus }
 
@@ -18,6 +19,38 @@ const AHEAD_RE = /\[ahead (\d+)/
 
 /** 单次列出的变更文件上限（防大仓库把请求体撑爆）。 */
 const MAX_CHANGED_FILES = 200
+
+/** 变更文件列表的输出缓冲上限（旧实现 4 MiB）；超出会返回 ERR_CHILD_PROCESS_STDIO_MAXBUFFER。 */
+const CHANGED_FILES_MAX_BUFFER = 4 << 20
+
+/** 状态回显的输出缓冲上限（旧实现 1 MiB）。 */
+const STATUS_MAX_BUFFER = 1 << 20
+
+/** Node 在 maxBuffer 溢出时给出的错误码。 */
+const MAX_BUFFER_ERROR_CODE = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+
+/**
+ * getChangedFilesDetailed 的结果：文件列表 + 是否因输出上限被截断。
+ * `truncated=true` 时 `files` 只是 git 输出的**前缀**，不能当成"全部改动"。
+ */
+export interface ChangedFilesResult {
+  files: string[]
+  truncated: boolean
+}
+
+/**
+ * getGitStatusDetailed 的结果。`truncated=true` 表示输出被截断、计数不可信，
+ * 因此 `status` 为 null（而不是给出一个错误的 dirty/untracked 计数）。
+ */
+export interface GitStatusResult {
+  status: GitStatus | null
+  truncated: boolean
+}
+
+/** 是否为子进程输出超限（区别于非 git 仓库、超时、git 未安装）。 */
+function isMaxBufferError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === MAX_BUFFER_ERROR_CODE
+}
 
 /**
  * 解析 git status --porcelain 的变更文件列表（跳过分支头行）。
@@ -45,30 +78,55 @@ export function parseChangedFiles(stdout: string): string[] {
 
 /**
  * 列出目录下已变更（含未跟踪）的文件，相对该目录根。
+ *
+ * 输出超过 maxBuffer 时返回 git 输出的**前缀**（并记一条限流告警），而不是旧实现的
+ * 空数组——"什么都没改"是最危险的错误答案。需要区分"完整/截断"时用
+ * {@link getChangedFilesDetailed}。
  * @param path - 目录绝对路径。
  * @returns 相对路径列表；非 git 仓库 / 任何失败返回空数组。
  */
 export async function getChangedFiles(path: string): Promise<string[]> {
+  return (await getChangedFilesDetailed(path)).files
+}
+
+/**
+ * 同 {@link getChangedFiles}，但额外给出"是否被输出上限截断"。
+ * @param path - 目录绝对路径。
+ * @returns 文件列表与截断标记。
+ */
+export async function getChangedFilesDetailed(path: string): Promise<ChangedFilesResult> {
   const trimmed = path.trim()
-  if (trimmed === '') return []
-  return await new Promise<string[]>((resolve) => {
+  if (trimmed === '') return { files: [], truncated: false }
+  return await new Promise<ChangedFilesResult>((resolve) => {
     execFile(
       'git',
       ['-C', trimmed, 'status', '--porcelain', '--short'],
-      { timeout: GIT_TIMEOUT_MS, maxBuffer: 4 << 20, windowsHide: true },
+      { timeout: GIT_TIMEOUT_MS, maxBuffer: CHANGED_FILES_MAX_BUFFER, windowsHide: true },
       (error, stdout) => {
-        if (error !== null) {
-          resolve([])
+        if (error === null) {
+          resolve({ files: parseChangedFilesSafely(stdout, trimmed), truncated: false })
           return
         }
-        try {
-          resolve(parseChangedFiles(stdout))
-        } catch {
-          resolve([])
+        if (isMaxBufferError(error)) {
+          // stdout 仍是前缀：返回它并显式标注截断，同时告警一次（按路径限流）。
+          warnIoFailure('git-status', trimmed, error)
+          resolve({ files: parseChangedFilesSafely(stdout, trimmed), truncated: true })
+          return
         }
+        resolve({ files: [], truncated: false })
       },
     )
   })
+}
+
+/** 解析失败不抛（回退空列表），但要留下一次限流告警。 */
+function parseChangedFilesSafely(stdout: string, path: string): string[] {
+  try {
+    return parseChangedFiles(stdout)
+  } catch (error) {
+    warnIoFailure('git-status', path, error)
+    return []
+  }
 }
 
 /**
@@ -110,28 +168,49 @@ export function parseGitStatus(stdout: string): GitStatus {
 /**
  * 读取目录的 git 状态（execFile，无 shell，5s 超时）。
  * @param path - 目录绝对路径。
- * @returns git 状态；非 git 仓库 / 任何失败返回 null。
+ * @returns git 状态；非 git 仓库 / 任何失败 / 输出被截断（计数不可信）返回 null。
  */
 export async function getGitStatus(path: string): Promise<GitStatus | null> {
+  return (await getGitStatusDetailed(path)).status
+}
+
+/**
+ * 同 {@link getGitStatus}，但额外给出"是否被输出上限截断"。
+ * @param path - 目录绝对路径。
+ * @returns 状态与截断标记（截断时 status 为 null，避免给出错误的计数）。
+ */
+export async function getGitStatusDetailed(path: string): Promise<GitStatusResult> {
   const trimmed = path.trim()
-  if (trimmed === '') return null
-  return await new Promise<GitStatus | null>((resolve) => {
+  if (trimmed === '') return { status: null, truncated: false }
+  return await new Promise<GitStatusResult>((resolve) => {
     execFile(
       'git',
       ['-C', trimmed, 'status', '--porcelain', '-b', '--short'],
-      { timeout: GIT_TIMEOUT_MS, maxBuffer: 1 << 20, windowsHide: true },
+      { timeout: GIT_TIMEOUT_MS, maxBuffer: STATUS_MAX_BUFFER, windowsHide: true },
       (error, stdout) => {
-        if (error !== null) {
-          resolve(null)
+        if (error === null) {
+          resolve({ status: parseGitStatusSafely(stdout, trimmed), truncated: false })
           return
         }
-        try {
-          resolve(parseGitStatus(stdout))
-        } catch {
-          resolve(null)
+        if (isMaxBufferError(error)) {
+          // 截断的 porcelain 会让 dirty/untracked 计数偏小，宁可回 null 也不能误导。
+          warnIoFailure('git-status', trimmed, error)
+          resolve({ status: null, truncated: true })
+          return
         }
+        resolve({ status: null, truncated: false })
       },
     )
   })
+}
+
+/** 解析失败不抛（回退 null），但要留下一次限流告警。 */
+function parseGitStatusSafely(stdout: string, path: string): GitStatus | null {
+  try {
+    return parseGitStatus(stdout)
+  } catch (error) {
+    warnIoFailure('git-status', path, error)
+    return null
+  }
 }
 

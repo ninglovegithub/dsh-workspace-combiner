@@ -71,11 +71,14 @@ export const API = {
 export const MAX_JSON_BODY_BYTES = 1 << 20
 
 // ---------------------------------------------------------------------------
-// 联动 @chaoset/sandbox-extra-roots
+// 联动 dsh-write-protect（替代已停用的 @chaoset/sandbox-extra-roots）
 // ---------------------------------------------------------------------------
 
-/** sandbox-extra-roots 的配置目录名（相对 $DSH_HOME/plugins）。 */
-export const SANDBOX_PLUGIN_NAME = 'sandbox-extra-roots'
+/** dsh-write-protect 的 cordis 插件 id（patch 里插入的 policy 半区）。 */
+export const SANDBOX_PLUGIN_NAME = 'dsh-write-protect'
 
-/** sandbox-extra-roots 暴露给 host 的 typert 远程服务键（PluginConfigGateway）。 */
-export const SANDBOX_REMOTE_SERVICE = 'sandboxExtraRootsConfig'
+/** dsh-write-protect policy 半区的 cordis 编排行 id。 */
+export const SANDBOX_POLICY_ROW_ID = 'dsh-write-protect-policy'
+
+/** dsh-write-protect 暴露的额外可写根配置字段（字面路径数组）。 */
+export const SANDBOX_WRITABLE_FIELD = 'writablePaths'

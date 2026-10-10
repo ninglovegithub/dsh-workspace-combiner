@@ -1,7 +1,8 @@
-import { useEffect, type ReactElement } from 'react'
+import type { ReactElement } from 'react'
 import type { DiagnosticAction, DiagnosticItem, DiagnosticReport } from '../../core/types.ts'
 import { redactDiagnosticText } from '../../core/diagnostics.ts'
 import { tt, type WorkspaceCombinerKey } from '../locales.ts'
+import { Dialog } from './Dialog.tsx'
 
 interface DiagnosticsModalProps {
   report: DiagnosticReport | null
@@ -70,16 +71,8 @@ function reportText(report: DiagnosticReport): string {
 }
 
 export function DiagnosticsModal({ report, loading, runningAction, onRefresh, onAction, onCopy, onClose }: DiagnosticsModalProps): ReactElement {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   return (
-    <div className="wcb-overlay" onClick={onClose}>
-      <div className="wcb-modal wcb-modal-wide wcb-diagnostics-modal" role="dialog" aria-modal="true" aria-label={tt('diagnosticsTitle')} onClick={(event) => event.stopPropagation()}>
-        <div className="wcb-modal-title">{tt('diagnosticsTitle')}</div>
+    <Dialog title={tt('diagnosticsTitle')} onClose={onClose} wide className="wcb-diagnostics-modal">
         {report === null ? <div className="wcb-modal-body">{loading ? tt('diagnosticsRunning') : tt('diagnosticsEmpty')}</div> : (
           <div className="wcb-modal-body wcb-diagnostics-body">
             <div className="wcb-diagnostics-summary">
@@ -109,7 +102,6 @@ export function DiagnosticsModal({ report, loading, runningAction, onRefresh, on
           <button type="button" className="wcb-btn" disabled={loading} onClick={onRefresh}>{loading ? tt('diagnosticsRunning') : tt('diagnosticsRefresh')}</button>
           <button type="button" className="wcb-btn-primary" onClick={onClose}>{tt('cancel')}</button>
         </div>
-      </div>
-    </div>
+    </Dialog>
   )
 }

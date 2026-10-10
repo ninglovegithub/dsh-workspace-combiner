@@ -9,8 +9,8 @@
  *      新建会话注入多工作区联合开发模式；旧会话、子代理会话返回空串。
  *   4. 监听 session/created（用户所说的 session:before-start 语义）：把此刻
  *      的勾选快照绑定到该会话 id；session/disposed 时清理。
- *   5. 勾选变化时联动 @chaoset/sandbox-extra-roots，把选中目录并入沙盒
- *      extraRoots 白名单。
+ *   5. 勾选变化时联动 dsh-write-protect，把选中目录并入沙盒
+ *      writablePaths 白名单。
  *
  * 底层限制（重要）：会话 shell 只有唯一 cwd 且不可修改。本插件不去改 cwd，
  * 而是靠 prompt 强制模型使用绝对路径。
@@ -31,14 +31,18 @@ import { WorkspaceCombinerStore } from '../store.ts'
 import { FileIndexCache } from './fileIndex.ts'
 import type { FileIndexEntry } from '../core/fileTree.ts'
 import { loadModeMaxDepth, type CodeIndexEntry, type LoadMode, type Workspace, type WorkspaceMode, type WorkspaceRef } from '../core/types.ts'
-import { CodeIndexCache, codeIndexTextFile } from './codeIndex.ts'
+import { CodeIndexCache } from './codeIndex.ts'
 import { FeatureSummaryCache, codeIndexSignature, summarizeFeatures } from './codeIndexSummary.ts'
 import { StandardsLibraryStore } from './standardsLibrary.ts'
-import { persistOnDemandContext } from './onDemandContext.ts'
+import { cleanupOnDemandContext, cleanupStaleOnDemandContexts, persistOnDemandContext } from './onDemandContext.ts'
 import { TokenUsageTracker, type TrackedEvent, type TrackedSession } from './tokenUsage.ts'
 import type { SessionTask } from '../core/task.ts'
 import { resolveStandardGroups, type StandardGroup } from '../core/standards.ts'
 import { contextPresetConfig, resolveWorkspaceContext } from '../core/contextPreset.ts'
+import { buildTaskContextCapsule, type TaskContextCapsule } from '../core/taskCapsule.ts'
+import { getChangedFiles } from './gitStatus.ts'
+import { pathKey as sandboxPathKey, syncExtraRoots } from '../sandbox-sync.ts'
+import { setIoWarningSink } from './fileIndex.ts'
 
 /** 稳定的 cordis 插件名（编排行 id）。 */
 export const name = PLUGIN_ID
@@ -73,9 +77,15 @@ interface SessionSelection {
   loadMode: LoadMode
   globalBudget: number
   fileIndexBudget: number
+  fileIndexPath?: string
+  symbolIndexPath?: string
+  dependencyIndexPath?: string
+  testIndexPath?: string
   entries: FileIndexEntry[]
+  taskCapsule?: TaskContextCapsule
   codeEntries: CodeIndexEntry[]
   codeIndexBudget: number
+  codeIndexPath?: string
   standardGroups: StandardGroup[]
   standardsBudget: number
   standardsPath?: string
@@ -118,6 +128,19 @@ export function apply(ctx: Context, config: Config = {}): void {
   const sessionWorkspaceBySession = new Map<string, string>()
   // 会话 id -> 已渲染文本：同一快照对象直接复用，避免每个模型步重复拼串。
   const renderedBySession = new Map<string, { snapshot: object; text: string }>()
+  void cleanupStaleOnDemandContexts()
+
+  // 把「非 ENOENT 的文件系统错误」（EACCES/EIO/JSON 损坏等）收口到插件日志：
+  // 否则权限不足的仓库只表现为「未识别到项目」，用户完全无从判断原因。
+  setIoWarningSink(message => ctx.logger?.warn(message))
+
+  // 存储加载失败时明确告警：本次运行只读内存（persist 会拒绝写入），
+  // 避免用户以为「工作空间被删了」而反复重建。
+  void store.getState().then(() => {
+    if (store.loadFailed()) {
+      ctx.logger?.warn('[dsh-workspace-combiner] 工作空间存储读取失败，本次运行不会写入磁盘（原文件已隔离为 .corrupt-*）:', store.loadError())
+    }
+  }).catch(() => {})
 
   // 1) system prompt 分节（全局注册，按会话动态渲染）。
   if (config.announceToAgent ?? true) {
@@ -136,12 +159,17 @@ export function apply(ctx: Context, config: Config = {}): void {
           mode: selected.mode,
           loadMode: selected.loadMode,
           entries: selected.entries,
+          taskCapsule: selected.taskCapsule,
+          fileIndexPath: selected.fileIndexPath,
+          symbolIndexPath: selected.symbolIndexPath,
+          dependencyIndexPath: selected.dependencyIndexPath,
+          testIndexPath: selected.testIndexPath,
           fileIndexBudget: selected.fileIndexBudget,
           globalBudget: selected.globalBudget,
           codeEntries: selected.codeEntries,
           codeIndexBudget: selected.codeIndexBudget,
           // 预算 <=0 = 不常驻：改给一条按需查询线索（索引空说明功能索引未启用，则不给）。
-          ...(selected.codeIndexBudget <= 0 && selected.codeEntries.length > 0 ? { codeIndexPath: codeIndexTextFile() } : {}),
+          ...(selected.codeIndexBudget <= 0 && selected.codeIndexPath !== undefined ? { codeIndexPath: selected.codeIndexPath } : {}),
           standardGroups: selected.standardGroups,
           standardsBudget: selected.standardsBudget,
           ...(selected.standardsBudget <= 0 && selected.standardsPath !== undefined ? { standardsPath: selected.standardsPath } : {}),
@@ -195,18 +223,27 @@ export function apply(ctx: Context, config: Config = {}): void {
         }))
       // 功能/接口索引：把前后端落点连起来，减少盲搜。可在面板关闭或改预算；
       // codeIndexSummary='llm' 时按签名生成一次一句话摘要并缓存（失败静默降级）。
-      const baseCodeEntries = (ws.codeIndexEnabled ?? true) && task?.includeCodeIndex !== false ? (await codeIndexCache.get(directories)).entries : []
+      const codeIndexResult = await codeIndexCache.get(directories)
+      const baseCodeEntries = (ws.codeIndexEnabled ?? true) && task?.includeCodeIndex !== false ? codeIndexResult.entries : []
       const signature = codeIndexSignature(baseCodeEntries)
       const cachedSummaries = baseCodeEntries.length > 0 ? await summaryCache.get(signature) : undefined
       const codeEntries = withSummaries(baseCodeEntries, cachedSummaries)
       // 开发规范：按工作空间绑定 + projectType 自动匹配解析出作用域分组。
       const standardGroups = resolveStandardGroups(ws.standards, directories, await standardsLibrary.get())
-      const onDemand = await persistOnDemandContext(directories, standardGroups)
+      const changedFiles = task === undefined ? {} : Object.fromEntries(await Promise.all(directories.filter(directory => task.directoryPaths.includes(directory.path)).map(async directory => [directory.path, await getChangedFiles(directory.path)] as const)))
+      const taskCapsule = task === undefined ? undefined : buildTaskContextCapsule(task, directories, entries, codeEntries, codeIndexResult.symbols, codeIndexResult.dependencies, codeIndexResult.tests, changedFiles)
+      const onDemand = await persistOnDemandContext(sessionId, ws.id, directories, standardGroups, codeEntries, codeIndexResult.symbols, codeIndexResult.dependencies, codeIndexResult.tests, entries, loadMode)
       // 会话可能在扫描期间已被关闭；不要把过期快照重新放回 Map。
       if (sessionWorkspaceBySession.get(sessionId) === ws.id && selectionNonceBySession.get(sessionId) === nonce) {
         selectionBySession.set(sessionId, {
           workspaceUpdatedAt: ws.updatedAt,
-          directories, mode, loadMode, globalBudget, fileIndexBudget, entries, codeEntries, codeIndexBudget,
+          directories, mode, loadMode, globalBudget, fileIndexBudget, entries,
+          ...(taskCapsule === undefined ? {} : { taskCapsule, fileIndexPath: onDemand.fileIndexPath }),
+          symbolIndexPath: onDemand.symbolIndexPath,
+          dependencyIndexPath: onDemand.dependencyIndexPath,
+          testIndexPath: onDemand.testIndexPath,
+          codeEntries, codeIndexBudget,
+          ...(codeIndexBudget <= 0 ? { codeIndexPath: onDemand.codeIndexPath } : {}),
           standardGroups,
           standardsBudget,
           ...(standardsBudget <= 0 ? { standardsPath: onDemand.standardsPath } : {}),
@@ -225,7 +262,10 @@ export function apply(ctx: Context, config: Config = {}): void {
           if (current === undefined || current.codeEntries !== codeEntries) return
           selectionBySession.set(sessionId, { ...current, codeEntries: withSummaries(baseCodeEntries, generated) })
           renderedBySession.delete(sessionId)
-        })()
+        })().catch(error => {
+          // 摘要生成是后台增强：失败只降级为「没有摘要」，不能变成未处理拒绝。
+          ctx.logger?.warn('[dsh-workspace-combiner] 生成功能摘要失败:', error)
+        })
       }
     })().catch(error => {
       // 构建失败（目录不可读/被删等）不能让会话停在半空快照上：面板的「刷新会话」可重试。
@@ -241,8 +281,16 @@ export function apply(ctx: Context, config: Config = {}): void {
       if (ws === undefined) return
       // 绑定必须早于 selectWorkspace：其中的守卫按这个绑定判断快照是否已被接替。
       sessionWorkspaceBySession.set(session.id, ws.id)
-      void store.touchWorkspaceSession(ws.id)
+      // 新会话绑定的工作空间也要进白名单（会话绑定的可能不是当前工作空间）。
+      void syncSandbox()
+      // 落盘失败（EACCES/ENOSPC）必须自己接住：dsh-session 只 catch 监听器自身
+      // 返回的 promise，这里返回 undefined，裸 rejection 会按 Node 默认策略终止进程。
+      void store.touchWorkspaceSession(ws.id).catch(error => {
+        ctx.logger?.warn('[dsh-workspace-combiner] 记录会话时间失败:', error)
+      })
       selectWorkspace(session.id, ws)
+    }).catch(error => {
+      ctx.logger?.warn('[dsh-workspace-combiner] 读取当前工作空间失败:', error)
     })
   }, { global: true })
 
@@ -251,15 +299,21 @@ export function apply(ctx: Context, config: Config = {}): void {
    * @param sessionId - 会话 id。
    * @returns 该会话绑定的工作空间 id；不是本进程加载的会话则返回 undefined。
    */
-  const refreshSession = (sessionId: string): string | undefined => {
+  const refreshSession = async (sessionId: string): Promise<string | undefined> => {
     const workspaceId = sessionWorkspaceBySession.get(sessionId)
     if (workspaceId === undefined) return undefined
-    void store.getWorkspaces().then(workspaces => {
+    try {
+      const workspaces = await store.getWorkspaces()
       const ws = workspaces.find(item => item.id === workspaceId)
-      if (ws === undefined) return
+      if (ws === undefined) return workspaceId
       // 刷新期间会话可能已关闭或切到别的工作空间：再确认一次绑定。
       if (sessionWorkspaceBySession.get(sessionId) === workspaceId) selectWorkspace(sessionId, ws)
-    }).catch(() => {})
+    } catch (error) {
+      // 读取失败必须让调用方看见：以前是 fire-and-forget + 空 catch，
+      // 接口先回 ok，用户以为上下文已刷新。
+      ctx.logger?.warn('[dsh-workspace-combiner] 刷新会话上下文失败:', sessionId, error)
+      throw error
+    }
     return workspaceId
   }
 
@@ -270,14 +324,51 @@ export function apply(ctx: Context, config: Config = {}): void {
    */
   const refreshWorkspaceSessions = (workspaceId: string): void => {
     for (const [sessionId, id] of sessionWorkspaceBySession) {
-      if (id === workspaceId) refreshSession(sessionId)
+      if (id === workspaceId) void refreshSession(sessionId).catch(() => {})
     }
   }
 
   const setSessionTask = (sessionId: string, task: SessionTask): void => {
     taskBySession.set(sessionId, task)
     renderedBySession.delete(sessionId)
-    if (sessionWorkspaceBySession.has(sessionId)) refreshSession(sessionId)
+    if (sessionWorkspaceBySession.has(sessionId)) void refreshSession(sessionId).catch(() => {})
+  }
+
+  /** 本插件上次贡献给沙盒白名单的路径（调和基线：只撤自己写过的，保留用户手配）。 */
+  let lastSyncedSandboxPaths: string[] = []
+
+  /**
+   * 把「当前工作空间 ∪ 全部活动会话绑定的工作空间」的可写目录写入沙盒白名单。
+   *
+   * 只跟随当前工作空间是不够的：切到工作空间 B 会把绑定 A 的活会话的写权限静默
+   * 吊销，而那个会话的 prompt 里 A 仍标着可写。并集才能保证「说得出就写得到」。
+   * @returns 是否写入成功（失败只告警，不抛出）。
+   */
+  const syncSandbox = async (): Promise<boolean> => {
+    try {
+      const wantedIds = new Set<string>(sessionWorkspaceBySession.values())
+      const currentId = await store.getCurrentWorkspaceId()
+      if (currentId !== '') wantedIds.add(currentId)
+      const paths: string[] = []
+      const seen = new Set<string>()
+      for (const ws of await store.getWorkspaces()) {
+        if (!wantedIds.has(ws.id)) continue
+        for (const directory of ws.directories) {
+          if ((directory.access ?? 'readwrite') !== 'readwrite') continue
+          const key = sandboxPathKey(directory.path)
+          if (key === '' || seen.has(key)) continue
+          seen.add(key)
+          paths.push(directory.path)
+        }
+      }
+      const ok = await syncExtraRoots(ctx, lastSyncedSandboxPaths, paths)
+      // 写失败时不推进基线：否则下次调和会以为旧路径已经撤掉，白名单会残留。
+      if (ok) lastSyncedSandboxPaths = paths
+      return ok
+    } catch (error) {
+      ctx.logger?.warn('[dsh-workspace-combiner] 同步沙盒白名单失败:', error)
+      return false
+    }
   }
 
   ctx.on('session/disposed', (session: SessionLike) => {
@@ -287,6 +378,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     selectionNonceBySession.delete(session.id)
     renderedBySession.delete(session.id)
     tokenUsage.forget(session.id)
+    void cleanupOnDemandContext(session.id)
+    // 会话结束后重算白名单：它的工作空间可能不再需要写权限。
+    void syncSandbox()
   }, { global: true })
 
   // 2.5) 真实 token 用量：采样 assistant/message 的 provider 上报值（含提示词缓存命中）。
@@ -310,6 +404,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       refreshSessions: refreshWorkspaceSessions,
       refreshSession,
       setSessionTask,
+      syncSandbox,
     }).map(route => ctx.webServer.register(route))
     return () => {
       for (const dispose of disposers) dispose()

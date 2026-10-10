@@ -3,11 +3,13 @@
  * @module dsh-workspace-combiner/prompt
  */
 
-import type { CodeIndexEntry, ContextDegradation, LoadMode, WorkspaceMode, WorkspaceRef } from './core/types.ts'
+import type { CodeIndexEntry, ContextDegradation, DependencyIndexEntry, LoadMode, SymbolIndexEntry, TestIndexEntry, WorkspaceMode, WorkspaceRef } from './core/types.ts'
 import { renderTree, estimateTokens, type FileIndexEntry } from './core/fileTree.ts'
 import type { StandardGroup } from './core/standards.ts'
 import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_COMMANDS_BUDGET, DEFAULT_STANDARDS_BUDGET } from './invariant.ts'
 import { taskModeConfig, taskTypeLabel, taskVerificationLabel, type SessionTask, type TaskDataBlock } from './core/task.ts'
+import { groupLabel } from './core/groups.ts'
+import type { TaskContextCapsule } from './core/taskCapsule.ts'
 
 /** 功能索引默认预算（不挤占文件索引配额）。 */
 export const CODE_INDEX_TOKEN_BUDGET = DEFAULT_CODE_INDEX_BUDGET
@@ -47,6 +49,45 @@ export function renderCodeIndex(entries: readonly CodeIndexEntry[], tokenBudget 
   return lines.join('\n')
 }
 
+export function renderTaskContextCapsule(capsule: TaskContextCapsule | undefined): string {
+  if (capsule === undefined || capsule.projects.length === 0) return ''
+  const lines = ['# 任务上下文胶囊（高信号常驻）']
+  for (const project of capsule.projects) {
+    const role = project.primary ? '主目录' : '代码项目'
+    const stack = project.projectType === undefined ? '' : ` · ${project.projectType}`
+    lines.push(`## ${project.name}（${role} · ${project.access}${stack}）`, `- 根目录：${project.path}`)
+    if (project.group !== undefined) lines.push(`- 分组：${groupLabel(project.group)}`)
+    if (project.entrypoints.length > 0) lines.push(`- 入口/构建清单：${project.entrypoints.join('、')}`)
+    if (project.configFiles.length > 0) lines.push(`- 关键配置：${project.configFiles.join('、')}`)
+    if (project.testRoots.length > 0) lines.push(`- 测试位置：${project.testRoots.join('、')}`)
+    if (project.changedFiles.length > 0) lines.push(`- 当前改动：${project.changedFiles.join('、')}`)
+    if (project.commands !== undefined) {
+      const commands = [project.commands.run === undefined ? '' : '启动=' + project.commands.run, project.commands.test === undefined ? '' : '测试=' + project.commands.test, project.commands.build === undefined ? '' : '构建=' + project.commands.build].filter(Boolean)
+      if (commands.length > 0) lines.push(`- 可用命令：${commands.join('；')}`)
+    }
+  }
+  if (capsule.endpoints.length > 0) {
+    lines.push('## 任务定位证据')
+    for (const endpoint of capsule.endpoints) {
+      const locations = [endpoint.server === undefined ? '' : '服务端 ' + endpoint.server, endpoint.client === undefined ? '' : '客户端 ' + endpoint.client].filter(Boolean)
+      lines.push(`- @${endpoint.feature} → ${endpoint.endpoint}${locations.length === 0 ? '' : ' | ' + locations.join(' | ')}`)
+    }
+  }
+  if (capsule.symbols.length > 0) {
+    lines.push('## 相关代码骨架', ...capsule.symbols.map(symbol => `- ${symbol.kind} ${symbol.name} → ${symbol.location}${symbol.signature === undefined ? '' : ` | ${symbol.signature}`}`))
+  }
+  if (capsule.dependencies.length > 0) {
+    lines.push('## 最小依赖邻域', ...capsule.dependencies.map(dependency => dependency.relation === 'depends-on'
+      ? `- 直接依赖：${dependency.from} → ${dependency.to}`
+      : `- 被依赖：${dependency.from} → ${dependency.to}`))
+  }
+  if (capsule.tests.length > 0) {
+    lines.push('## 精准验证入口', ...capsule.tests.map(entry => `- ${entry.test}（覆盖 ${entry.source}；依据=${entry.reason === 'import' ? '测试直接导入' : '文件名匹配'}）`))
+  }
+  if (capsule.readingOrder.length > 0) lines.push('## 建议读取顺序', ...capsule.readingOrder.map((path, index) => `${index + 1}. ${path}`))
+  return lines.join('\n')
+}
+
 /**
  * 按需查询文件的内容：每行一条端点，grep 关键词即可命中（缓存 JSON 是单行且转义过，grep 无用）。
  * 不受 token 预算限制——它不常驻上下文，只在需要定位端点时读。
@@ -55,6 +96,18 @@ export function renderCodeIndex(entries: readonly CodeIndexEntry[], tokenBudget 
  */
 export function renderCodeIndexText(entries: readonly CodeIndexEntry[]): string {
   return ['# 功能/接口索引（按需查询：每行一条，grep 关键词即可）', ...entries.map(renderCodeIndexLine), ''].join('\n')
+}
+
+export function renderSymbolIndexText(entries: readonly SymbolIndexEntry[]): string {
+  return ['# 通用符号骨架（按需查询：grep 函数/类/类型/组件名）', ...entries.map(entry => `- ${entry.kind} ${entry.name} → ${entry.dir.replace(/\/$/, '')}/${entry.file}:${entry.line}${entry.exported ? ' | exported' : ''}${entry.signature === undefined ? '' : ` | ${entry.signature}`}`), ''].join('\n')
+}
+
+export function renderDependencyIndexText(entries: readonly DependencyIndexEntry[]): string {
+  return ['# 文件依赖索引（按需查询：每行一条确定性本地导入）', ...entries.map(entry => `- ${entry.dir.replace(/\/$/, '')}/${entry.from}:${entry.line} → ${entry.dir.replace(/\/$/, '')}/${entry.to}`), ''].join('\n')
+}
+
+export function renderTestIndexText(entries: readonly TestIndexEntry[]): string {
+  return ['# 精准测试映射（按需查询：源文件 → 相关测试）', ...entries.map(entry => `- ${entry.dir.replace(/\/$/, '')}/${entry.source} → ${entry.dir.replace(/\/$/, '')}/${entry.test} | ${entry.reason}`), ''].join('\n')
 }
 
 /** 目录被配额截断时的块内标注。 */
@@ -109,10 +162,15 @@ export function renderCommands(directories: readonly WorkspaceRef[], tokenBudget
  *
  * 预算分配采用「目录配额 + 余量回填」：每个目录先保底出现，剩余预算补给被截断的
  * 目录，避免一个大目录把后面的代码项目整块挤掉（旧实现是字母序 first-fit）。
- * @param tokenBudget - >0 时启用目录配额（0/缺省 = 不限制）。
+ *
+ * 预算语义与 renderCodeIndex / renderStandards / renderCommands 保持一致：
+ * `tokenBudget <= 0` = 该区块不常驻（返回空串，由调用方改给按需索引路径）。
+ * 此前这里把 0 解释为「不限制」，而 compose() 的裁剪又把 0 解释为「无可裁剪」，
+ * 两者矛盾会让全局预算闸对该区块彻底失效。
+ * @param tokenBudget - 文件索引区块的 token 预算；<=0 表示不注入。
  */
 export function renderFileIndex(entries: readonly FileIndexEntry[], loadMode: LoadMode, tokenBudget = 0): string {
-  if (entries.length === 0) return ''
+  if (entries.length === 0 || tokenBudget <= 0) return ''
   const header = '# 文件索引（加载模式：' + loadMode + '）'
   // summary 用递归计数（不建树）；tree/full 用已构建的文件树。
   const blocks = entries.map(entry => ({
@@ -128,7 +186,7 @@ export function renderFileIndex(entries: readonly FileIndexEntry[], loadMode: Lo
   const mandatory = headerCost + headCosts.reduce((a, c) => a + c, 0)
   const total = mandatory + restCosts.reduce((a, rc) => a + rc.reduce((x, c) => x + c, 0), 0)
 
-  const budget = tokenBudget > 0 ? tokenBudget : Number.POSITIVE_INFINITY
+  const budget = tokenBudget
   if (total <= budget) {
     return [header, ...blocks.flatMap(b => [b.head, ...b.rest])].join('\n')
   }
@@ -213,6 +271,15 @@ export interface MultiWorkspacePromptInput {
   mode?: WorkspaceMode
   loadMode?: LoadMode
   entries?: readonly FileIndexEntry[]
+  /** 任务会话的高信号常驻上下文；存在时完整文件树改为按需文件。 */
+  taskCapsule?: TaskContextCapsule
+  fileIndexPath?: string
+  /** 会话级通用符号骨架；只按需 grep，不整表常驻。 */
+  symbolIndexPath?: string
+  /** 会话级文件依赖图；只按需 grep，不整图常驻。 */
+  dependencyIndexPath?: string
+  /** 会话级源文件到测试映射；只按需 grep。 */
+  testIndexPath?: string
   /** 旧调用兼容：未提供 fileIndexBudget 时作为文件索引预算。 */
   tokenBudget?: number
   /** 文件索引区块预算。 */
@@ -285,6 +352,11 @@ export function renderMultiWorkspacePromptDetailed(input: MultiWorkspacePromptIn
     mode = 'anchor',
     loadMode = 'summary',
     entries = [],
+    taskCapsule,
+    fileIndexPath,
+    symbolIndexPath,
+    dependencyIndexPath,
+    testIndexPath,
     tokenBudget = 0,
     fileIndexBudget = tokenBudget,
     globalBudget = Number.POSITIVE_INFINITY,
@@ -309,9 +381,11 @@ export function renderMultiWorkspacePromptDetailed(input: MultiWorkspacePromptIn
     .map((ws, index) => {
       const role = index === 0 ? primaryLabel : secondaryLabel
       const lock = (ws.access ?? 'readwrite') === 'readonly' ? '【只读】' : ''
-      const group = index === 0 ? '' : (ws.group ?? '')
+      const group = index === 0 ? '' : groupLabel(ws.group)
       const header = group !== '' && group !== currentGroup ? '【' + group + '】\n' : ''
-      if (group !== '' && group !== currentGroup) currentGroup = group
+      // 无分组目录必须把 currentGroup 清空：否则 [A(后端) → B(无) → C(后端)] 里
+      // C 会因为「和上一次的 group 相同」而丢掉标题，看起来落在 B 的块里。
+      currentGroup = group
       const monorepo = ws.monorepo === undefined ? '' : `【Monorepo:${ws.monorepo.kind} · ${ws.monorepo.packages.length} 包】`
       return `${header}${index + 1}.${ws.name}${role}${lock}${monorepo}绝对路径：${ws.path}`
     })
@@ -331,22 +405,52 @@ export function renderMultiWorkspacePromptDetailed(input: MultiWorkspacePromptIn
   let renderedCodeEntries = [...codeEntries]
   const degradations = new Set<ContextDegradation>()
 
+  // 任务胶囊也要有预算：此前它完全不受约束，任务会话可以显著超出全局预算而
+  // 既不降级也不提示。上限取全局预算的 30%（下限 1200、上限 8000 token）。
+  const capsuleBudget = Number.isFinite(globalBudget)
+    ? Math.min(8000, Math.max(1200, Math.floor(globalBudget * 0.3)))
+    : 8000
+  /** 按行截断到 token 上限（保留完整行，避免切断路径/签名）。 */
+  const truncateToTokens = (text: string, limit: number): string => {
+    if (estimateTokens(text) <= limit) return text
+    degradations.add('capsule-truncated')
+    const kept: string[] = []
+    let used = 0
+    for (const line of text.split('\n')) {
+      const cost = estimateTokens(line) + 1
+      if (used + cost > limit) break
+      used += cost
+      kept.push(line)
+    }
+    kept.push('- …胶囊已按预算截断：需要更完整的任务范围时，请直接 grep/read 上面列出的文件。')
+    return kept.join('\n')
+  }
+
+  // 胶囊渲染是纯函数且要参与最多 30+ 次 compose，先算一次再复用。
+  const capsuleText = renderTaskContextCapsule(taskCapsule)
+
   const compose = (): string => {
     const standards = renderStandards(standardGroups, effective.standards)
     const commands = renderCommands(active, effective.commands)
-    const fileIndex = renderFileIndex(entries, loadMode, effective.fileIndex)
+    const capsule = truncateToTokens(capsuleText, capsuleBudget)
+    const fileIndex = capsule === '' ? renderFileIndex(entries, loadMode, effective.fileIndex) : ''
     const codeIndex = renderCodeIndex(renderedCodeEntries, effective.codeIndex)
     const standardsUsage = standards !== '' ? '' : standardsPath ? '- 开发规范未常驻上下文：写入/修改项目文件前，先按目录或技术栈 grep/read ' + standardsPath + ' 的相关小节；不要为此整份通读。' : ''
     const commandsUsage = commands !== '' ? '' : commandsPath ? '- 各项目启动/测试/构建命令未常驻上下文：运行命令前先 grep/read ' + commandsPath + ' 中对应项目；仍必须在项目绝对路径下执行。' : ''
     const codeIndexUsage = codeIndex !== ''
       ? '- @功能名（如 @workspaceCreate）：指上方「功能/接口索引」里的名字，展开即读取该项列出的服务端/前端文件，用于快速定位。'
       : codeIndexPath ? '- 功能/接口索引（端点 ↔ 前后端落点）未常驻上下文：需要定位端点时先 grep ' + codeIndexPath + '（每行一条：@功能名 → 端点 | 服务端 文件:行 | 前端 文件:行），不必为此通读仓库。' : ''
+    const fileIndexUsage = capsule !== '' && fileIndexPath !== undefined ? '- 完整文件索引未常驻上下文：胶囊信息不足时，先 grep/read ' + fileIndexPath + ' 的对应项目或文件名，不要直接遍历全部仓库。' : ''
+    const symbolIndexUsage = symbolIndexPath === undefined ? '' : '- 通用符号骨架未常驻上下文：按函数、类、类型或组件名定位时，先 grep ' + symbolIndexPath + ' 查看声明签名；签名足够时不要读取完整文件，需要实现细节时再只读命中位置附近。'
+    const dependencyIndexUsage = dependencyIndexPath === undefined ? '' : '- 文件依赖图未常驻上下文：需要扩大影响范围时，先 grep ' + dependencyIndexPath + ' 的目标文件名，只读取直接依赖或直接调用方，禁止无依据扩散到整个模块。'
+    const testIndexUsage = testIndexPath === undefined ? '' : '- 精准测试映射未常驻上下文：修改代码后先 grep ' + testIndexPath + ' 的源文件名，优先运行命中的目标测试；仅在目标测试不足时再扩大验证范围。'
     const degradationLabels: Record<ContextDegradation, string> = {
       'file-index-truncated': '文件索引已按全局预算截断',
       'code-index-truncated': '功能/接口索引已按全局预算截断或改为按需查询',
       'commands-truncated': '项目命令已按全局预算截断或改为按需查询',
       'standards-truncated': '开发规范已在保留优先级后按全局预算截断',
       'ai-content-skipped': 'AI 生成的索引摘要已跳过，保留确定性端点信息',
+      'capsule-truncated': '任务胶囊已按预算截断为路径清单',
     }
     return [
       '# 多工作区联合开发模式生效',
@@ -354,6 +458,7 @@ export function renderMultiWorkspacePromptDetailed(input: MultiWorkspacePromptIn
       list,
       ...(monorepoMap.length > 0 ? ['', '# Monorepo 包边界', ...monorepoMap, '- Monorepo 只加载一次根目录；执行命令前先确认根命令还是包级命令，禁止把嵌套包当成独立 Git 仓库。'] : []),
       ...(taskBlock !== '' ? ['', taskBlock] : []),
+      ...(capsule !== '' ? ['', capsule] : []),
       ...(commands !== '' ? ['', commands] : []),
       ...(standards !== '' ? ['', standards] : []),
       ...(degradations.size > 0 ? ['', '# 上下文预算降级', ...[...degradations].map(item => '- ' + degradationLabels[item])] : []),
@@ -368,6 +473,10 @@ export function renderMultiWorkspacePromptDetailed(input: MultiWorkspacePromptIn
       ...(standardsUsage !== '' ? [standardsUsage] : []),
       ...(commandsUsage !== '' ? [commandsUsage] : []),
       ...(codeIndexUsage !== '' ? [codeIndexUsage] : []),
+      ...(fileIndexUsage !== '' ? [fileIndexUsage] : []),
+      ...(symbolIndexUsage !== '' ? [symbolIndexUsage] : []),
+      ...(dependencyIndexUsage !== '' ? [dependencyIndexUsage] : []),
+      ...(testIndexUsage !== '' ? [testIndexUsage] : []),
       '- 被 @ 引用的文件/目录应优先纳入本次处理范围；全局预算不足也不得静默忽略用户显式引用。',
       '',
       '开发强制规则：',
@@ -387,7 +496,10 @@ export function renderMultiWorkspacePromptDetailed(input: MultiWorkspacePromptIn
     degradations.add(degradation)
     text = compose()
   }
-  for (let pass = 0; pass < 8 && estimateTokens(text) > globalBudget; pass++) trim('fileIndex', 'file-index-truncated')
+  // 有胶囊时文件索引区块本就不渲染，对它做预算裁剪纯属空转（只烧 8 次拼接）。
+  if (capsuleText === '') {
+    for (let pass = 0; pass < 8 && estimateTokens(text) > globalBudget; pass++) trim('fileIndex', 'file-index-truncated')
+  }
   for (let pass = 0; pass < 8 && estimateTokens(text) > globalBudget; pass++) trim('codeIndex', 'code-index-truncated')
   if (estimateTokens(text) > globalBudget && renderedCodeEntries.some(entry => entry.summary !== undefined && entry.summary !== '')) {
     renderedCodeEntries = renderedCodeEntries.map(({ summary: _summary, ...entry }) => entry)

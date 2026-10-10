@@ -5,22 +5,61 @@
  */
 
 import { API } from '../invariant.ts'
+import { tt } from './locales.ts'
 import type { CodeIndexEntry, ContextPreset, ContextStats, DetectedProject, DiagnosticAction, DiagnosticReport, EndpointImpact, GitStatus, LoadMode, TokenUsageReport, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceStandards } from '../core/types.ts'
 import type { StandardsLibrary } from '../core/standards.ts'
 import type { FileTreeNode } from '../core/fileTree.ts'
 import type { SessionTask } from '../core/task.ts'
 
-/** 统一 JSON 请求/响应。 */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    headers: { 'content-type': 'application/json' },
-    ...init,
-  })
+/** 轻量读写的默认超时；慢查询单独放宽，避免宿主无响应时面板永久转圈。 */
+const DEFAULT_TIMEOUT_MS = 15_000
+/** 磁盘扫描类（scan / file-index / git-status / 统计 / 诊断）的超时。 */
+const HEAVY_TIMEOUT_MS = 60_000
+/** 模型起草规范正文的超时（可能几十秒）。 */
+const AI_TIMEOUT_MS = 120_000
+
+/**
+ * 变更类响应的公共字段：宿主写完沙盒白名单后会带上 `sandboxSynced`，
+ * 为 false 表示白名单没落上（目录写权限可能没放开），调用方要提示用户。
+ */
+export interface MutationResult {
+  sandboxSynced?: boolean
+}
+
+/**
+ * 统一 JSON 请求/响应：带超时（AbortController）、非 2xx 检查、JSON 解析保护。
+ * @param path - 宿主路由。
+ * @param init - fetch 参数。
+ * @param timeoutMs - 超时毫秒（超时抛可读错误，而不是让 promise 永不 settle）。
+ */
+async function request<T>(path: string, init?: RequestInit, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<T> {
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => { timedOut = true; controller.abort() }, timeoutMs)
+  let res: Response
+  try {
+    res = await fetch(path, {
+      headers: { 'content-type': 'application/json' },
+      ...init,
+      signal: controller.signal,
+    })
+  } catch (error) {
+    if (timedOut) throw new Error(tt('requestTimeout', { ms: timeoutMs }))
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({})) as { error?: string }
     throw new Error(body.error ?? 'HTTP ' + res.status)
   }
-  return await res.json() as T
+  // 2xx 但响应体不是 JSON（代理错误页/空体）时给出可读错误，而不是把
+  // `SyntaxError: Unexpected token` 原文丢给用户。
+  try {
+    return await res.json() as T
+  } catch {
+    throw new Error(tt('badResponse'))
+  }
 }
 
 /** 宿主全量状态（工作空间 + 当前激活）。 */
@@ -37,7 +76,7 @@ export class WorkspaceCombinerApi {
   }
 
   /** 新建工作空间：在 basePath 下创建与名称同名的文件夹作为主目录，其余目录作为代码项目；创建后自动切换为当前。 */
-  async createWorkspace(name: string, basePath: string, directories: readonly WorkspaceRef[], mode: WorkspaceMode = 'anchor', loadMode: LoadMode = 'summary'): Promise<{ workspace: Workspace; currentWorkspaceId: string }> {
+  async createWorkspace(name: string, basePath: string, directories: readonly WorkspaceRef[], mode: WorkspaceMode = 'anchor', loadMode: LoadMode = 'summary'): Promise<{ workspace: Workspace; currentWorkspaceId: string } & MutationResult> {
     return await request<{ workspace: Workspace; currentWorkspaceId: string }>(API.workspaceCreate, {
       method: 'POST',
       body: JSON.stringify({ name, basePath, directories, mode, loadMode }),
@@ -49,7 +88,7 @@ export class WorkspaceCombinerApi {
     const body = await request<{ projects: DetectedProject[] }>(API.scan, {
       method: 'POST',
       body: JSON.stringify({ path }),
-    })
+    }, HEAVY_TIMEOUT_MS)
     return body.projects
   }
 
@@ -62,24 +101,24 @@ export class WorkspaceCombinerApi {
   }
 
   /** 删除工作空间；返回删除后的当前工作空间 id。 */
-  async deleteWorkspace(id: string): Promise<{ currentWorkspaceId: string }> {
-    return await request<{ ok: boolean; currentWorkspaceId: string }>(API.workspaceDelete, {
+  async deleteWorkspace(id: string): Promise<{ currentWorkspaceId: string } & MutationResult> {
+    return await request<{ ok: boolean; currentWorkspaceId: string } & MutationResult>(API.workspaceDelete, {
       method: 'POST',
       body: JSON.stringify({ id }),
     })
   }
 
-  /** 切换当前工作空间。 */
-  async switchWorkspace(id: string): Promise<void> {
-    await request<{ ok: boolean }>(API.workspaceSwitch, {
+  /** 切换当前工作空间（返回沙盒白名单是否落盘成功）。 */
+  async switchWorkspace(id: string): Promise<MutationResult> {
+    return await request<{ ok: boolean } & MutationResult>(API.workspaceSwitch, {
       method: 'POST',
       body: JSON.stringify({ id }),
     })
   }
 
   /** 覆盖某工作空间的目录列表（含排序/主从；宿主持久化并联动沙盒）。 */
-  async setWorkspaceDirectories(id: string, directories: readonly WorkspaceRef[]): Promise<void> {
-    await request<{ ok: boolean }>(API.workspaceDirectories, {
+  async setWorkspaceDirectories(id: string, directories: readonly WorkspaceRef[]): Promise<MutationResult> {
+    return await request<{ ok: boolean } & MutationResult>(API.workspaceDirectories, {
       method: 'POST',
       body: JSON.stringify({ id, directories }),
     })
@@ -93,9 +132,9 @@ export class WorkspaceCombinerApi {
     })
   }
 
-  /** 保存/恢复/删除工作空间目录配置快照。 */
-  async workspaceSnapshot(id: string, action: 'save' | 'restore' | 'delete', payload: { name?: string; snapshotId?: string } = {}): Promise<void> {
-    await request<{ ok: boolean }>(API.workspaceSnapshot, {
+  /** 保存/恢复/删除工作空间目录配置快照（返回沙盒白名单是否落盘成功）。 */
+  async workspaceSnapshot(id: string, action: 'save' | 'restore' | 'delete', payload: { name?: string; snapshotId?: string } = {}): Promise<MutationResult> {
+    return await request<{ ok: boolean } & MutationResult>(API.workspaceSnapshot, {
       method: 'POST',
       body: JSON.stringify({ id, action, ...payload }),
     })
@@ -122,7 +161,7 @@ export class WorkspaceCombinerApi {
     return await request<{ root: string; files: number; dirs: number; truncated: boolean; tree: FileTreeNode[] }>(API.fileIndex, {
       method: 'POST',
       body: JSON.stringify({ path, loadMode }),
-    })
+    }, HEAVY_TIMEOUT_MS)
   }
 
   /** 轻量存在性探测：目录失效检测用，避免为判断存在而构建整棵文件树。 */
@@ -138,18 +177,18 @@ export class WorkspaceCombinerApi {
     const body = await request<{ status: GitStatus | null }>(API.gitStatus, {
       method: 'POST',
       body: JSON.stringify({ path }),
-    })
+    }, HEAVY_TIMEOUT_MS)
     return body.status
   }
 
   /** 获取上下文统计（各目录文件数 + 估算 token）。 */
   async contextStats(): Promise<ContextStats> {
-    return await request<ContextStats>(API.contextStats, { method: 'GET' })
+    return await request<ContextStats>(API.contextStats, { method: 'GET' }, HEAVY_TIMEOUT_MS)
   }
 
   /** 读取当前工作空间的功能/接口索引（面板预览用）。 */
   async codeIndex(): Promise<CodeIndexEntry[]> {
-    const body = await request<{ entries: CodeIndexEntry[] }>(API.codeIndex, { method: 'GET' })
+    const body = await request<{ entries: CodeIndexEntry[] }>(API.codeIndex, { method: 'GET' }, HEAVY_TIMEOUT_MS)
     return body.entries
   }
 
@@ -171,7 +210,7 @@ export class WorkspaceCombinerApi {
 
   /** 用默认模型起草一份规范正文（可选能力；不可用时返回空串）。 */
   async generateStandard(payload: { name: string; tech?: string; directory?: string; hint?: string }): Promise<string> {
-    const body = await request<{ body: string }>(API.standardsAi, { method: 'POST', body: JSON.stringify(payload) })
+    const body = await request<{ body: string }>(API.standardsAi, { method: 'POST', body: JSON.stringify(payload) }, AI_TIMEOUT_MS)
     return body.body
   }
 
@@ -182,12 +221,12 @@ export class WorkspaceCombinerApi {
 
   /** 运行当前工作空间的统一诊断。 */
   async diagnostics(): Promise<DiagnosticReport> {
-    return await request<DiagnosticReport>(API.diagnostics, { method: 'GET' })
+    return await request<DiagnosticReport>(API.diagnostics, { method: 'GET' }, HEAVY_TIMEOUT_MS)
   }
 
   /** 执行诊断中心允许的一项安全修复。 */
   async runDiagnosticAction(action: DiagnosticAction): Promise<void> {
-    await request<{ ok: boolean }>(API.diagnosticAction, { method: 'POST', body: JSON.stringify({ action }) })
+    await request<{ ok: boolean }>(API.diagnosticAction, { method: 'POST', body: JSON.stringify({ action }) }, HEAVY_TIMEOUT_MS)
   }
 
   /** 读取某工作空间已加载（绑定）的会话 id；只有本进程加载过的会话才可刷新。 */
@@ -198,7 +237,7 @@ export class WorkspaceCombinerApi {
 
   /** 把工作空间的最新配置刷新进某个已加载的会话（下一轮请求生效）。 */
   async refreshSession(sessionId: string): Promise<void> {
-    await request<{ ok: boolean }>(API.sessionRefresh, { method: 'POST', body: JSON.stringify({ sessionId }) })
+    await request<{ ok: boolean }>(API.sessionRefresh, { method: 'POST', body: JSON.stringify({ sessionId }) }, HEAVY_TIMEOUT_MS)
   }
 
   /** 把一次性任务范围绑定到新会话，不修改工作空间永久配置。 */
@@ -211,6 +250,6 @@ export class WorkspaceCombinerApi {
     return await request<{ impact: EndpointImpact[]; changedFiles: number }>(API.endpointImpact, {
       method: 'POST',
       body: JSON.stringify(files === undefined ? {} : { files }),
-    })
+    }, HEAVY_TIMEOUT_MS)
   }
 }

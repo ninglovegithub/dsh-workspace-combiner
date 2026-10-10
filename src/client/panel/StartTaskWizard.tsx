@@ -4,10 +4,11 @@
  * @module dsh-workspace-combiner/client/panel/StartTaskWizard
  */
 
-import { useEffect, useState, type ChangeEvent, type ReactElement } from 'react'
+import { useState, type ChangeEvent, type ReactElement } from 'react'
 import type { CodeIndexEntry, GitStatus, LoadMode, WorkspaceRef } from '../../core/types.ts'
 import { recommendTask, TASK_MODES, taskExecutionPlan, taskModeConfig, taskPreflight, taskVerificationCoverage, type SessionTask, type TaskMode, type TaskPreflightIssue, type TaskRecommendation, type TaskVerification } from '../../core/task.ts'
 import { tt } from '../locales.ts'
+import { Dialog } from './Dialog.tsx'
 
 interface StartTaskWizardProps {
   directories: readonly WorkspaceRef[]
@@ -19,6 +20,11 @@ interface StartTaskWizardProps {
 }
 
 const VERIFICATIONS: TaskVerification[] = ['run', 'test', 'build', 'review-impact']
+
+/** 文件加载模式 -> 本地化标签（不要在界面里直接渲染枚举值）。 */
+function loadModeLabel(mode: LoadMode): string {
+  return mode === 'full' ? tt('loadModeFull') : mode === 'tree' ? tt('loadModeTree') : tt('loadModeSummary')
+}
 
 function typeLabel(taskMode: TaskMode): string {
   return tt(taskModeConfig(taskMode).labelKey)
@@ -55,12 +61,6 @@ export function StartTaskWizard({ directories, codeEntries, missingDirectories, 
   const [recommendation, setRecommendation] = useState<TaskRecommendation>(() => recommendTask('feature', 'new feature', directories, codeEntries))
   const [task, setTask] = useState<SessionTask>(() => recommendation.task)
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   const prepareRecommendation = (): void => {
     const recommendation = recommendTask(taskMode, description, directories, codeEntries)
     setTask(recommendation.task)
@@ -89,13 +89,12 @@ export function StartTaskWizard({ directories, codeEntries, missingDirectories, 
   }
 
   const enabledDirectories = directories.filter(directory => (directory.access ?? 'readwrite') !== 'disabled')
+  const primaryPath = directories[0]?.path
   const preflight = taskPreflight(task, directories, missingDirectories, gitStatuses)
   const executionPlan = taskExecutionPlan(task, directories, gitStatuses)
 
   return (
-    <div className="wcb-overlay" onClick={onClose}>
-      <div className="wcb-modal wcb-modal-wide" role="dialog" aria-modal="true" aria-label={tt('taskWizardTitle')} onClick={(event) => event.stopPropagation()}>
-        <div className="wcb-modal-title">{tt('taskWizardTitle')}</div>
+    <Dialog title={tt('taskWizardTitle')} onClose={onClose} wide>
         <div className="wcb-steps">
           {[tt('taskStep1'), tt('taskStep2'), tt('taskStep3')].map((label, index) => {
             const number = index + 1
@@ -130,13 +129,13 @@ export function StartTaskWizard({ directories, codeEntries, missingDirectories, 
               <span>{recommendation.mode === 'weak-match' ? tt('taskWeakScopeHint') : tt('taskRecommendationScope')}</span>
             </div>
             <div className="wcb-task-dir-list">
-              {enabledDirectories.map((directory, index) => (
+              {enabledDirectories.map(directory => (
                 <label className="wcb-task-dir" key={directory.path}>
-                  <input type="checkbox" checked={task.directoryPaths.includes(directory.path)} disabled={index === 0} onChange={() => toggleDirectory(directory.path)} />
+                  <input type="checkbox" checked={task.directoryPaths.includes(directory.path)} disabled={directory.path === primaryPath} onChange={() => toggleDirectory(directory.path)} />
                   <span>
                     <strong>{directory.name}</strong>
                     <small title={directory.path}>{directory.path}</small>
-                    {index === 0 ? <em>{tt('taskPrimaryRequired')}</em> : null}
+                    {directory.path === primaryPath ? <em>{tt('taskPrimaryRequired')}</em> : null}
                     {(recommendation.directoryFeatures[directory.path]?.length ?? 0) > 0 ? (
                       <em>{tt('taskDirectoryMatched', { features: recommendation.directoryFeatures[directory.path]!.slice(0, 3).map(feature => '@' + feature).join(' · ') })}</em>
                     ) : null}
@@ -190,7 +189,7 @@ export function StartTaskWizard({ directories, codeEntries, missingDirectories, 
               <div><span>{tt('taskDescription')}</span><strong>{task.description}</strong></div>
               <div><span>{tt('taskScope')}</span><strong>{tt('taskDirectoryCount', { n: task.directoryPaths.length })}</strong></div>
               <div><span>{tt('taskScopeReason')}</span><strong>{recommendationLabel(recommendation)}</strong></div>
-              <div><span>{tt('loadModeLabel')}</span><strong>{task.loadMode}</strong></div>
+              <div><span>{tt('loadModeLabel')}</span><strong>{loadModeLabel(task.loadMode)}</strong></div>
               <div><span>{tt('taskVerification')}</span><strong>{task.verification.length > 0 ? task.verification.map(verificationLabel).join(' · ') : tt('taskVerificationNone')}</strong></div>
             </div>
             <div className="wcb-task-plan">
@@ -238,7 +237,6 @@ export function StartTaskWizard({ directories, codeEntries, missingDirectories, 
           {step === 2 ? <button type="button" className="wcb-btn-primary" disabled={task.directoryPaths.length === 0} onClick={() => setStep(3)}>{tt('wizardNext')}</button> : null}
           {step === 3 ? <button type="button" className="wcb-btn-primary" disabled={preflight.status === 'blocked'} onClick={() => onCreate(task)}>{tt('taskCreate')}</button> : null}
         </div>
-      </div>
-    </div>
+    </Dialog>
   )
 }

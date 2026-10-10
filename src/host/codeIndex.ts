@@ -11,11 +11,11 @@
  */
 
 import { chmod, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
-import { dirname, join, relative, sep } from 'node:path'
-import { isIgnored, loadGitignore } from './fileIndex.ts'
+import { dirname, extname, join, normalize, relative, sep } from 'node:path'
+import { isIgnored, loadGitignore, warnIoFailure } from './fileIndex.ts'
 import { renderCodeIndexText } from '../prompt.ts'
 import { dshHome } from '../store.ts'
-import type { CodeIndexConfidence, CodeIndexEntry, CodeIndexLoc, EndpointImpact, WorkspaceRef } from '../core/types.ts'
+import type { CodeIndexConfidence, CodeIndexEntry, CodeIndexLoc, DependencyIndexEntry, EndpointImpact, SymbolIndexEntry, TestIndexEntry, WorkspaceRef } from '../core/types.ts'
 
 export type { CodeIndexEntry, CodeIndexLoc, EndpointImpact }
 
@@ -34,6 +34,9 @@ const MAX_TOTAL_BYTES = 24 * 1024 * 1024
 const MAX_CANDIDATES = 20000
 /** 条目上限：调高后仍不影响 prompt 体积（renderCodeIndex 另有 token 预算截断），但截断会吃掉已经配好前后端落点的条目。 */
 const MAX_ENTRIES = 600
+const MAX_SYMBOLS = 2400
+const MAX_DEPENDENCIES = 6000
+const MAX_TEST_MAPPINGS = 3000
 
 /** 端点字面量：引号内的 /path 形式。 */
 const ENDPOINT_LITERAL = /['"`](\/[A-Za-z0-9._~\-/{}$:]+)['"`]/g
@@ -220,7 +223,8 @@ async function collectCodeFiles(root: string, patterns: RegExp[]): Promise<strin
     let entries
     try {
       entries = await readdir(dir, { withFileTypes: true })
-    } catch {
+    } catch (error) {
+      warnIoFailure('code-index', dir, error)
       return
     }
     for (const ent of entries) {
@@ -245,6 +249,12 @@ async function collectCodeFiles(root: string, patterns: RegExp[]): Promise<strin
 /** 功能索引构建结果：端点条目 + 文件级反向索引。 */
 export interface CodeIndexResult {
   entries: CodeIndexEntry[]
+  /** 与端点同一遍源码扫描抽取的通用符号，完整清单只写入按需文件。 */
+  symbols: SymbolIndexEntry[]
+  /** 可确定解析的文件级直接依赖；用于任务的一跳最小阅读邻域。 */
+  dependencies: DependencyIndexEntry[]
+  /** 源文件到相关测试的映射，供任务胶囊精准推荐验证入口。 */
+  tests: TestIndexEntry[]
   /** 绝对文件路径 -> 该文件涉及的端点匹配键（用于「改动文件反查端点」）。 */
   fileEndpoints: Record<string, string[]>
 }
@@ -284,7 +294,8 @@ export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<Cod
         const info = await stat(abs)
         if (info.size > MAX_FILE_BYTES) continue
         content = await readFile(abs, 'utf8')
-      } catch {
+      } catch (error) {
+        warnIoFailure('code-index', abs, error)
         continue
       }
       totalBytes += content.length
@@ -300,6 +311,173 @@ export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<Cod
         // 否则「前端落点」会指向 Java 控制器自己。
         client: BACKEND_EXT.test(abs) ? HTTP_CLIENT_HINT.test(content) : CLIENT_HINT.test(content),
       })
+    }
+  }
+
+  const symbols: SymbolIndexEntry[] = []
+  const symbolSeen = new Set<string>()
+  const symbolSignature = (file: typeof files[number], lineIndex: number): string | undefined => {
+    const parts: string[] = []
+    for (let index = lineIndex; index < Math.min(file.lines.length, lineIndex + 4); index++) {
+      const part = file.lines[index].trim()
+      if (part === '') continue
+      parts.push(part)
+      const joined = parts.join(' ')
+      if (part.includes('{') || /[;:]\s*$/.test(part) || joined.includes('=>') || joined.length >= 240) break
+    }
+    let signature = parts.join(' ').replace(/\s+/g, ' ').trim()
+    if (signature === '') return undefined
+    const brace = signature.indexOf('{')
+    if (brace >= 0) signature = signature.slice(0, brace).trimEnd() + ' { … }'
+    if (signature.length > 240) signature = signature.slice(0, 237).trimEnd() + '…'
+    return signature
+  }
+  const addSymbol = (file: typeof files[number], line: number, name: string, kind: SymbolIndexEntry['kind'], exported = false): void => {
+    if (name === '' || name.length > 100) return
+    const key = file.abs + '\u0000' + line + '\u0000' + name
+    if (symbolSeen.has(key)) return
+    symbolSeen.add(key)
+    const signature = symbolSignature(file, line - 1)
+    symbols.push({ name, kind, file: file.rel, line, dir: file.dir, ...(exported ? { exported: true } : {}), ...(signature === undefined ? {} : { signature }) })
+  }
+  for (const file of files) {
+    for (let index = 0; index < file.lines.length; index++) {
+      const line = file.lines[index]
+      const exported = /\b(export|public)\b/.test(line)
+      const declarations: Array<[RegExp, SymbolIndexEntry['kind']]> = [
+        [/\b(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/, 'function'],
+        [/\b(?:export\s+)?(?:default\s+)?class\s+([A-Za-z_$][\w$]*)/, 'class'],
+        [/\b(?:export\s+)?interface\s+([A-Za-z_$][\w$]*)/, 'interface'],
+        [/\b(?:export\s+)?type\s+([A-Za-z_$][\w$]*)\s*=/, 'type'],
+        [/\b(?:export\s+)?enum\s+([A-Za-z_$][\w$]*)/, 'enum'],
+        [/\b(?:export\s+)?const\s+([A-Z][A-Za-z0-9_$]*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>/, 'component'],
+        [/\b(?:public\s+)?(?:class|interface|enum)\s+([A-Za-z_$][\w$]*)/, 'class'],
+        [/^\s*(?:def|class)\s+([A-Za-z_][\w]*)/, line.trimStart().startsWith('class ') ? 'class' : 'function'],
+        [/^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_][\w]*)\s*\(/, 'function'],
+        [/^\s*fun\s+([A-Za-z_][\w]*)\s*\(/, 'function'],
+      ]
+      for (const [pattern, kind] of declarations) {
+        const match = pattern.exec(line)
+        if (match?.[1] !== undefined) addSymbol(file, index + 1, match[1], kind, exported)
+      }
+    }
+  }
+
+  const dependencies: DependencyIndexEntry[] = []
+  const dependencySeen = new Set<string>()
+  const filesByDir = new Map<string, Map<string, string>>()
+  /**
+   * Java/Kotlin 包名后缀索引：dir -> ('com/x/Foo' -> 该目录内首个匹配的 rel)。
+   * 旧实现对每条 import 都 `[...map.keys()].find(...)` 线性扫描全部候选（O(文件数²)）；
+   * 这里在收集阶段一次性登记每个候选路径的所有「/ 边界对齐后缀（去掉扩展名）」，
+   * 查找退化为 O(1)。后缀键与旧谓词 `candidate.endsWith('/' + suffix + '.java'|'.kt')`
+   * 一一对应，且同样保留插入顺序中的首个候选，输出与旧实现完全一致。
+   */
+  const javaSuffixByDir = new Map<string, Map<string, string>>()
+  for (const file of files) {
+    let map = filesByDir.get(file.dir)
+    if (map === undefined) { map = new Map(); filesByDir.set(file.dir, map) }
+    map.set(file.rel, file.rel)
+    // 扩展名大小写敏感：旧谓词 endsWith('.java')/('.kt') 就是大小写敏感的。
+    const dot = file.rel.lastIndexOf('.')
+    const extension = dot < 0 ? '' : file.rel.slice(dot)
+    if (extension !== '.java' && extension !== '.kt') continue
+    let suffixIndex = javaSuffixByDir.get(file.dir)
+    if (suffixIndex === undefined) { suffixIndex = new Map(); javaSuffixByDir.set(file.dir, suffixIndex) }
+    // 只登记首个 '/' 之后的后缀：根下的 `Foo.java` 不能被裸 'Foo' 命中，
+    // 与 endsWith('/' + suffix + '.java') 的语义一致。
+    const bare = file.rel.slice(0, dot)
+    for (let cursor = bare.indexOf('/'); cursor >= 0 && cursor + 1 < bare.length; cursor = bare.indexOf('/', cursor + 1)) {
+      const suffix = bare.slice(cursor + 1)
+      if (!suffixIndex.has(suffix)) suffixIndex.set(suffix, file.rel)
+    }
+  }
+  const resolveLocal = (file: typeof files[number], specifier: string): string | undefined => {
+    const map = filesByDir.get(file.dir)
+    if (map === undefined) return undefined
+    if (specifier.startsWith('.')) {
+      const base = normalize(join(dirname(file.rel), specifier)).split(sep).join('/')
+      const extensions = extname(base) === '' ? [...CODE_EXTENSIONS] : ['']
+      const candidates = [base, ...extensions.map(extension => base + extension), ...extensions.map(extension => base + '/index' + extension)]
+      return candidates.find(candidate => map.has(candidate))
+    }
+    if (/\.(java|kt)$/i.test(file.rel)) {
+      // 旧实现：candidate.endsWith('/' + suffix + '.java') || candidate.endsWith('/' + suffix + '.kt')
+      const suffix = specifier.replace(/\./g, '/')
+      return javaSuffixByDir.get(file.dir)?.get(suffix)
+    }
+    return undefined
+  }
+  const resolvePython = (file: typeof files[number], specifier: string): string | undefined => {
+    const map = filesByDir.get(file.dir)
+    if (map === undefined) return undefined
+    const dots = specifier.match(/^\.+/)?.[0].length ?? 0
+    if (dots === 0) return undefined
+    let baseDir = dirname(file.rel)
+    for (let level = 1; level < dots; level++) baseDir = dirname(baseDir)
+    const modulePath = specifier.slice(dots).replace(/\./g, '/')
+    const base = normalize(join(baseDir, modulePath)).split(sep).join('/')
+    return [base + '.py', base + '/__init__.py'].find(candidate => map.has(candidate))
+  }
+  const addDependency = (file: typeof files[number], line: number, specifier: string): void => {
+    const target = resolveLocal(file, specifier)
+    if (target === undefined || target === file.rel) return
+    const key = file.dir + '\u0000' + file.rel + '\u0000' + target
+    if (dependencySeen.has(key)) return
+    dependencySeen.add(key)
+    dependencies.push({ dir: file.dir, from: file.rel, to: target, line })
+  }
+  for (const file of files) {
+    for (let index = 0; index < file.lines.length; index++) {
+      const line = file.lines[index]
+      const moduleMatch = /(?:import|export)\s+(?:[^'";]+?\s+from\s+)?['"]([^'"]+)['"]|require\s*\(\s*['"]([^'"]+)['"]\s*\)|import\s*\(\s*['"]([^'"]+)['"]\s*\)/.exec(line)
+      const javaMatch = /^\s*import\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)\s*;?/.exec(line)
+      const pythonMatch = /^\s*from\s+(\.+[A-Za-z_][\w.]*)\s+import\b/.exec(line)
+      const specifier = moduleMatch?.[1] ?? moduleMatch?.[2] ?? moduleMatch?.[3] ?? javaMatch?.[1]
+      if (specifier !== undefined) addDependency(file, index + 1, specifier)
+      if (pythonMatch?.[1] !== undefined) {
+        const target = resolvePython(file, pythonMatch[1])
+        if (target !== undefined) {
+          const key = file.dir + '\u0000' + file.rel + '\u0000' + target
+          if (!dependencySeen.has(key)) {
+            dependencySeen.add(key)
+            dependencies.push({ dir: file.dir, from: file.rel, to: target, line: index + 1 })
+          }
+        }
+      }
+    }
+  }
+
+  const isTestFile = (path: string): boolean => /(^|\/)(?:src\/test|tests?|__tests__|e2e)(\/|$)|(?:\.test|\.spec)\.[^.\/]+$|(?:^|\/)(?:test_[^/]+|[^/]+_test)\.py$|(?:Test|Tests)\.(?:java|kt|cs)$/i.test(path)
+  const testMappings: TestIndexEntry[] = []
+  const testMappingSeen = new Set<string>()
+  const addTestMapping = (dir: string, source: string, test: string, reason: TestIndexEntry['reason']): void => {
+    if (source === test || isTestFile(source) || !isTestFile(test)) return
+    const key = dir + '\u0000' + source + '\u0000' + test
+    if (testMappingSeen.has(key)) return
+    testMappingSeen.add(key)
+    testMappings.push({ dir, source, test, reason })
+  }
+  for (const dependency of dependencies) {
+    if (isTestFile(dependency.from) && !isTestFile(dependency.to)) addTestMapping(dependency.dir, dependency.to, dependency.from, 'import')
+  }
+  const normalizedTestName = (path: string): string => {
+    const file = path.split('/').pop() ?? path
+    const withoutExtension = file.replace(/\.[^.]+$/, '')
+    return withoutExtension.replace(/(?:\.test|\.spec)$/i, '').replace(/^test_/, '').replace(/_test$/, '').replace(/Tests?$/, '').toLowerCase()
+  }
+  for (const [dir, map] of filesByDir) {
+    const sourcesByName = new Map<string, string[]>()
+    for (const path of map.keys()) {
+      if (isTestFile(path)) continue
+      const key = normalizedTestName(path)
+      const current = sourcesByName.get(key) ?? []
+      current.push(path)
+      sourcesByName.set(key, current)
+    }
+    for (const test of [...map.keys()].filter(isTestFile)) {
+      const matches = sourcesByName.get(normalizedTestName(test)) ?? []
+      if (matches.length === 1) addTestMapping(dir, matches[0], test, 'name')
     }
   }
 
@@ -374,7 +552,10 @@ export async function buildCodeIndex(dirs: readonly WorkspaceRef[]): Promise<Cod
     const alive = [...keys].filter(key => kept.has(key))
     if (alive.length > 0) fileEndpoints[abs] = alive
   }
-  return { entries, fileEndpoints }
+  const keptSymbols = symbols
+    .sort((a, b) => Number(Boolean(b.exported)) - Number(Boolean(a.exported)) || a.name.localeCompare(b.name) || a.file.localeCompare(b.file))
+    .slice(0, MAX_SYMBOLS)
+  return { entries, symbols: keptSymbols, dependencies: dependencies.slice(0, MAX_DEPENDENCIES), tests: testMappings.slice(0, MAX_TEST_MAPPINGS), fileEndpoints }
 }
 
 /**
@@ -437,13 +618,49 @@ interface PersistedCodeIndex {
   signature: string
   at: number
   entries: CodeIndexEntry[]
+  symbols: SymbolIndexEntry[]
+  dependencies: DependencyIndexEntry[]
+  tests: TestIndexEntry[]
   /** 文件到端点的反向索引（旧版本文件缺此字段时退化为空，不影响条目读取）。 */
   fileEndpoints: Record<string, string[]>
 }
 
 /** 空索引结果。 */
 export function emptyCodeIndex(): CodeIndexResult {
-  return { entries: [], fileEndpoints: {} }
+  return { entries: [], symbols: [], dependencies: [], tests: [], fileEndpoints: {} }
+}
+
+function parseTests(raw: unknown): TestIndexEntry[] {
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((item): TestIndexEntry[] => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return []
+    const value = item as Record<string, unknown>
+    return typeof value.dir === 'string' && typeof value.source === 'string' && typeof value.test === 'string' && (value.reason === 'import' || value.reason === 'name')
+      ? [{ dir: value.dir, source: value.source, test: value.test, reason: value.reason }]
+      : []
+  })
+}
+
+function parseDependencies(raw: unknown): DependencyIndexEntry[] {
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((item): DependencyIndexEntry[] => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return []
+    const value = item as Record<string, unknown>
+    return typeof value.dir === 'string' && typeof value.from === 'string' && typeof value.to === 'string' && typeof value.line === 'number'
+      ? [{ dir: value.dir, from: value.from, to: value.to, line: value.line }]
+      : []
+  })
+}
+
+function parseSymbols(raw: unknown): SymbolIndexEntry[] {
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((item): SymbolIndexEntry[] => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return []
+    const value = item as Record<string, unknown>
+    const kinds = new Set(['function', 'class', 'interface', 'type', 'enum', 'component', 'method'])
+    if (typeof value.name !== 'string' || typeof value.file !== 'string' || typeof value.dir !== 'string' || typeof value.line !== 'number' || typeof value.kind !== 'string' || !kinds.has(value.kind)) return []
+    return [{ name: value.name, file: value.file, dir: value.dir, line: value.line, kind: value.kind as SymbolIndexEntry['kind'], ...(value.exported === true ? { exported: true } : {}), ...(typeof value.signature === 'string' && value.signature !== '' ? { signature: value.signature } : {}) }]
+  })
 }
 
 /** 校验落盘 / 读取到的反向索引字段。 */
@@ -506,9 +723,17 @@ function parsePersistedEntry(raw: unknown, cacheAt: number): CodeIndexEntry | un
 export class CodeIndexCache {
   /** 缓存有效期：内容级改动不改根目录 mtime，用 TTL 兜住索引陈旧（行号漂移）。 */
   private static readonly TTL_MS = 60_000
+  /**
+   * 缓存条目上限（LRU）。旧实现每次重建都 `cache.clear()`，两个工作空间交替
+   * 使用时内存与磁盘双双 miss、每次都要全仓重扫；现在保留最近若干份签名。
+   */
+  private static readonly MAX_CACHE_ENTRIES = 4
   private readonly cache = new Map<string, { at: number; value: CodeIndexResult }>()
+  /** 同一签名的并发 get 共享一次构建：N 个会话同时创建时不再重复全仓扫描。 */
+  private readonly inflight = new Map<string, Promise<CodeIndexResult>>()
   private readonly file: string
-  private diskLoaded = false
+  /** 磁盘缓存只读一次；缓存 promise 而非布尔位，避免并发首读互相看到半初始化状态。 */
+  private diskPromise: Promise<PersistedCodeIndex | undefined> | undefined
 
   constructor(file: string = codeIndexFile()) {
     this.file = file
@@ -528,25 +753,59 @@ export class CodeIndexCache {
     }
     const key = parts.join('|')
     const hit = this.cache.get(key)
-    if (hit !== undefined && Date.now() - hit.at < CodeIndexCache.TTL_MS) return hit.value
-    if (!this.diskLoaded) {
-      this.diskLoaded = true
-      const disk = await this.loadDisk()
-      if (disk !== undefined && disk.signature === key && Date.now() - disk.at < CodeIndexCache.TTL_MS) {
-        const value: CodeIndexResult = { entries: disk.entries, fileEndpoints: disk.fileEndpoints }
-        this.cache.set(key, { at: disk.at, value })
-        return value
-      }
+    if (hit !== undefined && Date.now() - hit.at < CodeIndexCache.TTL_MS) {
+      // 重新插入到末尾 = 最近使用，供 LRU 淘汰。
+      this.remember(key, hit)
+      return hit.value
+    }
+    const running = this.inflight.get(key)
+    if (running !== undefined) return await running
+    const task = this.build(key, active)
+    this.inflight.set(key, task)
+    try {
+      return await task
+    } finally {
+      if (this.inflight.get(key) === task) this.inflight.delete(key)
+    }
+  }
+
+  /** 磁盘 → 重新扫描 → 落盘（仅在缓存未命中时进入）。 */
+  private async build(key: string, active: readonly WorkspaceRef[]): Promise<CodeIndexResult> {
+    const disk = await this.loadDiskOnce()
+    if (disk !== undefined && disk.signature === key && Date.now() - disk.at < CodeIndexCache.TTL_MS) {
+      const value: CodeIndexResult = { entries: disk.entries, symbols: disk.symbols, dependencies: disk.dependencies, tests: disk.tests, fileEndpoints: disk.fileEndpoints }
+      this.remember(key, { at: disk.at, value })
+      return value
     }
     const value = await buildCodeIndex(active)
-    this.cache.clear()
-    this.cache.set(key, { at: Date.now(), value })
-    await this.saveDisk({ signature: key, at: Date.now(), entries: value.entries, fileEndpoints: value.fileEndpoints })
+    const at = Date.now()
+    this.remember(key, { at, value })
+    await this.saveDisk({ signature: key, at, entries: value.entries, symbols: value.symbols, dependencies: value.dependencies, tests: value.tests, fileEndpoints: value.fileEndpoints })
     return value
+  }
+
+  /** 写入并按 LRU 淘汰（顺带清掉已过期条目，过期项不再永久驻留）。 */
+  private remember(key: string, entry: { at: number; value: CodeIndexResult }): void {
+    this.cache.delete(key)
+    this.cache.set(key, entry)
+    const now = Date.now()
+    for (const [candidate, cached] of this.cache) {
+      if (candidate !== key && now - cached.at >= CodeIndexCache.TTL_MS) this.cache.delete(candidate)
+    }
+    while (this.cache.size > CodeIndexCache.MAX_CACHE_ENTRIES) {
+      const oldest = this.cache.keys().next().value
+      if (oldest === undefined) break
+      this.cache.delete(oldest)
+    }
   }
 
   clear(): void {
     this.cache.clear()
+  }
+
+  private async loadDiskOnce(): Promise<PersistedCodeIndex | undefined> {
+    if (this.diskPromise === undefined) this.diskPromise = this.loadDisk()
+    return await this.diskPromise
   }
 
   private async loadDisk(): Promise<PersistedCodeIndex | undefined> {
@@ -558,8 +817,10 @@ export class CodeIndexCache {
       const entries = record.entries
         .map(item => parsePersistedEntry(item, record.at as number))
         .filter((item): item is CodeIndexEntry => item !== undefined)
-      return { signature: record.signature, at: record.at, entries, fileEndpoints: parseFileEndpoints(record.fileEndpoints) }
-    } catch {
+      return { signature: record.signature, at: record.at, entries, symbols: parseSymbols(record.symbols), dependencies: parseDependencies(record.dependencies), tests: parseTests(record.tests), fileEndpoints: parseFileEndpoints(record.fileEndpoints) }
+    } catch (error) {
+      // 首次运行没有缓存文件（ENOENT）属正常；损坏/不可读要能看见。
+      warnIoFailure('code-index-cache', this.file, error)
       return undefined
     }
   }
@@ -567,7 +828,7 @@ export class CodeIndexCache {
   private async saveDisk(payload: PersistedCodeIndex): Promise<void> {
     try {
       await mkdir(dirname(this.file), { recursive: true, mode: 0o700 })
-      const tmp = this.file + '.' + process.pid + '.tmp'
+      const tmp = this.file + '.' + process.pid + '.' + Math.random().toString(36).slice(2, 8) + '.tmp'
       await writeFile(tmp, JSON.stringify(payload), { mode: 0o600 })
       await rename(tmp, this.file)
       await chmod(this.file, 0o600).catch(() => {})
@@ -575,8 +836,9 @@ export class CodeIndexCache {
       const textTmp = tmp + '.txt'
       await writeFile(textTmp, renderCodeIndexText(payload.entries), { mode: 0o600 })
       await rename(textTmp, codeIndexTextFile())
-    } catch {
-      // 落盘失败不影响内存索引；下次照常重建。
+    } catch (error) {
+      // 落盘失败不影响内存索引，但必须可见（旧实现完全静默）。
+      warnIoFailure('code-index-cache', this.file, error)
     }
   }
 }

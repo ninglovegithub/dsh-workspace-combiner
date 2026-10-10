@@ -20,12 +20,17 @@ A [Cordis](https://github.com/cordiverse/cordis) dual-face plugin for DSH (DeepS
 Harness) that turns a set of repositories into a coordinated **multi-workspace joint
 development** context.
 
+The current plugin manifest targets the DSH `0.2.0-rc.2` seam APIs and declares a peer
+range (`>=0.2.0-rc.1 <0.3.0`) rather than exact versions, so later release candidates in
+the same line load without a republish. `pnpm smoke:dsh-compat` guards that claim. Host
+DSH services are not bundled into this plugin.
+
 The plugin registers a **Workspace Combiner** tab in the left sidebar. Each *workspace*
 bundles a primary directory (the "workspace anchor" — where docs and non-code assets
 live) plus an ordered list of *code-project* directories (for example a backend repo and
 a frontend repo). When you start a new session, the plugin injects the absolute paths of
 all active directories into the system prompt and syncs the writable ones into the
-[`@chaoset/sandbox-extra-roots`](https://github.com/winliyou/dsh-plugins) whitelist.
+[`dsh-write-protect`](https://github.com/azazo1/dsh-write-protect) whitelist.
 
 To keep that injected context from exploding, the plugin applies a **four-layer
 context-control** model:
@@ -66,6 +71,9 @@ Layers 1-4 ship today; see [Changelog](./CHANGELOG.md) · [中文](./CHANGELOG.z
   commands derived from real project scripts, and a scope-aware loading default.
 - **Three ways to add a directory** — select from native DSH workspaces, open the host
   directory picker, or paste an absolute path.
+- **Session-scoped on-demand context** — standards, commands, and feature indexes live under
+  `~/.dsh/dsh-workspace-combiner/sessions/<session-hash>/`, so concurrent sessions cannot overwrite one another and disposed sessions are cleaned automatically.
+- **Task context capsules** — task sessions keep only entrypoints, configuration, tests, current changes, matched endpoints, and a recommended reading order resident; the complete file tree becomes session-scoped on-demand context.
 - **Directory tri-state access** — `readwrite` (sandbox-writable), `readonly` (visible but
   not writable), `disabled` (excluded from the prompt). The primary directory is always
   `readwrite`.
@@ -81,6 +89,16 @@ Layers 1-4 ship today; see [Changelog](./CHANGELOG.md) · [中文](./CHANGELOG.z
   client call site as `file:line` across TS/JS/TSX/JSX/Vue and Java/Kotlin/Go/Python/Ruby/C#.
   Every row exposes an Exact / Normalized / Inferred / One-sided confidence badge; hover it
   to inspect sources, evidence, and index time.
+- **Symbol-level code skeletons** — reuse the same source scan to index functions, classes,
+  interfaces, types, enums, and common components together with compact declaration signatures.
+  Task capsules keep only matched skeletons resident; the complete list remains session-scoped
+  and on-demand, so the model can inspect parameters and type boundaries before reading a file.
+- **Minimal dependency neighborhood** — deterministically resolves local imports and keeps only
+  one-hop dependencies/dependents around task evidence resident. The complete graph remains
+  on-demand, preventing a single relevant file from triggering a whole-module read.
+- **Precise test mapping** — links source files to tests through direct imports or conservative
+  naming conventions. Task capsules recommend only relevant tests, while the complete map remains
+  on-demand so verification starts narrow before expanding to a full suite.
 - **Explainable endpoint correlation** — deterministic-first, normalized matching, heuristic
   fallback, and visible evidence. `/api/user/detail` and `/user/detail` can join after one
   optional `/api` or `/api/vN` normalization; Spring class and method routes are composed;
@@ -102,8 +120,8 @@ Layers 1-4 ship today; see [Changelog](./CHANGELOG.md) · [中文](./CHANGELOG.z
   tokens as explicitly referenced paths across all workspace roots (`@dir/`, `@file`,
   `@"path with spaces"`), pulling files into scope on demand.
 - **Sandbox sync** — read-write directories are pushed into
-  `sandbox-extra-roots` `extraWritableRoots` (hot reload with a file-write fallback); the bottom
-  legend shows how many directories are actually in the allowlist.
+  `dsh-write-protect` `writablePaths` (written to the desktop profile's `cordis.patch.yml`, applied
+  via live patch reload); the bottom legend shows how many directories are actually in the allowlist.
 - **Git status per directory** — each row shows its branch, amber with `*N` when there are
   uncommitted or untracked changes, grey when clean, plus `↑N` when ahead of the upstream.
   Directories that are not repositories show nothing.
@@ -146,7 +164,7 @@ dsh-workspace-combiner/
     ├── core/types.ts       # shared types (WorkspaceRef / Workspace / StoreShape / ...)
     ├── prompt.ts           # multi-workspace prompt + file-index rendering
     ├── store.ts            # host persistence (~/.dsh/dsh-workspace-combiner.json)
-    ├── sandbox-sync.ts     # sandbox-extra-roots writable-root sync
+    ├── sandbox-sync.ts     # dsh-write-protect writable-root sync
     ├── routes.ts           # /api/dsh-workspace-combiner routes (loopback-only)
     ├── host/
     │   ├── index.ts        # host entry: prompt section + session/created + routes
@@ -182,10 +200,9 @@ dsh-workspace-combiner/
        injects "# Multi-workspace joint development mode active" + directory list + file index
 ~~~
 
-On directory changes the host also calls `sandbox-extra-roots`
-`sandboxExtraRootsConfig.set({ extraWritableRoots })` for hot reload; if the remote is
-unavailable it falls back to an atomic write of
-`~/.dsh/plugins/sandbox-extra-roots/config.json`.
+On directory changes the host updates the `dsh-write-protect-policy` `writablePaths`
+in the desktop profile's `cordis.patch.yml`; DSH applies it via live patch reload, so no
+restart is needed (and no third-party private remote service is involved).
 
 ---
 
@@ -195,7 +212,7 @@ unavailable it falls back to an atomic write of
 
 ~~~bash
 # 0) dependency plugin (required)
-dsh plugin --profile desktop add @chaoset/sandbox-extra-roots
+dsh plugin --profile desktop add dsh-write-protect
 
 # 1) build lib/ (host + client)
 cd /path/to/dsh-workspace-combiner
@@ -298,7 +315,8 @@ workspace-combiner:
 3. **Read model** — reads are already unrestricted in the DSH sandbox; the tri-state
    access only gates *writes* (via `extraWritableRoots`) and *prompt inclusion*.
 4. **Dependencies** are declared in `package.json` `dsh.client.inject` and
-   `peerDependencies` (`@chaoset/sandbox-extra-roots`, DSH host services).
+   `dependencies`/`peerDependencies` (`yaml` runtime dep + DSH host services). Sandbox
+   writable roots are provided by `dsh-write-protect`, no longer by `@chaoset/sandbox-extra-roots`.
 5. **Aux routes** (loopback-only): `scan`, `file-index`, `git-status`, `context-stats`,
    `workspace-patch`, plus state / workspace CRUD routes.
 
@@ -315,7 +333,7 @@ pnpm watch         # watch rebuild
 
 - Host logs: `ctx.logger.warn(...)` on sync failures.
 - Persistence: `~/.dsh/dsh-workspace-combiner.json`.
-- Sandbox config: `~/.dsh/plugins/sandbox-extra-roots/config.json`.
+- Sandbox config: the `dsh-write-protect-policy` `writablePaths` in the desktop profile's `cordis.patch.yml`.
 
 ## License
 

@@ -5,24 +5,19 @@
  * @module dsh-workspace-combiner/client/panel/NewWorkspaceWizard
  */
 
-import { useEffect, useRef, useState, type ChangeEvent, type ReactElement } from 'react'
+import { useRef, useState, type ChangeEvent, type ReactElement } from 'react'
 import type { DetectedProject, LoadMode, WorkspaceMode, WorkspaceRef } from '../../core/types.ts'
 import { DEFAULT_WORKSPACE_NAME } from '../../invariant.ts'
 import { WorkspaceCombinerApi } from '../api.ts'
 import { tt } from '../locales.ts'
+import { Dialog } from './Dialog.tsx'
+import { groupKindOf, groupLabel } from './groups.ts'
 import { TypeBadge } from './typeBadge.tsx'
 
 interface NewWorkspaceWizardProps {
   pickDirectory: () => Promise<string | null>
   onClose: () => void
   onCreate: (name: string, basePath: string, directories: readonly WorkspaceRef[], mode: WorkspaceMode, loadMode: LoadMode) => void
-}
-
-function suggestedGroupLabel(project: DetectedProject): string {
-  if (project.suggestedGroup === 'backend') return tt('groupBackend')
-  if (project.suggestedGroup === 'frontend') return tt('groupFrontend')
-  if (project.suggestedGroup === 'reference') return tt('groupRef')
-  return tt('groupOther')
 }
 
 export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWorkspaceWizardProps): ReactElement {
@@ -39,14 +34,9 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
   const [mode, setMode] = useState<WorkspaceMode>('anchor')
   // 第二步支持多次添加：跨多次扫描按 root 去重，新识别到的项目自动勾选并追加到列表。
   const knownRootsRef = useRef<Set<string>>(new Set())
+  /** 扫描请求序号：过期响应直接丢弃（连续选多个文件夹时不会串台）。 */
+  const scanSeqRef = useRef(0)
   const [scanNote, setScanNote] = useState<{ added: number; dup: number } | null>(null)
-
-  // Esc 关闭弹窗。
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
 
   const pickBase = (): void => {
     void pickDirectory()
@@ -57,9 +47,11 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
   const runScan = (path: string): void => {
     const api = apiRef.current
     if (api === null) return
+    const seq = ++scanSeqRef.current
     setScanning(true)
     void api.scan(path)
       .then(list => {
+        if (seq !== scanSeqRef.current) return
         // 只追加此前没出现过的项目：重复扫描同一文件夹不会再产生重复条目。
         const fresh = list.filter(p => !knownRootsRef.current.has(p.root))
         for (const p of fresh) knownRootsRef.current.add(p.root)
@@ -73,8 +65,9 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
         }
         setScanNote({ added: fresh.length, dup: list.length - fresh.length })
       })
-      .catch(() => setScanNote(null))
-      .finally(() => setScanning(false))
+      .catch(() => { if (seq === scanSeqRef.current) setScanNote(null) })
+      // 只有最新一次扫描才有权把按钮恢复可用，否则先完成的那个会提前解锁。
+      .finally(() => { if (seq === scanSeqRef.current) setScanning(false) })
   }
 
   const pickScan = (): void => {
@@ -106,15 +99,13 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
   // 识别出的项目顺带带上自动分组、访问模式与真实脚本命令；创建后仍可逐项修改。
   const buildSecondaryRefs = (): WorkspaceRef[] => selected.map(p => ({
     id: p.root, name: p.name, path: p.root, projectType: p.type, evidence: p.evidence,
-    access: 'readwrite', group: suggestedGroupLabel(p),
+    access: 'readwrite', group: groupKindOf(p.suggestedGroup) ?? 'other',
     ...(p.commands === undefined ? {} : { commands: p.commands }),
     ...(p.monorepo === undefined ? {} : { monorepo: p.monorepo }),
   }))
 
   return (
-    <div className="wcb-overlay" onClick={onClose}>
-      <div className="wcb-modal wcb-modal-wide" role="dialog" aria-modal="true" aria-label={tt('wizardTitle')} onClick={(event) => event.stopPropagation()}>
-        <div className="wcb-modal-title">{tt('wizardTitle')}</div>
+    <Dialog title={tt('wizardTitle')} onClose={onClose} wide>
 
         <div className="wcb-steps">
           {[tt('wizardStep1'), tt('wizardStep2'), tt('wizardStep3')].map((label, i) => {
@@ -177,13 +168,13 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
                 <ul className="wcb-scan-list">
                   {projects.map(p => (
                     <li key={p.root} className="wcb-scan-item">
-                      <input type="checkbox" checked={checked.has(p.root)} onChange={() => toggle(p.root)} />
+                      <input type="checkbox" checked={checked.has(p.root)} aria-label={p.name} onChange={() => toggle(p.root)} />
                       <div className="wcb-scan-info">
                         <div className="wcb-scan-name">{p.name}</div>
                         <div className="wcb-scan-path" title={p.root}>{p.root}</div>
                         <div className="wcb-scan-defaults">
                           {p.monorepo !== undefined ? <span>{tt('wizardMonorepo', { kind: p.monorepo.kind, n: p.monorepo.packages.length })}</span> : null}
-                          <span>{tt('wizardAutoGroup', { group: suggestedGroupLabel(p) })}</span>
+                          <span>{tt('wizardAutoGroup', { group: groupLabel(groupKindOf(p.suggestedGroup) ?? 'other') })}</span>
                           <span>{p.commands === undefined ? tt('wizardNoCommandDefault') : tt('wizardCommandDefaults', { n: Object.keys(p.commands).length })}</span>
                         </div>
                       </div>
@@ -216,7 +207,6 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
             <button type="button" className="wcb-btn-primary" aria-label={tt('wizardCreate')} disabled={basePath === ''} onClick={() => onCreate(finalName, basePath, buildSecondaryRefs(), mode, suggestedLoadMode)}>{tt('wizardCreate')}</button>
           )}
         </div>
-      </div>
-    </div>
+    </Dialog>
   )
 }

@@ -3,8 +3,9 @@
  * @module dsh-workspace-combiner/client/panel/PreviewModal
  */
 
-import { useEffect, type ReactElement } from 'react'
+import type { ReactElement } from 'react'
 import { tt } from '../locales.ts'
+import { Dialog } from './Dialog.tsx'
 
 interface PreviewModalProps {
   text: string
@@ -14,16 +15,8 @@ interface PreviewModalProps {
 }
 
 export function PreviewModal({ text, loading, onCopy, onClose }: PreviewModalProps): ReactElement {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   return (
-    <div className="wcb-overlay" onClick={onClose}>
-      <div className="wcb-modal wcb-modal-wide wcb-preview-modal" role="dialog" aria-modal="true" aria-label={tt('previewTitle')} onClick={(event) => event.stopPropagation()}>
-        <div className="wcb-modal-title">{tt('previewTitle')}</div>
+    <Dialog title={tt('previewTitle')} onClose={onClose} wide className="wcb-preview-modal">
         <div className="wcb-modal-body wcb-preview-body">
           {text === '' ? (
             <div className="wcb-hint">{tt('previewEmpty')}</div>
@@ -35,11 +28,10 @@ export function PreviewModal({ text, loading, onCopy, onClose }: PreviewModalPro
           )}
         </div>
         <div className="wcb-modal-actions">
-          <span className="wcb-hint" style={{ marginRight: 'auto' }}>{text === '' ? '' : String(text.length) + ' chars'}</span>
+          <span className="wcb-hint" style={{ marginRight: 'auto' }}>{text === '' ? '' : tt('previewChars', { n: text.length })}</span>
           <button type="button" className="wcb-btn-plain" aria-label={tt('cancel')} onClick={onClose}>{tt('cancel')}</button>
           <button type="button" className="wcb-btn-primary" aria-label={tt('previewCopy')} disabled={text === ''} onClick={onCopy}>{tt('previewCopy')}</button>
         </div>
-      </div>
-    </div>
+    </Dialog>
   )
 }

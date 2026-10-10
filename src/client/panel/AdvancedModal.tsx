@@ -4,9 +4,11 @@
  */
 
 import { useState, useEffect, type ChangeEvent, type ReactElement } from 'react'
-import type { LoadMode, Workspace, WorkspaceMode } from '../../core/types.ts'
+import type { LoadMode, Workspace, WorkspaceMode, WorkspaceSnapshot } from '../../core/types.ts'
 import type { WorkspaceCombinerState } from './controller.ts'
 import { tt } from '../locales.ts'
+import { ConfirmModal } from './ConfirmModal.tsx'
+import { Dialog } from './Dialog.tsx'
 
 interface AdvancedModalProps {
   state: WorkspaceCombinerState
@@ -19,6 +21,9 @@ export function AdvancedModal({ state, currentWs, onClose }: AdvancedModalProps)
   const [draftMode, setDraftMode] = useState<WorkspaceMode>(currentWs?.mode ?? 'anchor')
   const [draftLoad, setDraftLoad] = useState<LoadMode>(currentWs?.loadMode ?? 'summary')
   const dirty = draftMode !== (currentWs?.mode ?? 'anchor') || draftLoad !== (currentWs?.loadMode ?? 'summary')
+  // 恢复快照会整体替换目录配置且不可撤销；删除快照同样不可撤销：都要二次确认。
+  const [restoreTarget, setRestoreTarget] = useState<WorkspaceSnapshot | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<WorkspaceSnapshot | null>(null)
 
   // 打开弹窗时工作空间可能还没加载完，或期间切换了工作空间：把草稿对齐到当前值（按 id 变化触发，避免覆盖正在编辑的草稿）。
   useEffect(() => {
@@ -26,16 +31,9 @@ export function AdvancedModal({ state, currentWs, onClose }: AdvancedModalProps)
     setDraftLoad(currentWs?.loadMode ?? 'summary')
   }, [currentWs?.id])
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   return (
-    <div className="wcb-overlay" onClick={onClose}>
-      <div className="wcb-modal wcb-modal-wide wcb-adv-modal" role="dialog" aria-modal="true" aria-label={tt('advancedTitle')} onClick={(event) => event.stopPropagation()}>
-        <div className="wcb-modal-title">{tt('advancedTitle')}</div>
+    <>
+    <Dialog title={tt('advancedTitle')} onClose={onClose} wide className="wcb-adv-modal">
         <div className="wcb-modal-body wcb-adv-body">
           <div>
             <div className="wcb-label">{tt('wsModeLabel')}</div>
@@ -65,8 +63,8 @@ export function AdvancedModal({ state, currentWs, onClose }: AdvancedModalProps)
                   <div key={s.id} className="wcb-snap-item">
                     <span className="wcb-snap-name" title={s.name}>{s.name}</span>
                     <span className="wcb-snap-meta">{tt('snapshotDirCount', { n: s.directories.length })}</span>
-                    <button type="button" className="wcb-snap-restore" aria-label={tt('snapshotRestore')} onClick={() => state.restoreSnapshot(s.id)}>{tt('snapshotRestore')}</button>
-                    <button type="button" className="wcb-iconbtn wcb-iconbtn-danger" title={tt('snapshotDelete')} aria-label={tt('snapshotDelete')} onClick={() => state.deleteSnapshot(s.id)}>✕</button>
+                    <button type="button" className="wcb-snap-restore" aria-label={tt('snapshotRestore')} onClick={() => setRestoreTarget(s)}>{tt('snapshotRestore')}</button>
+                    <button type="button" className="wcb-iconbtn wcb-iconbtn-danger" title={tt('snapshotDelete')} aria-label={tt('snapshotDelete')} onClick={() => setDeleteTarget(s)}>✕</button>
                   </div>
                 ))}
               </div>
@@ -99,7 +97,26 @@ export function AdvancedModal({ state, currentWs, onClose }: AdvancedModalProps)
           <button type="button" className="wcb-btn-plain" aria-label={tt('cancel')} onClick={onClose}>{tt('cancel')}</button>
           <button type="button" className="wcb-btn" aria-label={tt('advSave')} disabled={!dirty} onClick={() => { state.saveAdvanced(draftMode, draftLoad); onClose() }}>{tt('advSave')}</button>
         </div>
-      </div>
-    </div>
+    </Dialog>
+    {restoreTarget !== null ? (
+      <ConfirmModal
+        title={tt('snapshotRestore')}
+        message={tt('snapshotRestoreConfirm', { name: restoreTarget.name })}
+        confirmLabel={tt('snapshotRestore')}
+        onConfirm={() => { state.restoreSnapshot(restoreTarget.id); setRestoreTarget(null) }}
+        onClose={() => setRestoreTarget(null)}
+      />
+    ) : null}
+    {deleteTarget !== null ? (
+      <ConfirmModal
+        title={tt('snapshotDelete')}
+        message={tt('snapshotDeleteConfirm', { name: deleteTarget.name })}
+        confirmLabel={tt('snapshotDelete')}
+        danger
+        onConfirm={() => { state.deleteSnapshot(deleteTarget.id); setDeleteTarget(null) }}
+        onClose={() => setDeleteTarget(null)}
+      />
+    ) : null}
+    </>
   )
 }

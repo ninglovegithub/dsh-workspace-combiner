@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { WorkspaceCombinerApi } from '../api.ts'
+import { WorkspaceCombinerApi, type MutationResult } from '../api.ts'
 import type { CodeIndexEntry, ContextPreset, ContextStats, DetectedProject, DiagnosticAction, DiagnosticReport, DirectoryAccess, DirectoryCommands, EndpointImpact, GitStatus, LoadMode, TokenUsageReport, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceSnapshot, WorkspaceStandards } from '../../core/types.ts'
 import { emptyLibrary, resolveStandardGroups, type StandardGroup, type StandardsLibrary } from '../../core/standards.ts'
 import type { FileTreeNode } from '../../core/fileTree.ts'
@@ -14,7 +14,8 @@ import type { SessionTask } from '../../core/task.ts'
 import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_STANDARDS_BUDGET, DEFAULT_TOKEN_BUDGET } from '../../invariant.ts'
 import { renderMultiWorkspacePrompt } from '../../prompt.ts'
 import { tt } from '../locales.ts'
-import { checkWorkspaceNameDuplicate, sanitizeWorkspaceName } from './naming.ts'
+import { checkWorkspaceNameDuplicate, normalizeDirectoryPath, pathKey, sanitizeWorkspaceName } from './naming.ts'
+import { groupKindOf } from './groups.ts'
 import { contextPresetConfig, resolveWorkspaceContext } from '../../core/contextPreset.ts'
 
 /** token 预算默认上限（与宿主机注入 prompt 使用同一常量）。 */
@@ -126,8 +127,8 @@ export interface WorkspaceCombinerState {
   sessionsByWorkspace: Readonly<Record<string, readonly string[]>>
   /** 展开会话列表的工作空间 id（null = 收起）。 */
   sessionsOpenId: string | null
-  /** 正在刷新配置的会话 id（按钮禁用用）。 */
-  refreshingSessionId: string | null
+  /** 正在刷新配置的会话 id 集合（按钮禁用用；并发刷新时互不误清）。 */
+  refreshingSessionIds: ReadonlySet<string>
   setManualPath(path: string): void
   setSnapshotName(name: string): void
   setSearch(value: string): void
@@ -177,6 +178,8 @@ export interface WorkspaceCombinerState {
   refreshEndpointImpact(): void
   /** 设置某目录的常用命令（空对象则删除该字段）。 */
   setDirectoryCommands(path: string, commands: DirectoryCommands | undefined): void
+  /** 立刻落盘待写的目录变更（备注/命令防抖用；失焦、回车、切换工作空间前调用）。 */
+  flushDirectoryWrites(): void
   saveSnapshot(): void
   restoreSnapshot(snapshotId: string): void
   deleteSnapshot(snapshotId: string): void
@@ -196,10 +199,11 @@ function basename(path: string): string {
   return seg === undefined || seg === '' ? trimmed : seg
 }
 
+/**
+ * 识别结果 -> 目录项。分组写**稳定枚举**（不是本地化文案）：分组是持久化数据，
+ * 文案会随语言变化，用文案当数据会让切语言后的颜色/下拉/就绪度判断全部失配。
+ */
 function detectedProjectRef(project: DetectedProject): WorkspaceRef {
-  const group = project.suggestedGroup === 'backend' ? tt('groupBackend')
-    : project.suggestedGroup === 'frontend' ? tt('groupFrontend')
-      : project.suggestedGroup === 'reference' ? tt('groupRef') : tt('groupOther')
   return {
     id: project.root,
     name: project.name,
@@ -207,7 +211,7 @@ function detectedProjectRef(project: DetectedProject): WorkspaceRef {
     projectType: project.type,
     evidence: project.evidence,
     access: 'readwrite',
-    group,
+    group: groupKindOf(project.suggestedGroup) ?? 'other',
     ...(project.commands === undefined ? {} : { commands: project.commands }),
   }
 }
@@ -254,20 +258,54 @@ export function useWorkspaceCombiner(
   const [budgetOverride, setBudgetOverride] = useState<number | null>(null)
   const [sessionsByWorkspace, setSessionsByWorkspace] = useState<Readonly<Record<string, readonly string[]>>>({})
   const [sessionsOpenId, setSessionsOpenId] = useState<string | null>(null)
-  const [refreshingSessionId, setRefreshingSessionId] = useState<string | null>(null)
+  const [refreshingSessionIds, setRefreshingSessionIds] = useState<ReadonlySet<string>>(new Set())
   const currentWsIdRef = useRef('')
   currentWsIdRef.current = currentWorkspaceId
   const sessionsOpenIdRef = useRef<string | null>(null)
   sessionsOpenIdRef.current = sessionsOpenId
+  /** 工作空间切换序号：旧响应不得覆盖新选择。 */
+  const switchSeq = useRef(0)
   const toastSeq = useRef(0)
+  /** 未触发的 toast 定时器（卸载时统一清理）。 */
+  const toastTimers = useRef<Set<number>>(new Set())
+  /** 诊断修复后的延迟刷新定时器（卸载/重入时清理）。 */
+  const diagRefreshTimer = useRef<number | null>(null)
+  /** 组件是否仍挂载：防抖/延迟任务不该在卸载后继续改状态。 */
+  const mountedRef = useRef(true)
 
   const showToast = useCallback((text: string, kind: 'ok' | 'error' = 'ok'): void => {
     const id = ++toastSeq.current
     setToasts(prev => [...prev, { id, text, kind }].slice(-3))
-    // toast 自动 3s 消失（可堆叠）。
-    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000)
+    // toast 自动 3s 消失（可堆叠）；定时器登记，卸载时统一清理。
+    const timer = window.setTimeout(() => {
+      toastTimers.current.delete(timer)
+      if (!mountedRef.current) return
+      setToasts(prev => prev.filter(t => t.id !== id))
+    }, 3000)
+    toastTimers.current.add(timer)
   }, [])
   const dismissToast = useCallback((id: number): void => setToasts(prev => prev.filter(t => t.id !== id)), [])
+
+  /** 宿主写了沙盒白名单但没落上（sandboxSynced === false）时明确提示。 */
+  const notifySandbox = useCallback((result: MutationResult | undefined): void => {
+    if (result?.sandboxSynced === false) showToast(tt('sandboxSyncFailed'), 'error')
+  }, [showToast])
+
+  // 卸载清理：toast 定时器、诊断延迟刷新、防抖中的目录写入（先落盘再退出）。
+  useEffect(() => () => {
+    mountedRef.current = false
+    for (const timer of toastTimers.current) window.clearTimeout(timer)
+    toastTimers.current.clear()
+    if (diagRefreshTimer.current !== null) {
+      window.clearTimeout(diagRefreshTimer.current)
+      diagRefreshTimer.current = null
+    }
+    // 让在途请求的响应全部作废，避免卸载后再改状态。
+    switchSeq.current++
+    dirWriteSeq.current++
+    gitStatusSeq.current++
+    impactSeq.current++
+  }, [])
 
   // 拉取上下文统计（各目录文件数 + 估算 token）。
   const refreshContextStats = useCallback((): void => {
@@ -302,7 +340,11 @@ export function useWorkspaceCombiner(
     void api.runDiagnosticAction(action)
       .then(() => {
         showToast(tt('diagnosticsActionDone'))
-        window.setTimeout(refreshDiagnostics, action === 'refresh-sessions' ? 350 : 0)
+        if (diagRefreshTimer.current !== null) window.clearTimeout(diagRefreshTimer.current)
+        diagRefreshTimer.current = window.setTimeout(() => {
+          diagRefreshTimer.current = null
+          if (mountedRef.current) refreshDiagnostics()
+        }, action === 'refresh-sessions' ? 350 : 0)
       })
       .catch(error => showToast(tt('diagnosticsActionFailed', { error: errText(error) }), 'error'))
       .finally(() => setDiagnosticAction(null))
@@ -333,6 +375,11 @@ export function useWorkspaceCombiner(
   // 副作用读取最新目录用 ref，避免把 dirs 身份纳入依赖（改只读/分组/备注时不触发全量轮询）。
   const dirsRef = useRef<readonly WorkspaceRef[]>(dirs)
   dirsRef.current = dirs
+  // 目录列表写入序号：旧请求失败时不能回滚掉更新的写入。
+  const dirWriteSeq = useRef(0)
+  // 备注/命令打字走 500ms 防抖合并成一次 PUT；结构变化（增删/排序/访问模式）立即落盘。
+  const dirWriteTimer = useRef<number | null>(null)
+  const pendingDirWrite = useRef<{ id: string; dirs: readonly WorkspaceRef[]; previous: readonly WorkspaceRef[] } | null>(null)
   const snapshots = useMemo<readonly WorkspaceSnapshot[]>(
     () => workspaces.find(w => w.id === currentWorkspaceId)?.snapshots ?? [],
     [workspaces, currentWorkspaceId],
@@ -445,30 +492,117 @@ export function useWorkspaceCombiner(
       .then(list => { if (!cancelled) setCodeEntries(list) })
       .catch(() => { if (!cancelled) setCodeEntries([]) })
     return () => { cancelled = true }
-  }, [contextStatsKey, codeIndexEnabled, codeIndexSummary])
+    // currentWorkspaceId 直接入依赖：两个工作空间目录/预算完全相同也不能复用旧索引。
+  }, [contextStatsKey, codeIndexEnabled, codeIndexSummary, currentWorkspaceId])
 
-  // 覆盖当前工作空间目录并持久化 + 联动 DSH 工作区 + 沙盒。
-  const applyDirs = useCallback((next: readonly WorkspaceRef[]): void => {
-    const id = currentWsIdRef.current
-    setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, directories: [...next], updatedAt: Date.now() } : w))
+  // ---------------- 目录写入（立即 / 防抖 + 失败回滚） ----------------
+  /**
+   * 真正落盘一次目录列表。失败时回滚到 previous——乐观更新不回滚会让界面与
+   * 宿主持久化长期不一致（下次 getState 才无声回退）。
+   */
+  const commitDirectoryWrite = useCallback((
+    id: string,
+    next: readonly WorkspaceRef[],
+    previous: readonly WorkspaceRef[],
+  ): void => {
     const api = apiRef.current
-    if (api !== null) {
-      void api.setWorkspaceDirectories(id, next)
-        .then(() => refreshContextStats())
-        .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+    if (api === null || id === '') return
+    const seq = ++dirWriteSeq.current
+    void api.setWorkspaceDirectories(id, next)
+      .then(result => {
+        notifySandbox(result)
+        refreshContextStats()
+      })
+      .catch(error => {
+        // 已经有更新的写入时不要回滚，否则会用更旧的数据覆盖新状态。
+        if (seq !== dirWriteSeq.current || !mountedRef.current) {
+          showToast(tt('saveFailed', { error: errText(error) }), 'error')
+          return
+        }
+        const restored = [...previous]
+        dirsRef.current = restored
+        setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, directories: restored, updatedAt: Date.now() } : w))
+        showToast(tt('saveFailed', { error: errText(error) }), 'error')
+      })
+  }, [notifySandbox, refreshContextStats, showToast])
+
+  /** 立刻发出待写的目录变更（失焦/回车/切换工作空间/卸载前调用）。 */
+  const flushDirectoryWrites = useCallback((): void => {
+    if (dirWriteTimer.current !== null) {
+      window.clearTimeout(dirWriteTimer.current)
+      dirWriteTimer.current = null
     }
-    if (next[0]?.path !== undefined && next[0].path !== '') void registerDshWorkspace(next[0].path)
-  }, [showToast, registerDshWorkspace, refreshContextStats])
+    const pending = pendingDirWrite.current
+    if (pending === null) return
+    pendingDirWrite.current = null
+    commitDirectoryWrite(pending.id, pending.dirs, pending.previous)
+  }, [commitDirectoryWrite])
+
+  /** 防抖排队一次目录写入（备注/命令打字；500ms 内的连续按键合并成一次 PUT）。 */
+  const scheduleDirectoryWrite = useCallback((id: string, next: readonly WorkspaceRef[], previous: readonly WorkspaceRef[]): void => {    const pending = pendingDirWrite.current
+    // 换了工作空间：先把上一个的写入落盘，别让它被后来的 payload 覆盖丢失。
+    if (pending !== null && pending.id !== id) flushDirectoryWrites()
+    const base = pendingDirWrite.current
+    // previous 只在防抖窗口的第一次记录：回滚要回到窗口开始前的状态。
+    pendingDirWrite.current = base === null ? { id, dirs: next, previous } : { id, dirs: next, previous: base.previous }
+    if (dirWriteTimer.current !== null) window.clearTimeout(dirWriteTimer.current)
+    dirWriteTimer.current = window.setTimeout(() => {
+      dirWriteTimer.current = null
+      if (mountedRef.current) flushDirectoryWrites()
+    }, 500)
+  }, [flushDirectoryWrites])
+
+  /**
+   * 覆盖当前工作空间目录并持久化 + 联动 DSH 工作区 + 沙盒。
+   * @param next - 新的目录数组。
+   * @param immediate - true = 立即落盘（结构变化）；false = 500ms 防抖合并（打字类编辑）。
+   */
+  const applyDirs = useCallback((next: readonly WorkspaceRef[], immediate = true): void => {
+    const id = currentWsIdRef.current
+    const previous = dirsRef.current
+    dirsRef.current = [...next]
+    setWorkspaces(prev => prev.map(w => w.id === id ? { ...w, directories: [...next], updatedAt: Date.now() } : w))
+    if (immediate) {
+      // 立即写入带上的是最新全量数组，同工作空间的待写可以直接丢弃。
+      if (pendingDirWrite.current !== null && pendingDirWrite.current.id === id) {
+        if (dirWriteTimer.current !== null) {
+          window.clearTimeout(dirWriteTimer.current)
+          dirWriteTimer.current = null
+        }
+        pendingDirWrite.current = null
+      }
+      commitDirectoryWrite(id, next, previous)
+    } else {
+      scheduleDirectoryWrite(id, next, previous)
+    }
+    // 只有主项目真的换了才重新注册左侧工作区列表（打备注不必重复注册）。
+    if (next[0]?.path !== undefined && next[0].path !== '' && next[0].path !== previous[0]?.path) {
+      void registerDshWorkspace(next[0].path)
+    }
+  }, [commitDirectoryWrite, scheduleDirectoryWrite, registerDshWorkspace])
+
+  // 卸载前把待写的目录变更落盘（payload 自带 id，不会写错工作空间）。
+  useEffect(() => () => { flushDirectoryWrites() }, [flushDirectoryWrites])
 
   const switchWorkspace = useCallback((id: string): void => {
     const api = apiRef.current
     if (api === null) return
+    // 切换前把待写的目录变更落盘（payload 自带 id，跨工作空间不会写错目标）。
+    flushDirectoryWrites()
+    const seq = ++switchSeq.current
     setSelectedDirs(new Set())
     setSessionsOpenId(null)
     void api.switchWorkspace(id)
-      .then(() => setCurrentWorkspaceId(id))
-      .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
-  }, [showToast])
+      .then(result => {
+        // 旧响应不能覆盖新选择：只有最后一次点击才允许改 currentWorkspaceId。
+        if (seq !== switchSeq.current) return
+        setCurrentWorkspaceId(id)
+        notifySandbox(result)
+      })
+      .catch(error => {
+        if (seq === switchSeq.current) showToast(tt('saveFailed', { error: errText(error) }), 'error')
+      })
+  }, [flushDirectoryWrites, notifySandbox, showToast])
 
   // 会话列表：某工作空间在本进程内加载过的会话（宿主内存读，展开时才拉取）。
   const reloadWorkspaceSessions = useCallback((id: string): void => {
@@ -494,7 +628,9 @@ export function useWorkspaceCombiner(
   const refreshSession = useCallback((sessionId: string): void => {
     const api = apiRef.current
     if (api === null) return
-    setRefreshingSessionId(sessionId)
+    // 用集合而不是单个 id：并发刷新两个会话时，先返回的那个不该把另一个的
+    // 「刷新中」状态清掉（按钮会提前恢复可点）。
+    setRefreshingSessionIds(prev => { const next = new Set(prev); next.add(sessionId); return next })
     void api.refreshSession(sessionId)
       .then(() => {
         showToast(tt('sessionRefreshed'))
@@ -502,7 +638,7 @@ export function useWorkspaceCombiner(
         if (open !== null) reloadWorkspaceSessions(open)
       })
       .catch(error => showToast(tt('sessionRefreshFailed', { error: errText(error) }), 'error'))
-      .finally(() => setRefreshingSessionId(null))
+      .finally(() => setRefreshingSessionIds(prev => { const next = new Set(prev); next.delete(sessionId); return next }))
   }, [showToast, reloadWorkspaceSessions])
 
   // 新建工作空间：宿主在 basePath 下创建同名文件夹作为主目录，其余目录作为代码项目。
@@ -516,14 +652,15 @@ export function useWorkspaceCombiner(
     const api = apiRef.current
     if (api === null) return
     void api.createWorkspace(finalName, basePath, directories, mode, loadMode)
-      .then(({ workspace, currentWorkspaceId: curId }) => {
+      .then(({ workspace, currentWorkspaceId: curId, sandboxSynced }) => {
         setWorkspaces(prev => [...prev, workspace])
         setCurrentWorkspaceId(curId)
         if (workspace.directories[0]?.path !== undefined) void registerDshWorkspace(workspace.directories[0].path)
         showToast(tt('wsCreatedNamed', { name: finalName }))
+        notifySandbox({ sandboxSynced })
       })
       .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
-  }, [workspaces, registerDshWorkspace, showToast])
+  }, [workspaces, notifySandbox, registerDshWorkspace, showToast])
 
   const renameWorkspace = useCallback((id: string, name: string): void => {
     const base = sanitizeWorkspaceName(name)
@@ -543,46 +680,59 @@ export function useWorkspaceCombiner(
     const api = apiRef.current
     if (api === null) return
     void api.deleteWorkspace(id)
-      .then(({ currentWorkspaceId: nextId }) => {
+      .then(({ currentWorkspaceId: nextId, sandboxSynced }) => {
         setWorkspaces(prev => prev.filter(w => w.id !== id))
         setCurrentWorkspaceId(nextId)
+        setSessionsOpenId(prev => prev === id ? null : prev)
         showToast(tt('wsDeleted'))
+        notifySandbox({ sandboxSynced })
       })
       .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
-  }, [showToast])
+  }, [notifySandbox, showToast])
 
   const addDirectory = useCallback((path: string): void => {
-    const trimmed = path.trim()
+    const trimmed = normalizeDirectoryPath(path)
     if (trimmed === '') {
       showToast(tt('pathRequired'), 'error')
       return
     }
-    if (dirsRef.current.some(d => d.path === trimmed)) {
+    // 查重按比较键（去尾分隔符/折叠分隔符/Windows 大小写不敏感），
+    // 否则 `/a/b` 与 `/a/b/` 会被当成两个目录加两次。
+    const key = pathKey(trimmed)
+    if (dirsRef.current.some(d => pathKey(d.path) === key)) {
       showToast(tt('alreadyAdded'), 'error')
       return
     }
-    const fallback = (): void => {
+    const append = (directory: WorkspaceRef): void => {
       const current = dirsRef.current
-      if (current.some(directory => directory.path === trimmed)) return
-      applyDirs([...current, { id: trimmed, name: basename(trimmed), path: trimmed, access: 'readwrite', group: tt('groupOther') }])
+      if (current.some(d => pathKey(d.path) === key)) return
+      applyDirs([...current, directory])
+    }
+    // 扫描失败（目录不可读/不是项目）时按普通目录加入，但仍需存在性校验通过。
+    const fallback = (): void => {
+      append({ id: trimmed, name: basename(trimmed), path: trimmed, access: 'readwrite', group: 'other' })
     }
     const api = apiRef.current
-    if (api === null) {
-      fallback()
-      return
-    }
-    void api.scan(trimmed)
-      .then(projects => {
-        const detected = projects.find(project => project.root === trimmed)
-        if (detected === undefined) {
-          fallback()
+    if (api === null) return
+    // 先确认目录真实存在（避免把拼错的路径静默写进配置与沙盒白名单），再识别项目类型。
+    void api.stat(trimmed)
+      .then(info => {
+        if (!info.exists || !info.isDirectory) {
+          showToast(tt('dirInvalid', { path: trimmed }), 'error')
           return
         }
-        const current = dirsRef.current
-        if (current.some(directory => directory.path === trimmed)) return
-        applyDirs([...current, detectedProjectRef(detected)])
+        return api.scan(trimmed)
+          .then(projects => {
+            const detected = projects.find(project => project.root === trimmed)
+            if (detected === undefined) {
+              fallback()
+              return
+            }
+            append(detectedProjectRef(detected))
+          })
+          .catch(() => { fallback() })
       })
-      .catch(fallback)
+      .catch(error => showToast(tt('dirCheckFailed', { error: errText(error) }), 'error'))
   }, [applyDirs, showToast])
 
   const pickAndAddDirectory = useCallback((): void => {
@@ -592,41 +742,41 @@ export function useWorkspaceCombiner(
   }, [pickDirectory, addDirectory, showToast])
 
   const removeDirectory = useCallback((path: string): void => {
-    applyDirs(dirs.filter(d => d.path !== path))
+    applyDirs(dirsRef.current.filter(d => d.path !== path))
     setSelectedDirs(prev => { const next = new Set(prev); next.delete(path); return next })
-  }, [dirs, applyDirs])
+  }, [applyDirs])
 
   const moveDirectory = useCallback((fromIndex: number, toIndex: number): void => {
     if (fromIndex === toIndex) return
-    const next = [...dirs]
+    const next = [...dirsRef.current]
     const [moved] = next.splice(fromIndex, 1)
     if (moved === undefined) return
     next.splice(toIndex, 0, moved)
     applyDirs(next)
-  }, [dirs, applyDirs])
+  }, [applyDirs])
 
   // 切换目录访问模式（读写 / 只读 / 禁用）；主项目（第 0 项）固定读写，不允许改。
   const setDirectoryAccess = useCallback((path: string, access: DirectoryAccess): void => {
-    const idx = dirs.findIndex(d => d.path === path)
+    const idx = dirsRef.current.findIndex(d => d.path === path)
     if (idx <= 0) return
-    applyDirs(dirs.map((d, i) => i === idx ? { ...d, access } : d))
-  }, [dirs, applyDirs])
+    applyDirs(dirsRef.current.map((d, i) => i === idx ? { ...d, access } : d))
+  }, [applyDirs])
 
-  // 设置目录分组标签（prompt 内按组渲染）。
+  // 设置目录分组（存稳定枚举，渲染时才映射成当前语言文案）。
   const setDirectoryGroup = useCallback((path: string, group: string): void => {
-    const idx = dirs.findIndex(d => d.path === path)
+    const idx = dirsRef.current.findIndex(d => d.path === path)
     if (idx <= 0) return
-    const g = group.trim()
-    applyDirs(dirs.map((d, i) => {
+    const kind = groupKindOf(group)
+    applyDirs(dirsRef.current.map((d, i) => {
       if (i !== idx) return d
       // 展开空对象会保留旧 group，导致单目录无法从下拉菜单清除分组。
-      if (g === '') {
+      if (kind === undefined) {
         const { group: _group, ...withoutGroup } = d
         return withoutGroup
       }
-      return { ...d, group: g }
+      return { ...d, group: kind }
     }))
-  }, [dirs, applyDirs])
+  }, [applyDirs])
 
   // ---------------- 目录多选批量 ----------------
   const toggleDirSelected = useCallback((path: string): void => {
@@ -642,25 +792,33 @@ export function useWorkspaceCombiner(
   const bulkSetAccess = useCallback((access: DirectoryAccess): void => {
     const n = selectedDirs.size
     if (n === 0) return
-    applyDirs(dirs.map((d, i) => i > 0 && selectedDirs.has(d.path) ? { ...d, access } : d))
+    applyDirs(dirsRef.current.map((d, i) => i > 0 && selectedDirs.has(d.path) ? { ...d, access } : d))
     showToast(tt('bulkApplied', { n }))
-  }, [dirs, selectedDirs, applyDirs, showToast])
+  }, [selectedDirs, applyDirs, showToast])
 
   const bulkSetGroup = useCallback((group: string): void => {
     const n = selectedDirs.size
     if (n === 0) return
-    const g = group.trim()
-    applyDirs(dirs.map((d, i) => i > 0 && selectedDirs.has(d.path) ? { ...d, ...(g === '' ? { group: undefined } : { group: g }) } : d))
+    const kind = groupKindOf(group)
+    applyDirs(dirsRef.current.map((d, i) => {
+      if (i === 0 || !selectedDirs.has(d.path)) return d
+      // 与单目录路径保持一致：清空分组要删键，而不是留一个 group: undefined。
+      if (kind === undefined) {
+        const { group: _group, ...withoutGroup } = d
+        return withoutGroup
+      }
+      return { ...d, group: kind }
+    }))
     showToast(tt('bulkApplied', { n }))
-  }, [dirs, selectedDirs, applyDirs, showToast])
+  }, [selectedDirs, applyDirs, showToast])
 
   const bulkRemove = useCallback((): void => {
     const n = selectedDirs.size
     if (n === 0) return
-    applyDirs(dirs.filter((d, i) => i === 0 || !selectedDirs.has(d.path)))
+    applyDirs(dirsRef.current.filter((d, i) => i === 0 || !selectedDirs.has(d.path)))
     setSelectedDirs(new Set())
     showToast(tt('bulkApplied', { n }))
-  }, [dirs, selectedDirs, applyDirs, showToast])
+  }, [selectedDirs, applyDirs, showToast])
 
   // 切换工作空间模式（文档锚点 / 传统单项目）。
   const setWorkspaceMode = useCallback((mode: WorkspaceMode): void => {
@@ -778,22 +936,30 @@ export function useWorkspaceCombiner(
     if (name === '') { showToast(tt('nameRequired'), 'error'); return }
     if (api === null || id === '') return
     void api.workspaceSnapshot(id, 'save', { name })
-      .then(async () => {
+      .then(async result => {
+        notifySandbox(result)
         const state = await api.getState()
         setWorkspaces(state.workspaces)
         setSnapshotName('')
         showToast(tt('snapshotSaved'))
       })
       .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
-  }, [snapshotName, showToast])
+  }, [notifySandbox, snapshotName, showToast])
 
   const restoreSnapshot = useCallback((snapshotId: string): void => {
     const id = currentWsIdRef.current
     const api = apiRef.current
     if (api === null || id === '') return
     void api.workspaceSnapshot(id, 'restore', { snapshotId })
-      .then(async () => {
+      .then(async result => {
+        notifySandbox(result)
         const state = await api.getState()
+        // 快照恢复会整体替换目录数组：丢弃防抖中的旧写入，免得随后把它覆盖回去。
+        if (dirWriteTimer.current !== null) {
+          window.clearTimeout(dirWriteTimer.current)
+          dirWriteTimer.current = null
+        }
+        pendingDirWrite.current = null
         setWorkspaces(state.workspaces)
         setCurrentWorkspaceId(state.currentWorkspaceId)
         const primary = state.workspaces.find(w => w.id === id)?.directories[0]?.path
@@ -801,50 +967,55 @@ export function useWorkspaceCombiner(
         showToast(tt('snapshotRestored'))
       })
       .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
-  }, [registerDshWorkspace, showToast])
+  }, [notifySandbox, registerDshWorkspace, showToast])
 
   const deleteSnapshot = useCallback((snapshotId: string): void => {
     const id = currentWsIdRef.current
     const api = apiRef.current
     if (api === null || id === '') return
     void api.workspaceSnapshot(id, 'delete', { snapshotId })
-      .then(async () => {
+      .then(async result => {
+        notifySandbox(result)
         const state = await api.getState()
         setWorkspaces(state.workspaces)
         showToast(tt('snapshotDeleted'))
       })
       .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
-  }, [showToast])
+  }, [notifySandbox, showToast])
 
   // 目录路径签名：目录集合变化时触发 git / 失效 / 预览的重新拉取。
   const dirsKey = useMemo(() => dirs.map(d => d.path).join('\n'), [dirs])
 
   // 设置目录常用命令（三个字段全空则删除该字段，避免注入空区块）。
+  // 输入框逐字触发：本地状态立即更新、落盘走 500ms 防抖（宿主每次都会重算沙盒 + 刷新会话）。
   const setDirectoryCommands = useCallback((path: string, commands: DirectoryCommands | undefined): void => {
-    const idx = dirs.findIndex(d => d.path === path)
+    const idx = dirsRef.current.findIndex(d => d.path === path)
     if (idx < 0) return
-    applyDirs(dirs.map((d, i) => {
+    applyDirs(dirsRef.current.map((d, i) => {
       if (i !== idx) return d
       if (commands === undefined) {
         const { commands: _commands, ...rest } = d
         return rest
       }
       return { ...d, commands }
-    }))
-  }, [dirs, applyDirs])
+    }), false)
+  }, [applyDirs])
 
-  // 设置目录备注（空串则删除该字段）。
+  // 设置目录备注（空串则删除该字段）。同样逐字触发 → 防抖落盘。
   const setDirectoryNote = useCallback((path: string, note: string): void => {
-    const idx = dirs.findIndex(d => d.path === path)
+    const idx = dirsRef.current.findIndex(d => d.path === path)
     if (idx < 0) return
     const n = note.trim()
-    applyDirs(dirs.map((d, i) => i === idx ? { ...d, note: n === '' ? undefined : n } : d))
-  }, [dirs, applyDirs])
+    applyDirs(dirsRef.current.map((d, i) => i === idx ? { ...d, note: n === '' ? undefined : n } : d), false)
+  }, [applyDirs])
 
   // ---------------- Git 状态回显（逐目录并行，非 git 仓库存 null） ----------------
+  // 请求序号：切工作空间/改目录后旧请求返回，不能覆盖新目录的状态。
+  const gitStatusSeq = useRef(0)
   const refreshGitStatuses = useCallback((): void => {
     const api = apiRef.current
     if (api === null) return
+    const seq = ++gitStatusSeq.current
     const paths = dirsRef.current.map(d => d.path)
     void Promise.all(paths.map(async p => {
       try {
@@ -853,6 +1024,7 @@ export function useWorkspaceCombiner(
         return null
       }
     })).then(statuses => {
+      if (seq !== gitStatusSeq.current || !mountedRef.current) return
       const next: Record<string, GitStatus | null> = {}
       paths.forEach((p, i) => { next[p] = statuses[i] })
       setGitStatuses(next)
@@ -863,14 +1035,27 @@ export function useWorkspaceCombiner(
   useEffect(() => { refreshGitStatuses() }, [dirsKey, refreshGitStatuses])
 
   // ---------------- 改动文件 -> 受影响端点（确定性反查，不用 AI） ----------------
+  const impactSeq = useRef(0)
   const refreshEndpointImpact = useCallback((): void => {
     const api = apiRef.current
     if (api === null) return
+    const seq = ++impactSeq.current
     setEndpointImpactLoading(true)
     void api.endpointImpact()
-      .then(result => { setEndpointImpact(result.impact); setEndpointImpactFiles(result.changedFiles) })
-      .catch(() => { setEndpointImpact([]); setEndpointImpactFiles(0) })
-      .finally(() => setEndpointImpactLoading(false))
+      .then(result => {
+        if (seq !== impactSeq.current || !mountedRef.current) return
+        setEndpointImpact(result.impact)
+        setEndpointImpactFiles(result.changedFiles)
+      })
+      .catch(() => {
+        if (seq !== impactSeq.current) return
+        setEndpointImpact([])
+        setEndpointImpactFiles(0)
+      })
+      .finally(() => {
+        // 旧请求不能把新一轮的 loading 提前关掉。
+        if (seq === impactSeq.current && mountedRef.current) setEndpointImpactLoading(false)
+      })
   }, [])
 
   // 目录变化时跟着 git 状态一起刷新（git 状态里就有变更文件）。
@@ -905,7 +1090,11 @@ export function useWorkspaceCombiner(
   useEffect(() => {
     const api = apiRef.current
     const current = dirsRef.current
-    if (api === null || !previewOpen || current.length === 0) { setPreviewTrees([]); return }
+    if (api === null || !previewOpen || current.length === 0) {
+      setPreviewTrees([])
+      setPreviewLoading(false)
+      return
+    }
     let cancelled = false
     setPreviewLoading(true)
     void Promise.all(current.map(async d => {
@@ -920,7 +1109,11 @@ export function useWorkspaceCombiner(
       setPreviewTrees(list)
       setPreviewLoading(false)
     }).catch(() => { if (!cancelled) setPreviewLoading(false) })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      // 取消/卸载时也要复位，否则残留的「加载中」会带到下一次打开。
+      if (mountedRef.current) setPreviewLoading(false)
+    }
   }, [previewOpen, dirsKey, previewLoadMode])
 
   const previewText = useMemo(() => {
@@ -960,9 +1153,13 @@ export function useWorkspaceCombiner(
     }
     const name = workspaces.find(w => w.id === currentWorkspaceId)?.name
     void startSession(primary, name)
-      .then(sessionId => showToast(tt('sessionCreatedNamed', { name: name ?? sessionId })))
+      .then(sessionId => {
+        showToast(tt('sessionCreatedNamed', { name: name ?? sessionId }))
+        // 面板的会话列表是按需拉取的：新建后不刷新就会一直是旧快照。
+        reloadWorkspaceSessions(currentWorkspaceId)
+      })
       .catch(error => showToast(tt('createFailed', { error: errText(error) }), 'error'))
-  }, [dirs, workspaces, currentWorkspaceId, startSession, showToast])
+  }, [dirs, workspaces, currentWorkspaceId, startSession, showToast, reloadWorkspaceSessions])
 
   const createTaskSession = useCallback((task: SessionTask): void => {
     const primary = dirs[0]?.path
@@ -978,9 +1175,10 @@ export function useWorkspaceCombiner(
         const api = apiRef.current
         if (api !== null) await api.setSessionTask(sessionId, task)
         showToast(tt('taskSessionCreated', { name: title }))
+        reloadWorkspaceSessions(currentWorkspaceId)
       })
       .catch(error => showToast(tt('createFailed', { error: errText(error) }), 'error'))
-  }, [dirs, workspaces, currentWorkspaceId, startSession, showToast])
+  }, [dirs, workspaces, currentWorkspaceId, startSession, showToast, reloadWorkspaceSessions])
 
   return {
     workspaces,
@@ -1025,7 +1223,7 @@ export function useWorkspaceCombiner(
     sessionCount,
     sessionsByWorkspace,
     sessionsOpenId,
-    refreshingSessionId,
+    refreshingSessionIds,
     pickWorkspace,
     reloadWorkspaceSessions,
     refreshSession,
@@ -1067,6 +1265,7 @@ export function useWorkspaceCombiner(
     endpointImpactLoading,
     refreshEndpointImpact,
     setDirectoryCommands,
+    flushDirectoryWrites,
     saveSnapshot,
     restoreSnapshot,
     deleteSnapshot,

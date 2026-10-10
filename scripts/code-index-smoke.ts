@@ -11,10 +11,15 @@ const project = join(root, 'project')
 try {
   await mkdir(project)
   await writeFile(join(project, 'server.ts'), [
+    "import { exactHelper } from './helper'",
+    'export class ExactService {}',
+    'export function buildExact() {}',
     "app.get('/exact', exactHandler)",
     "app.get('/users/{id}', userHandler)",
     "app.get('/server-only', serverOnlyHandler)",
   ].join('\n'))
+  await writeFile(join(project, 'helper.ts'), 'export const exactHelper = () => true\n')
+  await writeFile(join(project, 'server.test.ts'), "import './server'\n")
   await writeFile(join(project, 'client.ts'), [
     "fetch('/exact')",
     'fetch(`/api/users/${id}`)',
@@ -32,6 +37,11 @@ try {
   assert.ok(normalized?.reasons?.includes('normalized-parameter'))
   assert.equal(unpaired?.confidence, 'unpaired')
   assert.ok(unpaired?.reasons?.includes('missing-counterpart'))
+  assert.ok(result.symbols.some(symbol => symbol.name === 'ExactService' && symbol.kind === 'class'))
+  assert.ok(result.symbols.some(symbol => symbol.name === 'buildExact' && symbol.kind === 'function'))
+  assert.equal(result.symbols.find(symbol => symbol.name === 'buildExact')?.signature, 'export function buildExact() { … }')
+  assert.ok(result.dependencies.some(dependency => dependency.from === 'server.ts' && dependency.to === 'helper.ts'))
+  assert.ok(result.tests.some(entry => entry.source === 'server.ts' && entry.test === 'server.test.ts' && entry.reason === 'import'))
 
   const cacheFile = join(root, 'legacy-cache.json')
   const cacheAt = Date.now()
@@ -53,7 +63,7 @@ try {
   assert.deepEqual(cached.entries[0]?.reasons, ['legacy-cache'])
   assert.equal(cached.entries[0]?.indexedAt, cacheAt)
 
-  console.log('code-index smoke: exact, normalized, unpaired, legacy cache OK')
+  console.log('code-index smoke: endpoints, symbols, dependencies, test mapping and legacy cache OK')
 } finally {
   await rm(root, { recursive: true, force: true })
 }

@@ -30,7 +30,7 @@ export type LoadMode = 'full' | 'summary' | 'tree'
 export type ContextPreset = 'economy' | 'balanced' | 'deep' | 'custom'
 
 /** 全局预算闸产生的一条可解释降级记录。 */
-export type ContextDegradation = 'file-index-truncated' | 'code-index-truncated' | 'commands-truncated' | 'standards-truncated' | 'ai-content-skipped'
+export type ContextDegradation = 'file-index-truncated' | 'code-index-truncated' | 'commands-truncated' | 'standards-truncated' | 'ai-content-skipped' | 'capsule-truncated'
 
 /** 诊断项状态。 */
 export type DiagnosticStatus = 'ok' | 'warning' | 'error' | 'unknown'
@@ -157,6 +157,34 @@ export interface CodeIndexEntry {
   reasons?: string[]
   /** 本条索引生成时间。 */
   indexedAt?: number
+}
+
+/** 通用代码符号：用于按名称定位函数、类、类型、组件等高信号定义。 */
+export interface SymbolIndexEntry {
+  name: string
+  kind: 'function' | 'class' | 'interface' | 'type' | 'enum' | 'component' | 'method'
+  file: string
+  line: number
+  dir: string
+  exported?: boolean
+  /** 压缩后的声明签名；用于先理解参数/类型边界，再决定是否读取完整文件。 */
+  signature?: string
+}
+
+/** 可确定解析的源码文件依赖边；路径相对同一工作区目录。 */
+export interface DependencyIndexEntry {
+  dir: string
+  from: string
+  to: string
+  line: number
+}
+
+/** 源文件到相关测试文件的确定性映射。 */
+export interface TestIndexEntry {
+  dir: string
+  source: string
+  test: string
+  reason: 'import' | 'name'
 }
 
 /** 目录项：工作空间里的一条项目目录引用（与 WorkspaceRef 同构，语义别名）。 */

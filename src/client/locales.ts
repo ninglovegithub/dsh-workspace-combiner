@@ -14,6 +14,8 @@ const zh = {
   "sessionsTitle": "会话列表",
   "sessionsReload": "重新读取",
   "sessionsEmpty": "本进程里还没有会话加载这个项目",
+  "sessionOpen": "打开",
+  "sessionOpenHint": "在主视图里打开这个会话",
   "sessionRefresh": "刷新会话",
   "sessionRefreshing": "刷新中…",
   "sessionRefreshHint": "把这个项目的最新配置推进会话，下一轮请求生效",
@@ -456,9 +458,9 @@ const zh = {
   "diagnosticsVersions": "插件与 Schema 版本",
   "diagnosticsDirectoriesOk": "{total} 个启用目录均可访问。",
   "diagnosticsDirectoriesBad": "{total} 个启用目录中有 {invalid} 个失效或不可访问。",
-  "diagnosticsSandboxOk": "sandbox-extra-roots 热更新服务可用。",
-  "diagnosticsSandboxFallback": "热更新服务不可用，当前使用本地配置文件回退。",
-  "diagnosticsSandboxBad": "沙盒服务与本地配置均不可用，请检查依赖安装。",
+  "diagnosticsSandboxOk": "dsh-write-protect 沙盒配置就绪（patch 可读写，live reload 生效）。",
+  "diagnosticsSandboxFallback": "沙盒 patch 可读但未完全就绪，部分目录尚未同步。",
+  "diagnosticsSandboxBad": "沙盒配置不可用，请检查 dsh-write-protect 是否已安装并注入 patch。",
   "diagnosticsWritableOk": "{synced}/{expected} 个可写目录已同步。",
   "diagnosticsWritableBad": "仅 {synced}/{expected} 个可写目录已同步。",
   "diagnosticsServicesOk": "{available}/{total} 个必要宿主服务可用。",
@@ -483,6 +485,22 @@ const zh = {
   "diagnosticsStoreOk": "配置文件可解析，Schema v{version}。",
   "diagnosticsStoreBad": "配置文件无法解析或版本异常（当前 {version}，期望 {expected}）。",
   "diagnosticsVersionsValue": "插件 v{plugin} · Store Schema v{schema}",
+  "sandboxSyncFailed": "沙盒白名单写入失败，目录写权限可能未放开。",
+  "dirInvalid": "不是有效目录：{path}",
+  "dirCheckFailed": "目录校验失败：{error}",
+  "bulkRemoveConfirm": "确定移除选中的 {n} 个目录？",
+  "snapshotRestoreConfirm": "确定用快照「{name}」覆盖当前目录配置？未保存的改动会丢失。",
+  "snapshotDeleteConfirm": "确定删除快照「{name}」？",
+  "removeDirectoryConfirm": "确定从工作空间移除「{name}」？（不影响磁盘上的文件）",
+  "listSeparator": "、",
+  "listMore": "显示其余 {n} 条",
+  "previewChars": "{n} 字符",
+  "legendTypes": "D 主项目 · B 后端 · F 前端 · R 参考 · P 其他",
+  "requestTimeout": "请求超时（{ms}ms），宿主可能无响应。",
+  "badResponse": "宿主返回了无法解析的响应。",
+  "budgetDegradeCapsule": "任务胶囊已按预算截断",
+  "standardsCustomTech": "自定义",
+  "standardsSelectHint": "请在左侧选择一条规范",
 }
 
 const en: Record<keyof typeof zh, string> = {
@@ -495,6 +513,8 @@ const en: Record<keyof typeof zh, string> = {
   "sessionsTitle": "Sessions",
   "sessionsReload": "Reload",
   "sessionsEmpty": "No session in this process has this project loaded",
+  "sessionOpen": "Open",
+  "sessionOpenHint": "Open this session in the main view",
   "sessionRefresh": "Refresh",
   "sessionRefreshing": "Refreshing…",
   "sessionRefreshHint": "Push this project's latest config into the session; it applies from the next request",
@@ -937,9 +957,9 @@ const en: Record<keyof typeof zh, string> = {
   "diagnosticsVersions": "Plugin and schema versions",
   "diagnosticsDirectoriesOk": "All {total} enabled directories are accessible.",
   "diagnosticsDirectoriesBad": "{invalid} of {total} enabled directories are missing or inaccessible.",
-  "diagnosticsSandboxOk": "The sandbox-extra-roots hot-update service is available.",
-  "diagnosticsSandboxFallback": "Hot update is unavailable; the local config fallback is in use.",
-  "diagnosticsSandboxBad": "Neither the sandbox service nor its local config is available.",
+  "diagnosticsSandboxOk": "dsh-write-protect sandbox config is ready (patch readable, live reload active).",
+  "diagnosticsSandboxFallback": "The sandbox patch is readable but not fully ready; some directories are not synced yet.",
+  "diagnosticsSandboxBad": "The sandbox config is unavailable; check that dsh-write-protect is installed and its patch is injected.",
   "diagnosticsWritableOk": "{synced}/{expected} writable roots are synchronized.",
   "diagnosticsWritableBad": "Only {synced}/{expected} writable roots are synchronized.",
   "diagnosticsServicesOk": "{available}/{total} required host services are available.",
@@ -964,9 +984,40 @@ const en: Record<keyof typeof zh, string> = {
   "diagnosticsStoreOk": "The configuration file is readable with schema v{version}.",
   "diagnosticsStoreBad": "The configuration is unreadable or unexpected (v{version}; expected v{expected}).",
   "diagnosticsVersionsValue": "Plugin v{plugin} · Store schema v{schema}",
+  "sandboxSyncFailed": "The sandbox whitelist could not be written; directory write access may not be granted.",
+  "dirInvalid": "Not a valid directory: {path}",
+  "dirCheckFailed": "Directory check failed: {error}",
+  "bulkRemoveConfirm": "Remove the {n} selected directories?",
+  "snapshotRestoreConfirm": "Overwrite the current directory configuration with snapshot “{name}”? Unsaved changes will be lost.",
+  "snapshotDeleteConfirm": "Delete snapshot “{name}”?",
+  "removeDirectoryConfirm": "Remove “{name}” from this workspace? (Files on disk are not affected)",
+  "listSeparator": ", ",
+  "listMore": "Show the remaining {n}",
+  "previewChars": "{n} chars",
+  "legendTypes": "D primary · B backend · F frontend · R reference · P other",
+  "requestTimeout": "The request timed out after {ms}ms; the host may be unresponsive.",
+  "badResponse": "The host returned an unparseable response.",
+  "budgetDegradeCapsule": "Task capsule truncated to fit the budget",
+  "standardsCustomTech": "Custom",
+  "standardsSelectHint": "Select a standard on the left",
 }
 
 export type WorkspaceCombinerKey = keyof typeof zh
+
+/** 宿主 locale 服务绑定出的翻译函数形状。 */
+type Translate = (key: string, values?: Record<string, string | number>) => string
+
+/** 由 index.ts 在注册词典后注入的绑定翻译函数（缺省 undefined = 用 document.lang 兜底）。 */
+let boundTranslate: Translate | undefined
+
+/**
+ * 注入宿主 locale 服务绑定出的翻译函数；传 undefined 恢复 document.lang 兜底。
+ * 调用方（index.ts）会先探测它真能翻出当前语言，避免把「原样返回 key」的实现装进来。
+ * @param fn - 绑定出的翻译函数，或 undefined。
+ */
+export function setTranslate(fn: Translate | undefined): void {
+  boundTranslate = fn
+}
 
 /** 当前词典（按 document 语言选择，缺省 zh）。 */
 function dictionary(): Record<WorkspaceCombinerKey, string> {
@@ -974,13 +1025,39 @@ function dictionary(): Record<WorkspaceCombinerKey, string> {
   return lang.toLowerCase().startsWith('en') ? en : zh
 }
 
-/** 翻译一个 key，支持 {name} 模板参数。 */
-export function tt(key: WorkspaceCombinerKey, values?: Record<string, string | number>): string {
-  let out = dictionary()[key]
-  if (values !== undefined) {
-    for (const [name, value] of Object.entries(values)) out = out.replaceAll('{' + name + '}', String(value))
-  }
+/** 模板参数替换（用 split/join，不做 replaceAll，避免非字符串输入抛错）。 */
+function interpolate(text: string, values: Record<string, string | number>): string {
+  let out = text
+  for (const [name, value] of Object.entries(values)) out = out.split('{' + name + '}').join(String(value))
   return out
+}
+
+/**
+ * 翻译一个 key，支持 {name} 模板参数。
+ * 缺 key 时回退到 key 本身——显示 key 好过显示 undefined，更不该因为一次
+ * `undefined.replaceAll` 抛错把整棵子树渲染打断（宿主新增诊断项而客户端 bundle 较旧时会发生）。
+ * @param key - 词典 key。
+ * @param values - 模板参数。
+ * @returns 翻译后的文本（永不返回 undefined）。
+ */
+export function tt(key: WorkspaceCombinerKey, values?: Record<string, string | number>): string {
+  const bound = boundTranslate
+  let out: string | undefined
+  if (bound !== undefined) {
+    try {
+      const translated = bound(String(key), values)
+      if (typeof translated === 'string' && translated !== '' && translated !== String(key)) out = translated
+    } catch {
+      // 绑定实现异常时回退本地词典。
+    }
+  }
+  if (out === undefined) {
+    const local = dictionary()[key]
+    if (typeof local !== 'string') return String(key)
+    out = local
+  }
+  // 绑定实现通常已处理插值；对未插值的结果（含本地词典）再补一次，已插值的无花括号、幂等。
+  return values === undefined ? out : interpolate(out, values)
 }
 
 export { en, zh }

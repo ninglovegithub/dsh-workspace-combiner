@@ -7,10 +7,10 @@ import { loadModeMaxDepth, type CodeIndexEntry, type ContextPreset, type Context
 import { estimateTokens, type FileIndexEntry } from '../core/fileTree.ts'
 import type { StandardGroup } from '../core/standards.ts'
 import type { FileIndexCache } from './fileIndex.ts'
-import { codeIndexTextFile, type CodeIndexCache } from './codeIndex.ts'
+import type { CodeIndexCache } from './codeIndex.ts'
 import { renderCodeIndex, renderCommands, renderCommandsText, renderFileIndex, renderMultiWorkspacePromptDetailed, renderStandards, renderStandardsText } from '../prompt.ts'
 import { DEFAULT_CODE_INDEX_BUDGET, DEFAULT_COMMANDS_BUDGET } from '../invariant.ts'
-import { commandsTextFile, standardsTextFile } from './onDemandContext.ts'
+import { codeIndexTextFile, commandsTextFile, standardsTextFile } from './onDemandContext.ts'
 
 /** 功能索引在统计中的配置（与宿主注入保持一致）。 */
 export interface CodeIndexStatsConfig {
@@ -36,6 +36,8 @@ export interface ContextStatsInput {
   standardsBudget?: number
   /** 各项目常用命令区块预算。 */
   commandsBudget?: number
+  /** 仅用于生成与真实会话同形状的隔离路径；统计过程不会写文件。 */
+  contextScope?: string
 }
 
 /**
@@ -56,6 +58,7 @@ export async function computeContextStats(input: ContextStatsInput): Promise<Con
     standardGroups = [],
     standardsBudget = 0,
     commandsBudget = 0,
+    contextScope = 'preview',
   } = input
   // 各目录并行统计（顺序由 Promise.all 保持）；计数走递归 countTree，只有 tree/full 才建树。
   const perDirectory = await Promise.all(directories
@@ -105,12 +108,12 @@ export async function computeContextStats(input: ContextStatsInput): Promise<Con
     globalBudget,
     codeEntries,
     codeIndexBudget,
-    ...(codeIndexBudget <= 0 && codeEntries.length > 0 ? { codeIndexPath: codeIndexTextFile() } : {}),
+    ...(codeIndexBudget <= 0 && codeEntries.length > 0 ? { codeIndexPath: codeIndexTextFile(contextScope) } : {}),
     standardGroups,
     standardsBudget,
-    ...(standardsBudget <= 0 && standardsText !== '' ? { standardsPath: standardsTextFile() } : {}),
+    ...(standardsBudget <= 0 && standardsText !== '' ? { standardsPath: standardsTextFile(contextScope) } : {}),
     commandsBudget: commandsBudgetResolved,
-    ...(commandsBudgetResolved <= 0 && commandsText !== '' ? { commandsPath: commandsTextFile() } : {}),
+    ...(commandsBudgetResolved <= 0 && commandsText !== '' ? { commandsPath: commandsTextFile(contextScope) } : {}),
   })
   const fileIndexTokens = estimateTokens(renderFileIndex(fileEntries, loadMode, rendered.effectiveBudgets.fileIndex))
   const standardsTokens = estimateTokens(renderStandards(standardGroups, rendered.effectiveBudgets.standards))

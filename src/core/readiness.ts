@@ -1,4 +1,5 @@
 import type { CodeIndexEntry, ContextStats, GitStatus, Workspace, WorkspaceRef } from './types.ts'
+import { isDocumentGroup } from './groups.ts'
 
 export type ReadinessStatus = 'ready' | 'warning' | 'blocked'
 export type ReadinessSeverity = 'warning' | 'blocked'
@@ -69,8 +70,7 @@ function isBackend(directory: WorkspaceRef): boolean {
 
 function isDocument(directory: WorkspaceRef, index: number, workspace: Workspace | undefined): boolean {
   if (index === 0 && (workspace?.mode ?? 'anchor') === 'anchor') return true
-  const group = directory.group?.toLowerCase() ?? ''
-  return group.includes('文档') || group.includes('doc')
+  return isDocumentGroup(directory.group)
 }
 
 function hasCommands(directory: WorkspaceRef): boolean {
