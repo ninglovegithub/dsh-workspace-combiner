@@ -1,4 +1,7 @@
 node_modules/
+
+# IDE / editor local state (never part of the package)
+.idea/
 *.log
 .DS_Store
 
