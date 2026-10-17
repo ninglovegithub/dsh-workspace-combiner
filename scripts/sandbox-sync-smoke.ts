@@ -139,4 +139,26 @@ assert.equal(missing.configExists, false)
 assert.deepEqual(missing.missingExpected, ['/x'])
 console.log('unreadable patch reported as missing OK')
 
+// --------------------- 9) 没装 dsh-write-protect 时必须安静跳过（不算失败）
+// 全新用户只装本插件时 profile 里没有 dsh-write-protect 的行；以前这里会返回 false，
+// 客户端就会弹「沙盒白名单同步失败」，等于把"功能不存在"当成"出错"。
+{
+  const warns: string[] = []
+  const quietCtx = { logger: { warn: (...args: unknown[]) => { warns.push(args.map(String).join(' ')) } } }
+
+  // 9a. 整个 patch 文件都不存在
+  process.env.DSH_HOME = join(home, 'no-write-protect')
+  assert.equal(await syncExtraRoots(quietCtx, [], ['/work/x']), true, '没有 patch 文件时视为无需同步（成功）')
+  assert.deepEqual(warns, [], '没有 patch 文件时不应该告警')
+
+  // 9b. patch 存在但没有 dsh-write-protect 的 policy 行
+  const other = join(home, 'other-sandbox')
+  await mkdir(join(other, 'profiles', 'desktop'), { recursive: true })
+  await writeFile(join(other, 'profiles', 'desktop', 'cordis.patch.yml'), '- id: some-other-policy\n  disabled: true\n', 'utf8')
+  process.env.DSH_HOME = other
+  assert.equal(await syncExtraRoots(quietCtx, [], ['/work/x']), true, 'patch 里没有 policy 行时视为无需同步（成功）')
+  assert.deepEqual(warns, [], '没有集成点时不应该告警')
+  console.log('missing dsh-write-protect is a silent no-op OK')
+}
+
 console.log('sandbox-sync smoke: normalization, effective source, dual reconciliation and blank-path rejection OK')

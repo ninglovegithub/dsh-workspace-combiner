@@ -8,6 +8,17 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-10-17
+
+### Fixed
+
+- A profile without `dsh-write-protect` no longer reports a sandbox-sync failure: the plugin has no
+  integration point there, so the sync is a silent no-op. Previously every workspace change raised an
+  error toast and a warning log, which made a plain install look broken.
+- `@deepseek-ai/dsh-llm` is loaded through a runtime dynamic import; it was missing from
+  `peerDependencies`, so AI summaries and standards drafting failed on a clean machine. It is now
+  declared and installed together with the plugin.
+
 ## [0.8.6] - 2026-10-17
 
 ### Added

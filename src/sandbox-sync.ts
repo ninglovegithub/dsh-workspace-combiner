@@ -27,6 +27,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -286,13 +287,22 @@ export async function syncExtraRoots(ctx: Context, previous: readonly string[], 
   const wanted = next.map(path => path.trim()).filter(path => path !== '')
   const raw = await readPatch()
   if (raw === undefined) {
+    // 文件不存在 = 这个 profile 根本没装 dsh-write-protect：白名单不存在，
+    // 同步本身就"无事可做"，不算失败（否则全新用户每次改工作空间都会弹错误提示）。
+    // 只有"文件存在但读不出来"才是真的失败。
+    if (!existsSync(sandboxConfigFile())) return true
     ctx.logger?.warn('[dsh-workspace-combiner] failed to sync dsh-write-protect writablePaths: patch file unreadable')
     return false
   }
+  const doc = parsePatch(raw)
+  const layout = doc === undefined ? undefined : locate(doc)
+  if (doc === undefined || layout === undefined || layout.insertIndex < 0 || layout.policyIndex < 0) {
+    // 装了别的沙箱方案（或 patch 里没有 dsh-write-protect 的 policy 行）：
+    // 本插件与它没有集成点，安静跳过。
+    return true
+  }
   try {
-    const doc = parsePatch(raw)
-    const layout = doc === undefined ? undefined : locate(doc)
-    const base = doc === undefined || layout === undefined ? [] : extractBaseRoots(doc, layout)
+    const base = extractBaseRoots(doc, layout)
     await writePatch(raw, reconcile(base, previous, wanted), previous, wanted)
     return true
   } catch (error) {
