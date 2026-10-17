@@ -99,12 +99,14 @@ const PANEL_CSS = String.raw`
 .wcb-card-grow .wcb-hint{flex:none}
 .wcb-caret{color:var(--wcb-dim);font-size:9px;flex:none;transition:transform .15s}
 .wcb-badge{color:var(--wcb-dim);font-size:9.5px;background:var(--wcb-surface2);border-radius:3px;padding:0 5px;flex:none;font-weight:400;text-transform:none;letter-spacing:0}
-.wcb-head-actions{margin-left:auto;display:flex;gap:5px;align-items:center}
+.wcb-head-actions{margin-left:auto;display:flex;gap:5px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
 .wcb-linkbtn{font:inherit;font-size:10px;color:var(--wcb-accent);border:1px solid rgba(79,140,255,.25);
   border-radius:4px;padding:2px 7px;background:rgba(79,140,255,.06);cursor:pointer;white-space:nowrap;text-transform:none;letter-spacing:0;font-weight:400}
 .wcb-linkbtn:hover{background:rgba(79,140,255,.12)}
 .wcb-linkbtn:disabled{opacity:.4;cursor:default}
 .wcb-hint{color:var(--wcb-muted);font-size:10px;line-height:1.5;flex:none}
+/* 中文没有空格，个别容器会把它当不可断行的长串：显式允许任意位置换行 */
+.wcb-hint,.wcb-modal,.wcb-modal-body{overflow-wrap:anywhere;word-break:break-word;white-space:normal}
 .wcb-label{color:var(--wcb-muted);font-size:10px;margin-bottom:5px}
 
 /* ---------- 工作空间列表 ---------- */
@@ -371,7 +373,7 @@ const PANEL_CSS = String.raw`
 /* ---------- 弹窗 ---------- */
 .wcb-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(2px);
   display:flex;align-items:center;justify-content:center;z-index:150;padding:16px}
-.wcb-modal{width:360px;max-width:100%;max-height:80vh;display:flex;flex-direction:column;gap:10px;padding:16px;
+.wcb-modal{width:min(360px,calc(100vw - 32px));max-width:100%;min-width:0;max-height:80vh;display:flex;flex-direction:column;gap:10px;padding:16px;overflow-y:auto;overflow-x:hidden;
   border-radius:10px;color:var(--wcb-text);
   background:var(--dsw-alias-bg-layer-3,#1e2430);
   border:1px solid var(--wcb-line2);box-shadow:0 16px 48px rgba(0,0,0,.5)}
@@ -452,7 +454,13 @@ const PANEL_CSS = String.raw`
 .wcb-smart-defaults span{font-size:9.5px;color:var(--wcb-muted)}
 .wcb-pathbox{flex:1;min-width:0;color:var(--wcb-dim);font-size:10px;font-family:var(--ds-font-family-code,monospace);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 可编辑路径输入框：放在 wcb-add-row 里时占满剩余宽度（覆盖 .wcb-field .wcb-input 的 100%） */
+.wcb-add-row .wcb-input{flex:1;min-width:0;width:auto;font-size:10px;font-family:var(--ds-font-family-code,monospace)}
 .wcb-toolbar{display:flex;justify-content:flex-end}
+/* 复制工作空间弹窗里的「将复制什么」清单 */
+.wcb-duplicate-summary{display:flex;flex-direction:column;gap:4px;border:1px solid var(--wcb-line2);border-radius:6px;padding:8px 10px;background:var(--wcb-surface)}
+.wcb-duplicate-rows{margin:0;padding-left:16px;display:flex;flex-direction:column;gap:2px}
+.wcb-duplicate-rows li{font-size:10px;color:var(--wcb-text2);line-height:1.5}
 
 /* ---------- 开发规范弹窗 ---------- */
 .wcb-std-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -554,12 +562,60 @@ const PANEL_CSS = String.raw`
 .wcb-budget-figures{display:flex;align-items:baseline;gap:6px;min-width:0;flex-wrap:wrap;line-height:1.2}
 .wcb-budget-total{font-size:15px;font-weight:700;color:var(--wcb-text);font-variant-numeric:tabular-nums;line-height:1.1;white-space:nowrap}
 .wcb-budget-of{font-size:10px;color:var(--wcb-dim);white-space:nowrap}
+/* 预算档位：一个四段分段控件（按需 │ 精简 │ 标准 │ 详细），三处共用 */
+.wcb-budget-limit{font-size:12px;font-weight:600;color:var(--wcb-text);font-variant-numeric:tabular-nums}
+.wcb-budget-levels{display:flex;flex-direction:column;margin-top:6px;border:1px solid var(--wcb-line2);border-radius:6px;overflow:hidden;background:rgba(255,255,255,.015)}
+.wcb-budget-level{display:grid;grid-template-columns:66px minmax(0,1fr);gap:8px;align-items:center;padding:5px 9px;transition:background .12s}
+.wcb-budget-level + .wcb-budget-level{border-top:1px solid var(--wcb-line2)}
+.wcb-budget-level:hover{background:rgba(255,255,255,.03)}
+.wcb-budget-level-name{font-size:10.5px;color:var(--wcb-text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wcb-budget-level-tokens{font-size:10px;color:var(--wcb-text2);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:500}
+.wcb-budget-level-tokens.is-off{color:var(--wcb-dim);font-weight:400}
+
+/* 档位按钮：平时只显示当前档位，点开才是四个选项 */
+/* 与 .wcb-btn 同一套视觉语言：4px 圆角、细边、无阴影 */
+.wcb-level-btn{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:10px;
+  padding:3px 7px;border-radius:4px;border:1px solid var(--wcb-line2);
+  background:var(--wcb-surface);color:var(--wcb-text2);cursor:pointer;white-space:nowrap;
+  transition:border-color .12s,background .12s,color .12s}
+.wcb-level-btn:hover:not(:disabled){border-color:rgba(79,140,255,.3);background:var(--wcb-surface2);color:var(--wcb-text)}
+.wcb-level-btn:focus-visible{outline:1px solid var(--wcb-accent);outline-offset:1px}
+.wcb-level-btn:disabled{opacity:.45;cursor:default}
+.wcb-level-btn-name{font-weight:600;color:var(--wcb-accent)}
+.wcb-level-btn-name.is-off{color:var(--wcb-dim);font-weight:500}
+.wcb-level-btn-tokens{font-size:9.5px;color:var(--wcb-muted);font-variant-numeric:tabular-nums}
+.wcb-level-btn-caret{font-size:8px;line-height:1;color:var(--wcb-dim);transform:translateY(-1px)}
+
+/* 档位选择弹窗 */
+.wcb-level-options{display:flex;flex-direction:column;gap:6px;min-width:0}
+.wcb-level-option{display:flex;align-items:flex-start;gap:9px;width:100%;text-align:left;font:inherit;
+  padding:7px 9px;border-radius:6px;border:1px solid var(--wcb-line2);background:var(--wcb-surface);
+  cursor:pointer;transition:border-color .12s,background .12s}
+.wcb-level-option:hover{border-color:rgba(79,140,255,.35);background:var(--wcb-surface2)}
+.wcb-level-option.is-on{border-color:rgba(79,140,255,.5);background:rgba(79,140,255,.1)}
+.wcb-level-dot{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--wcb-line2);flex:none;margin-top:2px;position:relative}
+.wcb-level-dot.is-on{border-color:var(--wcb-accent)}
+.wcb-level-dot.is-on::after{content:"";position:absolute;inset:2px;border-radius:50%;background:var(--wcb-accent)}
+.wcb-level-option-text{display:flex;flex-direction:column;gap:2px;min-width:0}
+.wcb-level-option-name{display:flex;align-items:baseline;gap:6px;font-size:11px;font-weight:600;color:var(--wcb-text)}
+.wcb-level-option-tokens{font-size:9px;font-weight:400;color:var(--wcb-muted);font-variant-numeric:tabular-nums}
+.wcb-level-option-desc{font-size:9.5px;color:var(--wcb-muted);line-height:1.45;white-space:normal;overflow-wrap:anywhere;word-break:break-word}
+.wcb-level-hints{display:flex;flex-direction:column;gap:2px;min-width:0}
+.wcb-level-hint{white-space:normal;overflow-wrap:anywhere;word-break:break-word;min-width:0}
+
+.wcb-budget-advanced{margin-top:4px}
+.wcb-budget-advanced summary{cursor:pointer;font-size:10px;color:var(--wcb-accent);list-style:none;user-select:none;opacity:.8}
+.wcb-budget-advanced summary:hover{opacity:1}
+.wcb-budget-advanced summary::-webkit-details-marker{display:none}
+.wcb-budget-advanced summary::before{content:'▸ ';}
+.wcb-budget-advanced[open] summary::before{content:'▾ ';}
+.wcb-budget-advanced .wcb-stat-grid{margin-top:6px}
 .wcb-budget-remain{font-size:9.5px;color:var(--wcb-ok);white-space:nowrap}
 .wcb-donut{position:relative;flex:none}
 .wcb-donut-center{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--wcb-text)}
 .wcb-stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}
 /* 每张统计卡「标题 + 数值」同一行，显著缩短卡片高度 */
-.wcb-stat-card{background:var(--wcb-surface);border:1px solid var(--wcb-line2);border-radius:5px;padding:3px 7px;display:flex;align-items:baseline;gap:5px;min-width:0}
+.wcb-stat-card{background:var(--wcb-surface);border:1px solid var(--wcb-line2);border-radius:5px;padding:3px 7px;display:flex;align-items:baseline;gap:5px;min-width:0;flex-wrap:wrap}
 .wcb-stat-label{color:var(--wcb-dim);font-size:8px;text-transform:uppercase;letter-spacing:.2px;flex:none;white-space:nowrap}
 .wcb-stat-value{color:var(--wcb-text);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;margin-left:auto}
 .wcb-stat-value-sm{color:var(--wcb-text2);font-size:11px;font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap;margin-left:auto}
@@ -570,7 +626,7 @@ const PANEL_CSS = String.raw`
 .wcb-bar-name{flex:none;width:62px;font-size:9.5px;color:var(--wcb-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wcb-bar-track-h{flex:1 1 auto;height:8px;min-width:18px;background:var(--wcb-surface);border:1px solid var(--wcb-line);border-radius:4px;overflow:hidden}
 .wcb-bar-fill-h{height:100%;border-radius:3px;transition:width .2s}
-.wcb-bar-val{flex:none;width:42px;text-align:right;font-size:9px;color:var(--wcb-text2);font-variant-numeric:tabular-nums;white-space:nowrap}
+.wcb-bar-val{flex:none;width:64px;text-align:right;font-size:9px;color:var(--wcb-text2);font-variant-numeric:tabular-nums;white-space:nowrap}
 .wcb-dir-usage-item{display:flex;align-items:center;gap:8px;background:var(--wcb-surface);border:1px solid var(--wcb-line);border-radius:5px;padding:5px 8px}
 .wcb-dir-usage-info{flex:1;min-width:0}
 .wcb-dir-usage-name-row{display:flex;align-items:center;justify-content:space-between;gap:5px}

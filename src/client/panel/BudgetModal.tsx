@@ -9,9 +9,12 @@
 
 import type { ReactElement } from 'react'
 import type { ContextDegradation, ContextPreset, ContextStats, TokenUsageReport, WorkspaceRef } from '../../core/types.ts'
+import { BUDGET_BLOCKS, type BudgetBlock } from '../../core/budgetLevels.ts'
+import { BudgetLevelPicker } from './BudgetLevelPicker.tsx'
 import { tt } from '../locales.ts'
 import { dirTypeColor } from './groups.ts'
 import { Dialog } from './Dialog.tsx'
+import { kmTokens, tokenText } from './tokenFormat.ts'
 import { NumberInput } from './NumberInput.tsx'
 
 /**
@@ -25,12 +28,6 @@ const DEGRADATION_KEYS: Record<ContextDegradation, Parameters<typeof tt>[0]> = {
   'standards-truncated': 'budgetDegradeStandards',
   'ai-content-skipped': 'budgetDegradeAi',
   'capsule-truncated': 'budgetDegradeCapsule',
-}
-
-/** 千分位 token 简写（36200 -> 36.2k）。 */
-function kmTokens(n: number): string {
-  if (n < 1000) return String(n)
-  return (n / 1000).toFixed(1) + 'k'
 }
 
 /** 环形进度图：SVG donut，中间显示百分比。 */
@@ -55,6 +52,14 @@ function Donut({ percentage, size = 44, strokeWidth = 4, color = '#4f8cff' }: {
       </svg>
     </div>
   )
+}
+
+/** 区块 -> 文案 key。 */
+const BLOCK_LABEL: Record<BudgetBlock, 'budgetFileIndex' | 'budgetCodeIndex' | 'budgetStandards' | 'budgetCommands'> = {
+  standards: 'budgetStandards',
+  commands: 'budgetCommands',
+  codeIndex: 'budgetCodeIndex',
+  fileIndex: 'budgetFileIndex',
 }
 
 /** 百分比展示（0~1；null 显示 —）。 */
@@ -87,19 +92,19 @@ function RealUsage({ usage, injected }: { usage: TokenUsageReport | null; inject
       <div className="wcb-stat-grid">
         <div className="wcb-stat-card">
           <div className="wcb-stat-label">{tt('usageInput')}</div>
-          <div className="wcb-stat-value-sm">{kmTokens(t.inputTokens)}</div>
+          <div className="wcb-stat-value-sm">{tokenText(t.inputTokens)}</div>
         </div>
         <div className="wcb-stat-card">
           <div className="wcb-stat-label">{tt('usageCacheRead')}</div>
-          <div className="wcb-stat-value-sm">{kmTokens(t.cacheReadTokens)}</div>
+          <div className="wcb-stat-value-sm">{tokenText(t.cacheReadTokens)}</div>
         </div>
         <div className="wcb-stat-card">
           <div className="wcb-stat-label">{tt('usageCacheWrite')}</div>
-          <div className="wcb-stat-value-sm">{kmTokens(t.cacheWriteTokens)}</div>
+          <div className="wcb-stat-value-sm">{tokenText(t.cacheWriteTokens)}</div>
         </div>
         <div className="wcb-stat-card">
           <div className="wcb-stat-label">{tt('usageOutput')}</div>
-          <div className="wcb-stat-value-sm">{kmTokens(t.outputTokens)}</div>
+          <div className="wcb-stat-value-sm">{tokenText(t.outputTokens)}</div>
         </div>
         <div className="wcb-stat-card">
           <div className="wcb-stat-label">{tt('usageHitRate')}</div>
@@ -114,7 +119,7 @@ function RealUsage({ usage, injected }: { usage: TokenUsageReport | null; inject
         <>
           <div className="wcb-usage-ctx-row">
             <span className="wcb-usage-ctx-label">{tt('usageContext')}</span>
-            <span className="wcb-usage-ctx-val">{kmTokens(pressure) + ' / ' + kmTokens(window)}</span>
+            <span className="wcb-usage-ctx-val">{tokenText(pressure) + ' / ' + tokenText(window)}</span>
           </div>
           <div className="wcb-bar-track-h">
             <div className="wcb-bar-fill-h" style={{ width: Math.max(1, Math.round((occupancy ?? 0) * 100)) + '%', background: (occupancy ?? 0) > 0.9 ? '#f85149' : (occupancy ?? 0) > 0.7 ? '#d4a017' : '#4f8cff' }} />
@@ -147,6 +152,18 @@ interface BudgetModalProps {
 }
 
 export function BudgetModal({ stats, preset, budget, fileIndexBudget, codeIndexBudget, standardsBudget, commandsBudget, dirs, usage, onPreset, onBudget, onFileIndexBudget, onCodeIndexBudget, onStandardsBudget, onCommandsBudget, onRefresh, onClose }: BudgetModalProps): ReactElement {
+  const levelValue = (block: BudgetBlock): number =>
+    block === 'standards' ? standardsBudget
+      : block === 'commands' ? commandsBudget
+        : block === 'codeIndex' ? codeIndexBudget
+          : fileIndexBudget
+  const setLevelValue = (block: BudgetBlock, value: number): void => {
+    if (block === 'standards') onStandardsBudget(value)
+    else if (block === 'commands') onCommandsBudget(value)
+    else if (block === 'codeIndex') onCodeIndexBudget(value)
+    else onFileIndexBudget(value)
+  }
+
   const total = (stats?.fileIndexTokens ?? 0) + (stats?.promptOverheadTokens ?? 0) + (stats?.standardsTokens ?? 0)
     + (stats?.codeIndexTokens ?? 0) + (stats?.commandsTokens ?? 0)
   const ratio = budget > 0 ? total / budget : 0
@@ -166,14 +183,33 @@ export function BudgetModal({ stats, preset, budget, fileIndexBudget, codeIndexB
         <div className="wcb-std-toolbar">
           <div className="wcb-head-actions">
             <span className="wcb-label" style={{ margin: 0 }}>{tt('budgetLimit')}</span>
-            <NumberInput value={budget} onCommit={onBudget} min={1} label={tt('budgetLimit')} />
+            <span className="wcb-budget-limit">{tokenText(budget)}</span>
             <button type="button" className="wcb-linkbtn" aria-label={tt('monitorRefresh')} onClick={onRefresh}>{'↻ ' + tt('monitorRefresh')}</button>
           </div>
         </div>
 
-        {preset === 'custom' ? (
+        {/* 密度：每块先选「按需 / 常驻」，常驻再选三档。0 这个反直觉的数字不再出现在界面上。 */}
+        <div className="wcb-budget-levels">
+          {BUDGET_BLOCKS.map(block => {
+            const value = levelValue(block)
+            return (
+              <div className="wcb-budget-level" key={block}>
+                <span className="wcb-budget-level-name">{tt(BLOCK_LABEL[block])}</span>
+                <BudgetLevelPicker block={block} value={value} title={tt(BLOCK_LABEL[block])} onChange={(next: number) => setLevelValue(block, next)} />
+              </div>
+            )
+          })}
+        </div>
+        <div className="wcb-level-hints">
+          <div className="wcb-hint wcb-level-hint">{tt('budgetHintResident')}</div>
+          <div className="wcb-hint wcb-level-hint">{tt('budgetHintOnDemand')}</div>
+        </div>
+
+        <details className="wcb-budget-advanced">
+          <summary>{tt('budgetAdvanced')}</summary>
           <div className="wcb-stat-grid">
             {([
+              [tt('budgetLimit'), budget, onBudget],
               [tt('budgetFileIndex'), fileIndexBudget, onFileIndexBudget],
               [tt('budgetCodeIndex'), codeIndexBudget, onCodeIndexBudget],
               [tt('budgetStandards'), standardsBudget, onStandardsBudget],
@@ -185,7 +221,7 @@ export function BudgetModal({ stats, preset, budget, fileIndexBudget, codeIndexB
               </label>
             ))}
           </div>
-        ) : null}
+        </details>
 
         <div className="wcb-modal-body wcb-budget-body">
           {stats === null ? (
@@ -197,7 +233,7 @@ export function BudgetModal({ stats, preset, budget, fileIndexBudget, codeIndexB
                 <div className="wcb-budget-figures">
                   <span className="wcb-budget-total">{kmTokens(total)}</span>
                   <span className="wcb-budget-of">/ {kmTokens(budget)} token</span>
-                  {ratio <= 1 ? <span className="wcb-budget-remain">{tt('budgetRemain', { remain: kmTokens(Math.max(0, budget - total)) })}</span> : null}
+                  {ratio <= 1 ? <span className="wcb-budget-remain">{tt('budgetRemain', { remain: tokenText(Math.max(0, budget - total)) })}</span> : null}
                 </div>
               </div>
               {ratio > 1 ? <div className="wcb-alert wcb-alert-over">{tt('budgetOver')}</div> : ratio > 0.8 ? <div className="wcb-alert">{tt('budgetWarn')}</div> : null}
@@ -218,23 +254,23 @@ export function BudgetModal({ stats, preset, budget, fileIndexBudget, codeIndexB
                 </div>
                 <div className="wcb-stat-card">
                   <div className="wcb-stat-label">{tt('statIndex')}</div>
-                  <div className="wcb-stat-value-sm">{kmTokens(stats.fileIndexTokens)}</div>
+                  <div className="wcb-stat-value-sm">{tokenText(stats.fileIndexTokens)}</div>
                 </div>
                 <div className="wcb-stat-card">
                   <div className="wcb-stat-label">{tt('statOverhead')}</div>
-                  <div className="wcb-stat-value-sm">{kmTokens(stats.promptOverheadTokens)}</div>
+                  <div className="wcb-stat-value-sm">{tokenText(stats.promptOverheadTokens)}</div>
                 </div>
                 <div className="wcb-stat-card">
                   <div className="wcb-stat-label">{tt('statStandards')}</div>
-                  <div className="wcb-stat-value-sm">{kmTokens(stats.standardsTokens)}</div>
+                  <div className="wcb-stat-value-sm">{tokenText(stats.standardsTokens)}</div>
                 </div>
                 <div className="wcb-stat-card">
                   <div className="wcb-stat-label">{tt('statCodeIndex')}</div>
-                  <div className="wcb-stat-value-sm">{kmTokens(stats.codeIndexTokens)}</div>
+                  <div className="wcb-stat-value-sm">{tokenText(stats.codeIndexTokens)}</div>
                 </div>
                 <div className="wcb-stat-card">
                   <div className="wcb-stat-label">{tt('statCommands')}</div>
-                  <div className="wcb-stat-value-sm">{kmTokens(stats.commandsTokens)}</div>
+                  <div className="wcb-stat-value-sm">{tokenText(stats.commandsTokens)}</div>
                 </div>
               </div>
               <RealUsage usage={usage} injected={total} />
@@ -253,7 +289,7 @@ export function BudgetModal({ stats, preset, budget, fileIndexBudget, codeIndexB
                         <div className="wcb-bar-track-h">
                           <div className="wcb-bar-fill-h" style={{ width: w + '%', background: color }} />
                         </div>
-                        <span className="wcb-bar-val">{kmTokens(d.tokens)}</span>
+                        <span className="wcb-bar-val">{tokenText(d.tokens)}</span>
                       </div>
                     )
                   })}

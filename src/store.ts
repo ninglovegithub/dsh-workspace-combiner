@@ -14,7 +14,7 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import { emptyStore, type ContextPreset, type CustomStandard, type LoadMode, type StoreShape, type Workspace, type WorkspaceMode, type WorkspaceRef, type WorkspaceSnapshot, type WorkspaceStandards } from './core/types.ts'
 import { contextPresetConfig } from './core/contextPreset.ts'
-import { parseCustomStandard } from './core/standards.ts'
+import { defaultWorkspaceStandards, parseCustomStandard } from './core/standards.ts'
 import { parseWorkspaceRef } from './core/validate.ts'
 import { STORE_FILE } from './invariant.ts'
 
@@ -161,7 +161,7 @@ function parseWorkspace(raw: unknown): Workspace | undefined {
 function makeDefaultWorkspace(directories: readonly WorkspaceRef[] = []): Workspace {
   const now = Date.now()
   const preset = contextPresetConfig('balanced')
-  return { id: randomUUID(), name: '默认工作空间', directories: [...directories], contextPreset: 'balanced', loadMode: preset.loadMode, tokenBudget: preset.globalBudget, fileIndexBudget: preset.fileIndexBudget, commandsBudget: preset.commandsBudget, codeIndexBudget: preset.codeIndexBudget, codeIndexSummary: preset.codeIndexSummary, createdAt: now, updatedAt: now }
+  return { id: randomUUID(), name: '默认工作空间', directories: [...directories], contextPreset: 'balanced', loadMode: preset.loadMode, tokenBudget: preset.globalBudget, fileIndexBudget: preset.fileIndexBudget, commandsBudget: preset.commandsBudget, codeIndexBudget: preset.codeIndexBudget, codeIndexSummary: preset.codeIndexSummary, standards: defaultWorkspaceStandards(), createdAt: now, updatedAt: now }
 }
 
 /**
@@ -249,6 +249,8 @@ export class WorkspaceCombinerStore {
       commandsBudget: preset.commandsBudget,
       codeIndexBudget: preset.codeIndexBudget,
       codeIndexSummary: preset.codeIndexSummary,
+      // 默认启用「会话锚点边界」：锚点只存文档、代码只在项目目录。
+      standards: defaultWorkspaceStandards(),
       createdAt: now,
       updatedAt: now,
     }
@@ -256,6 +258,41 @@ export class WorkspaceCombinerStore {
       this.shape = { ...this.shape, currentWorkspaceId: ws.id, workspaces: [...this.shape.workspaces, ws] }
     })
     return ws
+  }
+
+  /**
+   * 复制工作空间：保留全部挂载目录与配置，只换名称和新 id。
+   *
+   * 刻意**不碰磁盘**——不新建、不复制任何目录。因此副本与原工作空间共享同一批
+   * 挂载目录（"只改名字，其余保持一致"），适合同一批代码开多个互不干扰的会话。
+   * @param sourceId - 被复制的工作空间 id。
+   * @param name - 副本名称（调用方负责查重）。
+   * @returns 新建的副本；副本会成为当前工作空间。
+   */
+  async duplicateWorkspace(sourceId: string, name: string): Promise<Workspace> {
+    await this.ready
+    const now = Date.now()
+    let copy: Workspace | undefined
+    await this.mutate(() => {
+      const source = this.shape.workspaces.find(w => w.id === sourceId)
+      if (source === undefined) return
+      copy = {
+        ...source,
+        id: randomUUID(),
+        name,
+        // 深拷贝目录：副本之后改 access / group / note 不能牵动原工作空间。
+        directories: normalizeDirectories(source.directories.map(d => ({ ...d }))),
+        createdAt: now,
+        updatedAt: now,
+      }
+      this.shape = {
+        ...this.shape,
+        currentWorkspaceId: copy.id,
+        workspaces: [...this.shape.workspaces, copy],
+      }
+    })
+    if (copy === undefined) throw new Error(`workspace not found: ${sourceId}`)
+    return copy
   }
 
   /** 重命名工作空间（未知 id 不写盘）。 */

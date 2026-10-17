@@ -9,12 +9,17 @@ import { Fragment, useCallback, useEffect, useMemo, useState, type ChangeEvent, 
 import type { PanelIconProps, WorkspaceCombinerPanelProps } from '../types.ts'
 import type { CodeIndexConfidence, CodeIndexEntry, DirectoryAccess, GitStatus, LoadMode, Workspace, WorkspaceMode, WorkspaceRef } from '../../core/types.ts'
 import { useWorkspaceCombiner, DEFAULT_TOKEN_BUDGET } from './controller.ts'
+import { deriveDefaultBasePath } from './defaults.ts'
+import { summarizeDuplicateSource } from './duplicateSummary.ts'
+import { tokenText } from './tokenFormat.ts'
+import { estimateTokens } from '../../core/fileTree.ts'
+import { renderStandards, renderStandardsText } from '../../prompt.ts'
 import { injectPanelStyles } from './styles.ts'
 import { tt } from '../locales.ts'
 import { GROUP_CLASS, GROUP_KINDS, dirTypeSquare, groupKindOf, groupLabel } from './groups.ts'
 import { ConfirmModal } from './ConfirmModal.tsx'
 import { Dialog } from './Dialog.tsx'
-import { NumberInput } from './NumberInput.tsx'
+import { BudgetLevelPicker } from './BudgetLevelPicker.tsx'
 import { NewWorkspaceWizard } from './NewWorkspaceWizard.tsx'
 import { StandardsModal } from './StandardsModal.tsx'
 import { AdvancedModal } from './AdvancedModal.tsx'
@@ -154,6 +159,56 @@ function RenameWorkspaceModal({ ws, onConfirm, onClose }: {
   )
 }
 
+/** 复制工作空间弹窗：只改名称，挂载目录与配置原样保留。 */
+function DuplicateWorkspaceModal({ ws, onConfirm, onClose }: {
+  ws: Workspace
+  onConfirm: (name: string) => void
+  onClose: () => void
+}): ReactElement {
+  const [name, setName] = useState(tt('wsDuplicateDefault', { name: ws.name }))
+  const submit = (): void => { const trimmed = name.trim(); if (trimmed !== '') onConfirm(trimmed) }
+
+  // 逐条列出「会复制什么」，避免用户以为会把磁盘文件和会话一起复制。
+  const summary = summarizeDuplicateSource(ws)
+  const presetLabel = summary.contextPreset === 'economy' ? tt('contextPresetEconomy')
+    : summary.contextPreset === 'balanced' ? tt('contextPresetBalanced')
+      : summary.contextPreset === 'deep' ? tt('contextPresetDeep')
+        : tt('contextPresetCustom')
+  const modeLabel = summary.mode === 'single' ? tt('wsModeSingle') : tt('wsModeAnchor')
+  const loadLabel = summary.loadMode === 'tree' ? tt('loadModeTree')
+    : summary.loadMode === 'full' ? tt('loadModeFull')
+      : tt('loadModeSummary')
+  const rows: string[] = [
+    tt('wsDuplicateRowDirs', { n: summary.directoryCount, primary: summary.primaryPath }),
+    ...(summary.readonlyCount > 0 ? [tt('wsDuplicateRowReadonly', { n: summary.readonlyCount })] : []),
+    tt('wsDuplicateRowMode', { mode: modeLabel, load: loadLabel }),
+    tt('wsDuplicateRowBudget', { preset: presetLabel, budget: summary.tokenBudget === undefined ? tt('wsDuplicateBudgetUnset') : String(summary.tokenBudget) }),
+    ...(summary.commandCount > 0 ? [tt('wsDuplicateRowCommands', { n: summary.commandCount })] : []),
+    ...(summary.standardsCount > 0 ? [tt('wsDuplicateRowStandards', { n: summary.standardsCount })] : []),
+    ...(summary.snapshotCount > 0 ? [tt('wsDuplicateRowSnapshots', { n: summary.snapshotCount })] : []),
+  ]
+
+  return (
+    <Dialog title={tt('wsDuplicateTitle')} onClose={onClose}>
+      <label className="wcb-field">
+        <span>{tt('wsCreateName')}</span>
+        <input className="wcb-input" value={name} autoFocus aria-label={tt('wsCreateName')} onChange={(event) => setName(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === 'Enter') submit() }} />
+      </label>
+      <div className="wcb-duplicate-summary">
+        <div className="wcb-label">{tt('wsDuplicateCopyList')}</div>
+        <ul className="wcb-duplicate-rows">
+          {rows.map((row, i) => <li key={i}>{row}</li>)}
+        </ul>
+        <div className="wcb-hint">{tt('wsDuplicateNotCopied')}</div>
+      </div>
+      <div className="wcb-modal-actions">
+        <button type="button" className="wcb-btn-plain" aria-label={tt('cancel')} onClick={onClose}>{tt('cancel')}</button>
+        <button type="button" className="wcb-btn-primary" aria-label={tt('wsDuplicate')} disabled={name.trim() === ''} onClick={submit}>{tt('wsDuplicate')}</button>
+      </div>
+    </Dialog>
+  )
+}
+
 /** 删除工作空间确认弹窗。 */
 function DeleteWorkspaceModal({ ws, onConfirm, onClose }: {
   ws: Workspace
@@ -185,9 +240,27 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
   const { startSession, pickDirectory, registerDshWorkspace } = props
   const state = useWorkspaceCombiner(startSession, pickDirectory, registerDshWorkspace, props.sessionCount ?? 0)
 
+  // 开发规范的 token 数：直接由生效分组本地计算，和「开发规范」弹窗用同一套函数，
+  // 不再依赖异步的 contextStats（那会让卡片头在加载完成前显示 0 token）。
+  const standardsSize = useMemo(() => {
+    const groups = state.standardGroups
+    if (groups.length === 0) return null
+    return {
+      content: estimateTokens(renderStandardsText(groups)),
+      injected: estimateTokens(renderStandards(groups, state.standardsBudget)),
+    }
+  }, [state.standardGroups, state.standardsBudget])
+
+  // 新建向导的默认保存位置：上次用过的位置 > 当前工作空间主目录的父目录 > 任一工作空间。
+  // 这样多数情况下不必再点「选择文件夹」。
+  const defaultBasePath = useMemo(
+    () => deriveDefaultBasePath(state.workspaces, state.currentWorkspaceId),
+    [state.workspaces, state.currentWorkspaceId],
+  )
   const [wizardOpen, setWizardOpen] = useState(false)
   const [renameTarget, setRenameTarget] = useState<Workspace | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null)
+  const [duplicateTarget, setDuplicateTarget] = useState<Workspace | null>(null)
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [dirsOpen, setDirsOpen] = useState(true)
@@ -322,6 +395,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
         </div>
         {wizardOpen ? (
           <NewWorkspaceWizard
+            defaultBasePath={defaultBasePath}
             pickDirectory={pickDirectory}
             onClose={() => setWizardOpen(false)}
             onCreate={(name, basePath, directories, mode) => { state.createWorkspace(name, basePath, directories, mode); setWizardOpen(false) }}
@@ -413,6 +487,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                         {ws.id === state.currentWorkspaceId ? <span className="wcb-pill wcb-pill-current">{tt('wsCurrent')}</span> : null}
                         <span className="wcb-ws-time">{formatLastUsed(ws.lastSessionAt)}</span>
                         <span className="wcb-ws-tools">
+                          <button type="button" className="wcb-iconbtn" title={tt('wsDuplicate')} aria-label={tt('wsDuplicate')} onClick={(event) => { event.stopPropagation(); setDuplicateTarget(ws) }}>⧉</button>
                           <button type="button" className="wcb-iconbtn" title={tt('wsRename')} aria-label={tt('wsRename')} onClick={(event) => { event.stopPropagation(); setRenameTarget(ws) }}>✎</button>
                           <button type="button" className="wcb-iconbtn wcb-iconbtn-danger" title={tt('wsDelete')} aria-label={tt('wsDelete')} onClick={(event) => { event.stopPropagation(); setDeleteTarget(ws) }}>✕</button>
                         </span>
@@ -473,7 +548,13 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
               <span className="wcb-badge" style={{ marginLeft: 2 }}>
                 {state.standardGroups.length > 0 ? tt('standardsGroups', { n: state.standardGroups.length }) : tt('standardsNone')}
               </span>
-              {state.standardGroups.length > 0 ? <span className="wcb-label" style={{ margin: 0, marginLeft: 'auto' }}>{'~' + (state.contextStats?.standardsTokens ?? 0) + ' t'}</span> : null}
+              {standardsSize === null ? null : (
+                <span className="wcb-label" style={{ margin: 0, marginLeft: 'auto' }} title={tt('standardsTokensHint')}>
+                  {state.standardsBudget > 0
+                    ? tokenText(standardsSize.injected) + ' / ' + tokenText(state.standardsBudget)
+                    : tokenText(standardsSize.content) + ' · ' + tt('budgetOnDemand')}
+                </span>
+              )}
             </div>
           </section>
 
@@ -702,7 +783,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
                   {tt('codeIndexToggle')}
                 </label>
                 <span className="wcb-label" style={{ margin: 0 }}>{tt('codeIndexBudget')}</span>
-                <NumberInput value={state.codeIndexBudget} onCommit={state.setCodeIndexBudget} min={0} disabled={!state.codeIndexEnabled} label={tt('codeIndexBudgetHint')} title={tt('codeIndexBudgetHint')} />
+                <BudgetLevelPicker block="codeIndex" value={state.codeIndexBudget} onChange={state.setCodeIndexBudget} disabled={!state.codeIndexEnabled} title={tt('codeIndexBudget')} />
                 <span className="wcb-label" style={{ margin: 0 }}>{tt('codeIndexSummaryLabel')}</span>
                 <select className="wcb-input" style={{ width: 'auto' }} value={state.codeIndexSummary} disabled={!state.codeIndexEnabled} aria-label={tt('codeIndexSummaryLabel')} onChange={(event: ChangeEvent<HTMLSelectElement>) => state.setCodeIndexSummary(event.currentTarget.value === 'llm' ? 'llm' : 'off')}>
                   <option value="off">{tt('codeIndexSummaryOff')}</option>
@@ -826,6 +907,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
 
       {wizardOpen ? (
         <NewWorkspaceWizard
+          defaultBasePath={defaultBasePath}
           pickDirectory={pickDirectory}
           onClose={() => setWizardOpen(false)}
           onCreate={(name, basePath, directories, mode) => { state.createWorkspace(name, basePath, directories, mode); setWizardOpen(false) }}
@@ -856,6 +938,9 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
       ) : null}
       {deleteTarget !== null ? (
         <DeleteWorkspaceModal ws={deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={() => { state.deleteWorkspace(deleteTarget.id); setDeleteTarget(null) }} />
+      ) : null}
+      {duplicateTarget !== null ? (
+        <DuplicateWorkspaceModal ws={duplicateTarget} onClose={() => setDuplicateTarget(null)} onConfirm={(name) => { state.duplicateWorkspace(duplicateTarget.id, name); setDuplicateTarget(null) }} />
       ) : null}
       {advOpen ? (
         <AdvancedModal state={state} currentWs={currentWs} onClose={() => setAdvOpen(false)} />

@@ -329,8 +329,10 @@ export interface ContextStats {
   fileIndexTokens: number
   /** 目录清单 + 规则等固定开销估算 token 数（不含功能索引与命令区块）。 */
   promptOverheadTokens: number
-  /** 开发规范区块估算 token 数。 */
+  /** 开发规范区块估算 token 数（已按预算截断，= 实际注入量）。 */
   standardsTokens: number
+  /** 开发规范正文的完整估算 token 数（不受预算影响；按需时用它告诉用户"规范有多大"）。 */
+  standardsContentTokens: number
   /** 功能/接口索引区块估算 token 数。 */
   codeIndexTokens: number
   /** 各项目常用命令区块估算 token 数。 */
@@ -395,4 +397,16 @@ export interface EndpointImpact {
   counterpartDir?: string
   /** 对端落点（服务端或客户端）。 */
   counterpart?: CodeIndexLoc
+}
+
+/** 删除工作空间时，DSH 左侧栏对应工作区的清理结果。 */
+export interface DshRetiredWorkspace {
+  /** 被归档的会话 id。 */
+  readonly archived: readonly string[]
+  /** 归档失败的会话 id（仍在运行等）。 */
+  readonly failed: readonly string[]
+  /** 该工作区条目是否已从 DSH 左侧栏移除。 */
+  readonly removed: boolean
+  /** 对应的目录路径。 */
+  readonly path: string
 }

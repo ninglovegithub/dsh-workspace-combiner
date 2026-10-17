@@ -10,23 +10,28 @@ import type { DetectedProject, LoadMode, WorkspaceMode, WorkspaceRef } from '../
 import { DEFAULT_WORKSPACE_NAME } from '../../invariant.ts'
 import { WorkspaceCombinerApi } from '../api.ts'
 import { tt } from '../locales.ts'
+import { joinPath, rememberBasePath } from './defaults.ts'
 import { Dialog } from './Dialog.tsx'
 import { groupKindOf, groupLabel } from './groups.ts'
+import { sanitizeWorkspaceName } from './naming.ts'
 import { TypeBadge } from './typeBadge.tsx'
 
 interface NewWorkspaceWizardProps {
+  /** 预填的主目录保存位置（上次用过 / 由现有工作空间推导）；空串表示没有可用的默认值。 */
+  defaultBasePath?: string
   pickDirectory: () => Promise<string | null>
   onClose: () => void
   onCreate: (name: string, basePath: string, directories: readonly WorkspaceRef[], mode: WorkspaceMode, loadMode: LoadMode) => void
 }
 
-export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWorkspaceWizardProps): ReactElement {
+export function NewWorkspaceWizard({ defaultBasePath = '', pickDirectory, onClose, onCreate }: NewWorkspaceWizardProps): ReactElement {
   const apiRef = useRef<WorkspaceCombinerApi | null>(null)
   if (apiRef.current === null) apiRef.current = new WorkspaceCombinerApi()
 
   const [step, setStep] = useState<1 | 2 | 3>(1)
   const [name, setName] = useState('')
-  const [basePath, setBasePath] = useState('')
+  // 预填默认保存位置：多数情况直接「下一步」即可，不必每次点选择文件夹。
+  const [basePath, setBasePath] = useState(defaultBasePath)
   const [scanPath, setScanPath] = useState('')
   const [scanning, setScanning] = useState(false)
   const [projects, setProjects] = useState<readonly DetectedProject[]>([])
@@ -40,7 +45,12 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
 
   const pickBase = (): void => {
     void pickDirectory()
-      .then(path => { if (path !== null && path.trim() !== '') setBasePath(path.trim()) })
+      .then(path => {
+        const trimmed = path?.trim() ?? ''
+        if (trimmed === '') return
+        setBasePath(trimmed)
+        rememberBasePath(trimmed)
+      })
       .catch(() => {})
   }
 
@@ -94,6 +104,9 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
   const toggleAll = (): void => setChecked(allChecked ? new Set() : new Set(projects.map(p => p.root)))
 
   const finalName = name.trim() === '' ? DEFAULT_WORKSPACE_NAME : name.trim()
+  // 预览用：名称会先做规范化（去掉非法字符），再作为文件夹名。
+  const sanitizedName = sanitizeWorkspaceName(finalName)
+  const folderName = sanitizedName === '' ? finalName : sanitizedName
   const selected = projects.filter(p => checked.has(p.root))
   const suggestedLoadMode: LoadMode = selected.length > 0 && selected.length <= 4 ? 'tree' : 'summary'
   // 识别出的项目顺带带上自动分组、访问模式与真实脚本命令；创建后仍可逐项修改。
@@ -129,9 +142,19 @@ export function NewWorkspaceWizard({ pickDirectory, onClose, onCreate }: NewWork
               <span>{tt('wizardBaseDir')}</span>
               <div className="wcb-add-row">
                 <button type="button" className="wcb-btn" onClick={pickBase}>{tt('wizardPickFolder')}</button>
-                <div className="wcb-pathbox">{basePath === '' ? tt('wizardBaseEmpty') : basePath}</div>
+                <input
+                  className="wcb-input"
+                  value={basePath}
+                  placeholder={tt('wizardBaseEmpty')}
+                  aria-label={tt('wizardBaseDir')}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => setBasePath(event.currentTarget.value)}
+                  onBlur={() => rememberBasePath(basePath)}
+                />
               </div>
             </label>
+            {basePath.trim() === '' ? null : (
+              <div className="wcb-hint">{tt('wizardMainDirPreview', { path: joinPath(basePath, folderName) })}</div>
+            )}
             <div>
               <div className="wcb-label">{tt('wsModeLabel')}</div>
               <div className="wcb-tabs" role="tablist" aria-label={tt('wsModeLabel')}>

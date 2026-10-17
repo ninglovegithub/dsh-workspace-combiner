@@ -117,9 +117,11 @@ export async function computeContextStats(input: ContextStatsInput): Promise<Con
   })
   const fileIndexTokens = estimateTokens(renderFileIndex(fileEntries, loadMode, rendered.effectiveBudgets.fileIndex))
   const standardsTokens = estimateTokens(renderStandards(standardGroups, rendered.effectiveBudgets.standards))
+  // 完整正文（不按预算截断）：按需模式下 standardsTokens 为 0，界面要能显示"规范有多大"。
+  const standardsContentTokens = estimateTokens(standardsText)
   const codeIndexTokens = estimateTokens(renderCodeIndex(codeEntries, rendered.effectiveBudgets.codeIndex))
   const commandsTokens = estimateTokens(renderCommands(directories, rendered.effectiveBudgets.commands))
   const totalTokens = estimateTokens(rendered.text)
   const promptOverheadTokens = Math.max(0, totalTokens - fileIndexTokens - codeIndexTokens - standardsTokens - commandsTokens)
-  return { preset, loadMode, directories: stats, totalFiles, totalDirs, fileIndexTokens, promptOverheadTokens, standardsTokens, codeIndexTokens, commandsTokens, totalTokens, globalBudget, degradations: rendered.degradations }
+  return { preset, loadMode, directories: stats, totalFiles, totalDirs, fileIndexTokens, promptOverheadTokens, standardsTokens, codeIndexTokens, commandsTokens, totalTokens, globalBudget, degradations: rendered.degradations, standardsContentTokens }
 }

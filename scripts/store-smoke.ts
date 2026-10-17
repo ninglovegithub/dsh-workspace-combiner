@@ -98,4 +98,60 @@ const file = join(dir, 'dsh-workspace-combiner.json')
   console.log('corrupt store quarantine and write refusal OK')
 }
 
+// ------------------------------------------- 5) 复制工作空间：只改名字
+{
+  const dupFile = join(dir, 'duplicate.json')
+  const store = new WorkspaceCombinerStore(dupFile)
+  const source = await store.createWorkspace('源工作空间', '备注保留', [
+    { id: 'a', name: 'primary', path: '/work/main' },
+    { id: 'b', name: 'svc', path: '/work/svc', access: 'readonly', group: 'backend' },
+  ], 'single', 'tree')
+  await store.patchMeta(source.id, { tokenBudget: 1234, contextPreset: 'deep' })
+
+  const before = await store.getState()
+  const beforeSource = before.workspaces.find(w => w.id === source.id)
+  assert.ok(beforeSource !== undefined, 'source must exist before duplication')
+
+  const copy = await store.duplicateWorkspace(source.id, '副本工作空间')
+  assert.notEqual(copy.id, source.id, 'the copy must get a fresh id')
+  assert.equal(copy.name, '副本工作空间', 'the copy carries the new name')
+  assert.equal(copy.remark, source.remark, 'remark is copied')
+  assert.equal(copy.mode, source.mode, 'mode is copied')
+  assert.equal(copy.loadMode, source.loadMode, 'loadMode is copied')
+  assert.equal(copy.tokenBudget, 1234, 'budgets are copied, not reset to the preset default')
+  assert.equal(copy.contextPreset, 'deep', 'context preset is copied')
+  assert.deepEqual(
+    copy.directories.map(d => ({ path: d.path, isPrimary: d.isPrimary, access: d.access, group: d.group })),
+    source.directories.map(d => ({ path: d.path, isPrimary: d.isPrimary, access: d.access, group: d.group })),
+    'mounted directories must be identical (path, order, primary flag, access, group)',
+  )
+
+  const after = await store.getState()
+  assert.equal(after.workspaces.length, before.workspaces.length + 1, 'exactly one workspace is added')
+  assert.equal(after.currentWorkspaceId, copy.id, 'the copy becomes the current workspace')
+  const afterSource = after.workspaces.find(w => w.id === source.id)
+  assert.deepEqual(afterSource?.directories, beforeSource.directories, 'the source workspace must stay untouched')
+  assert.equal(afterSource?.name, '源工作空间', 'the source keeps its own name')
+
+  // 目录对象必须是深拷贝：改副本不能牵动源工作空间。
+  copy.directories[0].access = 'readonly'
+  const reloaded = await store.getState()
+  assert.equal(
+    reloaded.workspaces.find(w => w.id === source.id)?.directories[0]?.access,
+    'readwrite',
+    'mutating the copy must not leak into the source',
+  )
+
+  // 持久化后仍可读回（不是只改了内存）。
+  const reopened = new WorkspaceCombinerStore(dupFile)
+  const persisted = await reopened.getState()
+  assert.ok(persisted.workspaces.some(w => w.id === copy.id), 'the copy must be persisted to disk')
+
+  // 源不存在时必须报错，而不是悄悄建一个空工作空间。
+  let missingRejected = false
+  await store.duplicateWorkspace('no-such-id', 'x').catch(() => { missingRejected = true })
+  assert.equal(missingRejected, true, 'duplicating an unknown workspace must fail loudly')
+  console.log('duplicate workspace: new id/name, identical directories, copied config, source untouched OK')
+}
+
 console.log('store smoke: first run, normalization, cross-process merge and corruption safety OK')

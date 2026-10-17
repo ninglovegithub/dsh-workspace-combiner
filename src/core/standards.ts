@@ -198,10 +198,55 @@ const API_CONTRACT: StandardPreset = {
   ].join('\n'),
 }
 
-/** 内置规范（v1 共 7 条）。 */
+/**
+ * 会话锚点边界。
+ *
+ * 锚点（第一条挂载目录 / 主目录）只读写非代码类文件；插件创建的会话产出的文档
+ * 一律落锚点，代码只在代码项目目录里读写。新工作空间默认启用这条规范，
+ * 用户可在「开发规范」弹窗里自行关闭（见 {@link defaultWorkspaceStandards}）。
+ */
+const ANCHOR_BOUNDARY: StandardPreset = {
+  id: 'anchor-boundary',
+  name: '会话锚点边界',
+  tech: '通用',
+  summary: '锚点只读写文档、代码只在项目目录；插件会话的产出默认写入锚点',
+  version: 1,
+  body: [
+    '- 会话锚点指本工作空间的第一条挂载目录（主目录），它只用于读写**非代码类文件**：方案、报告、说明、笔记、清单、图表，以及导出的 Word/PDF/表格/图片等',
+    '- 由本插件创建的会话，产生的文档一律保存到会话锚点目录内；禁止在代码项目目录里新建或修改文档',
+    '- 反过来同样成立：会话锚点里不写代码（源码、脚本、构建/部署配置、依赖清单等），代码只读写代码项目目录',
+    '- 写文档需要读代码时，从代码项目目录只读源码，产出仍写入会话锚点',
+    '- 不要在代码项目目录与会话锚点之间搬运文档；确需移动或改名时先向用户确认',
+    '- 锚点内按主题建子目录、用可读的文件名，命名含日期时用 YYYY-MM-DD，便于回溯',
+    '- 临时文件与中间产物写到系统临时目录，不要落在锚点或代码目录里',
+    '- 判断不清某文件算「文档」还是「代码」时先问用户，不要擅自决定落盘位置；用户明确指定位置时以用户为准',
+  ].join('\n'),
+}
+
+/** 内置规范（v1 共 8 条）。 */
 export const BUILTIN_STANDARDS: readonly StandardPreset[] = [
-  GENERAL, JAVA_SPRING, VUE3, REACT, PYTHON, GO, API_CONTRACT,
+  GENERAL, ANCHOR_BOUNDARY, JAVA_SPRING, VUE3, REACT, PYTHON, GO, API_CONTRACT,
 ]
+
+/** 新工作空间默认启用的规范 id（可在「开发规范」里逐个关掉）。 */
+export const DEFAULT_STANDARD_IDS: readonly string[] = ['anchor-boundary']
+
+/**
+ * 默认规范预算（token）。
+ *
+ * 必须显式给值：`balanced` / `economy` 预设的规范预算是 0，而预算 0 表示
+ * 「规范不常驻上下文」——那样默认打开的规范等于没打开。800 足够放下
+ * 「会话锚点边界」（约 350 token）并给用户追加的规范留出余量。
+ */
+export const DEFAULT_STANDARD_BUDGET = 800
+
+/**
+ * 新工作空间的默认规范绑定：启用「会话锚点边界」并给出能真正注入的预算。
+ * @returns 每次都是新对象——避免多个工作空间共享同一个可变数组。
+ */
+export function defaultWorkspaceStandards(): WorkspaceStandards {
+  return { global: [...DEFAULT_STANDARD_IDS], budget: DEFAULT_STANDARD_BUDGET }
+}
 
 /** 按项目类型找匹配的内置规范。 */
 export function matchPresetForType(type: ProjectType | undefined): StandardPreset | undefined {

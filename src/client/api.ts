@@ -6,7 +6,7 @@
 
 import { API } from '../invariant.ts'
 import { tt } from './locales.ts'
-import type { CodeIndexEntry, ContextPreset, ContextStats, DetectedProject, DiagnosticAction, DiagnosticReport, EndpointImpact, GitStatus, LoadMode, TokenUsageReport, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceStandards } from '../core/types.ts'
+import type { CodeIndexEntry, ContextPreset, ContextStats, DetectedProject, DiagnosticAction, DiagnosticReport, DshRetiredWorkspace, EndpointImpact, GitStatus, LoadMode, TokenUsageReport, Workspace, WorkspaceMode, WorkspaceRef, WorkspaceStandards } from '../core/types.ts'
 import type { StandardsLibrary } from '../core/standards.ts'
 import type { FileTreeNode } from '../core/fileTree.ts'
 import type { SessionTask } from '../core/task.ts'
@@ -83,6 +83,18 @@ export class WorkspaceCombinerApi {
     })
   }
 
+  /**
+   * 复制工作空间：只改名称，挂载目录与配置原样保留（宿主不创建任何目录）。
+   * @param sourceId - 被复制的工作空间 id。
+   * @param name - 副本名称。
+   */
+  async duplicateWorkspace(sourceId: string, name: string): Promise<{ workspace: Workspace; currentWorkspaceId: string } & MutationResult> {
+    return await request<{ workspace: Workspace; currentWorkspaceId: string }>(API.workspaceDuplicate, {
+      method: 'POST',
+      body: JSON.stringify({ sourceId, name }),
+    })
+  }
+
   /** 扫描目录，识别其中的代码项目（java / vue / react / python / go 等）。 */
   async scan(path: string): Promise<DetectedProject[]> {
     const body = await request<{ projects: DetectedProject[] }>(API.scan, {
@@ -100,9 +112,12 @@ export class WorkspaceCombinerApi {
     })
   }
 
-  /** 删除工作空间；返回删除后的当前工作空间 id。 */
-  async deleteWorkspace(id: string): Promise<{ currentWorkspaceId: string } & MutationResult> {
-    return await request<{ ok: boolean; currentWorkspaceId: string } & MutationResult>(API.workspaceDelete, {
+  /**
+   * 删除工作空间；返回删除后的当前工作空间 id。
+   * `dshRetired` 是宿主顺带清理 DSH 左侧栏的结果（归档的会话数 + 是否移除工作区条目）。
+   */
+  async deleteWorkspace(id: string): Promise<{ currentWorkspaceId: string; dshRetired?: readonly DshRetiredWorkspace[] } & MutationResult> {
+    return await request<{ ok: boolean; currentWorkspaceId: string; dshRetired?: DshRetiredWorkspace[] } & MutationResult>(API.workspaceDelete, {
       method: 'POST',
       body: JSON.stringify({ id }),
     })

@@ -142,6 +142,8 @@ export interface WorkspaceCombinerState {
   /** 把最新配置刷新进某个会话（下一轮请求生效）。 */
   refreshSession(sessionId: string): void
   createWorkspace(name: string, basePath: string, directories: readonly WorkspaceRef[], mode?: WorkspaceMode, loadMode?: LoadMode): void
+  /** 复制工作空间：只改名称，挂载目录与配置保持一致。 */
+  duplicateWorkspace(id: string, name: string): void
   renameWorkspace(id: string, name: string): void
   deleteWorkspace(id: string): void
   pickAndAddDirectory(): void
@@ -662,6 +664,27 @@ export function useWorkspaceCombiner(
       .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
   }, [workspaces, notifySandbox, registerDshWorkspace, showToast])
 
+  const duplicateWorkspace = useCallback((id: string, name: string): void => {
+    const base = sanitizeWorkspaceName(name)
+    if (base === '') {
+      showToast(tt('nameRequired'), 'error')
+      return
+    }
+    const finalName = checkWorkspaceNameDuplicate(base, undefined, workspaces)
+    const api = apiRef.current
+    if (api === null) return
+    void api.duplicateWorkspace(id, finalName)
+      .then(({ workspace, currentWorkspaceId: curId, sandboxSynced }) => {
+        setWorkspaces(prev => [...prev, workspace])
+        setCurrentWorkspaceId(curId)
+        // 主目录路径与源工作空间相同：registerDshWorkspace 是 get-or-create，重复注册无副作用。
+        if (workspace.directories[0]?.path !== undefined) void registerDshWorkspace(workspace.directories[0].path)
+        showToast(tt('wsDuplicatedNamed', { name: finalName }))
+        notifySandbox({ sandboxSynced })
+      })
+      .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
+  }, [workspaces, notifySandbox, registerDshWorkspace, showToast])
+
   const renameWorkspace = useCallback((id: string, name: string): void => {
     const base = sanitizeWorkspaceName(name)
     if (base === '') {
@@ -680,11 +703,17 @@ export function useWorkspaceCombiner(
     const api = apiRef.current
     if (api === null) return
     void api.deleteWorkspace(id)
-      .then(({ currentWorkspaceId: nextId, sandboxSynced }) => {
+      .then(({ currentWorkspaceId: nextId, sandboxSynced, dshRetired }) => {
         setWorkspaces(prev => prev.filter(w => w.id !== id))
         setCurrentWorkspaceId(nextId)
         setSessionsOpenId(prev => prev === id ? null : prev)
         showToast(tt('wsDeleted'))
+        // DSH 侧顺带清理的结果：有归档/移除才提示，避免噪声。
+        const archived = (dshRetired ?? []).reduce((sum, item) => sum + item.archived.length, 0)
+        const removed = (dshRetired ?? []).filter(item => item.removed).length
+        const failed = (dshRetired ?? []).reduce((sum, item) => sum + item.failed.length, 0)
+        if (archived > 0 || removed > 0) showToast(tt('wsDshRetired', { archived, workspaces: removed }))
+        if (failed > 0) showToast(tt('wsDshRetireFailed', { n: failed }), 'error')
         notifySandbox({ sandboxSynced })
       })
       .catch(error => showToast(tt('saveFailed', { error: errText(error) }), 'error'))
@@ -1234,6 +1263,7 @@ export function useWorkspaceCombiner(
     setPreviewOpen,
     switchWorkspace,
     createWorkspace,
+    duplicateWorkspace,
     renameWorkspace,
     deleteWorkspace,
     pickAndAddDirectory,

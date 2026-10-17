@@ -27,6 +27,8 @@ import { loadModeMaxDepth, type DiagnosticAction, type LoadMode, type TokenUsage
 import { parseSessionTask, type SessionTask } from './core/task.ts'
 import { resolveWorkspaceContext } from './core/contextPreset.ts'
 import { buildDiagnosticReport } from './host/diagnostics.ts'
+import { retireDshWorkspace, type DshRetireResult, type DshWorkspaceRegistry } from './host/dshWorkspaces.ts'
+import { pathKey } from './sandbox-sync.ts'
 
 /** loopback 字面量 + 浏览器同源标记（dsh-ssh 配对路由栅栏）。 */
 function isLoopbackRequest(request: IncomingMessage): boolean {
@@ -135,6 +137,15 @@ export interface TokenUsageDeps {
  * @param store - 持久化存储。
  * @param usage - token 用量观测与工作空间会话映射。
  */
+/** 惰性读取 workspaceRegistry：服务缺失时返回 undefined，不影响插件自身功能。 */
+function dshWorkspaceRegistry(ctx: Context): DshWorkspaceRegistry | undefined {
+  try {
+    return ctx.get('workspaceRegistry') as DshWorkspaceRegistry | undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileIndexCache: FileIndexCache, codeIndexCache: CodeIndexCache, summaryCache: FeatureSummaryCache, standardsLibrary: StandardsLibraryStore, usage: TokenUsageDeps): WebRoute[] {
   const guard = (req: IncomingMessage, res: ServerResponse, method: string): boolean => {
     if (!isLoopbackRequest(req)) {
@@ -173,7 +184,7 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
 
   const contextStatsOf = async () => {
     const ws = await store.getCurrentWorkspace()
-    if (ws === undefined) return { preset: 'custom' as const, loadMode: 'summary' as const, directories: [], totalFiles: 0, totalDirs: 0, fileIndexTokens: 0, promptOverheadTokens: 0, standardsTokens: 0, codeIndexTokens: 0, commandsTokens: 0, totalTokens: 0, globalBudget: DEFAULT_TOKEN_BUDGET, degradations: [] }
+    if (ws === undefined) return { preset: 'custom' as const, loadMode: 'summary' as const, directories: [], totalFiles: 0, totalDirs: 0, fileIndexTokens: 0, promptOverheadTokens: 0, standardsTokens: 0, standardsContentTokens: 0, codeIndexTokens: 0, commandsTokens: 0, totalTokens: 0, globalBudget: DEFAULT_TOKEN_BUDGET, degradations: [] }
     const context = resolveWorkspaceContext(ws)
     const codeIndexEnabled = ws.codeIndexEnabled ?? true
     const summaries = codeIndexEnabled ? await summaryCache.get(codeIndexSignature((await codeIndexCache.get(ws.directories)).entries)) : undefined
@@ -264,6 +275,43 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         }
       },
     },
+    // ------------------------------------------------------ workspace-duplicate
+    {
+      kind: 'exact',
+      path: API.workspaceDuplicate,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        const sourceId = typeof body.sourceId === 'string' ? body.sourceId.trim() : ''
+        const name = typeof body.name === 'string' ? body.name.trim() : ''
+        if (sourceId === '' || name === '') {
+          writeJson(res, 400, { error: 'sourceId and name are required' })
+          return
+        }
+        try {
+          const before = await store.getState()
+          const source = before.workspaces.find(w => w.id === sourceId)
+          if (source === undefined) {
+            writeJson(res, 404, { error: 'workspace not found' })
+            return
+          }
+          if (before.workspaces.some(w => w.name === name)) {
+            writeJson(res, 409, { error: 'workspace name already exists' })
+            return
+          }
+          // 复制只改名称与 id：不创建也不复制任何目录，挂载目录与原工作空间完全一致。
+          const workspace = await store.duplicateWorkspace(sourceId, name)
+          const sandboxSynced = await syncCurrent()
+          writeJson(res, 201, { workspace, currentWorkspaceId: workspace.id, sandboxSynced })
+        } catch (error) {
+          fail(res, error)
+        }
+      },
+    },
     // ---------------------------------------------------------- scan
     {
       kind: 'exact',
@@ -320,9 +368,25 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         }
         try {
           if (!(await guardWorkspace(res, id))) return
+          const before = await store.getState()
+          const target = before.workspaces.find(w => w.id === id)
           const nextCurrent = await store.deleteWorkspace(id)
           const sandboxSynced = await syncCurrent()
-          writeJson(res, 200, { ok: true, currentWorkspaceId: nextCurrent, sandboxSynced })
+
+          // DSH 侧清理：归档该工作区的会话并移除工作区条目。
+          // 只处理「删除后已没有任何插件工作空间再用」的目录——复制出来的副本会共享目录。
+          const registry = dshWorkspaceRegistry(ctx)
+          const stillUsed = new Set(
+            (await store.getState()).workspaces.flatMap(w => w.directories.map(d => pathKey(d.path))),
+          )
+          const dshRetired: DshRetireResult[] = []
+          for (const directory of target?.directories ?? []) {
+            if (stillUsed.has(pathKey(directory.path))) continue
+            const result = await retireDshWorkspace(registry, directory.path)
+            if (result.archived.length > 0 || result.removed) dshRetired.push(result)
+          }
+
+          writeJson(res, 200, { ok: true, currentWorkspaceId: nextCurrent, sandboxSynced, dshRetired })
         } catch (error) {
           fail(res, error)
         }

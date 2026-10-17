@@ -41,6 +41,7 @@ export const STORE_FILE = 'dsh-workspace-combiner.json'
 export const API = {
   state: '/api/dsh-workspace-combiner/state',
   workspaceCreate: '/api/dsh-workspace-combiner/workspace-create',
+  workspaceDuplicate: '/api/dsh-workspace-combiner/workspace-duplicate',
   workspaceRename: '/api/dsh-workspace-combiner/workspace-rename',
   workspaceDelete: '/api/dsh-workspace-combiner/workspace-delete',
   workspaceSwitch: '/api/dsh-workspace-combiner/workspace-switch',

@@ -6,12 +6,14 @@
 
 import { useMemo, useRef, useState, type ChangeEvent, type ReactElement } from 'react'
 import type { WorkspaceRef, WorkspaceStandards } from '../../core/types.ts'
-import { BUILTIN_STANDARDS, type StandardsLibrary } from '../../core/standards.ts'
+import { BUILTIN_STANDARDS, resolveStandardGroups, type StandardsLibrary } from '../../core/standards.ts'
+import { renderStandards, renderStandardsText } from '../../prompt.ts'
 import { estimateTokens } from '../../core/fileTree.ts'
 import { DEFAULT_STANDARDS_BUDGET } from '../../invariant.ts'
 import { tt } from '../locales.ts'
 import { Dialog } from './Dialog.tsx'
-import { NumberInput } from './NumberInput.tsx'
+import { BudgetLevelPicker } from './BudgetLevelPicker.tsx'
+import { tokenText } from './tokenFormat.ts'
 
 interface StandardsModalProps {
   standards: WorkspaceStandards
@@ -167,10 +169,16 @@ export function StandardsModal({ standards, library, directories, onSaveWorkspac
   // 严格查找：`?? rows[0]` 会让 selectedId 失效时标题显示 A、编辑实际写到 B。
   const selected = rows.find(row => row.id === selectedId)
   const budget = draftWs.budget ?? DEFAULT_STANDARDS_BUDGET
-  const totalTokens = activeIds.reduce((sum, id) => {
-    const row = rows.find(item => item.id === id)
-    return sum + (row === undefined ? 0 : tokensOf(row.body))
-  }, 0)
+  // 与工作空间卡片头保持一致：统计**全部生效分组**（全局 + 逐目录 + 自动匹配），
+  // 而不是当前选中作用域的合计——否则切到某个没有规范目录时会显示 0 token。
+  const effectiveSize = useMemo(() => {
+    const groups = resolveStandardGroups(draftWs, directories, library)
+    if (groups.length === 0) return { content: 0, injected: 0 }
+    return {
+      content: estimateTokens(renderStandardsText(groups)),
+      injected: estimateTokens(renderStandards(groups, budget)),
+    }
+  }, [draftWs, directories, library, budget])
 
   const targetDirectory = directories.find(dir => dir.path === target)
   const autoMatched = targetDirectory === undefined ? undefined : BUILTIN_STANDARDS.find(preset => preset.matchTypes?.includes(targetDirectory.projectType ?? 'none') === true)
@@ -207,7 +215,7 @@ export function StandardsModal({ standards, library, directories, onSaveWorkspac
             {row.name}
             {row.overridden ? <span className="wcb-std-flag">{tt('standardsOverridden')}</span> : null}
           </button>
-          <span className="wcb-std-meta">{'~' + tokensOf(row.body) + ' t'}</span>
+          <span className="wcb-std-meta">{tokenText(tokensOf(row.body))}</span>
         </div>
       ))}
     </div>
@@ -230,7 +238,8 @@ export function StandardsModal({ standards, library, directories, onSaveWorkspac
           </label>
           <div className="wcb-head-actions">
             <span className="wcb-label" style={{ margin: 0 }}>{tt('standardsBudget')}</span>
-            <NumberInput value={budget} onCommit={(value) => setDraftWs(prev => ({ ...prev, budget: value }))} min={0} label={tt('standardsBudget')} />
+            <BudgetLevelPicker block="standards" value={budget} title={tt('standardsBudget')}
+              onChange={(value) => setDraftWs(prev => ({ ...prev, budget: value }))} />
           </div>
         </div>
 
@@ -289,7 +298,9 @@ export function StandardsModal({ standards, library, directories, onSaveWorkspac
         </div>
 
         <div className="wcb-modal-actions">
-          <span className="wcb-hint" style={{ marginRight: 'auto' }}>{tt('standardsTotal', { n: totalTokens }) + ' / ' + budget + ' t'}</span>
+          <span className="wcb-hint" style={{ marginRight: 'auto' }}>
+            {budget > 0 ? tokenText(effectiveSize.injected) + ' / ' + tokenText(budget) : tokenText(effectiveSize.content) + ' · ' + tt('budgetOnDemand')}
+          </span>
           <button type="button" className="wcb-btn-plain" aria-label={tt('cancel')} onClick={close}>{tt('cancel')}</button>
           <button type="button" className="wcb-btn-primary" aria-label={tt('standardsSave')} onClick={save}>{tt('standardsSave')}</button>
         </div>

@@ -8,6 +8,36 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-10-17
+
+### Added
+
+- New-workspace wizard pre-fills the primary-directory location (last used, otherwise the parent of
+  the current workspace's primary directory) and lets you edit it in place instead of always opening
+  the native folder picker.
+- Workspace list gains **Duplicate** (⧉): same mounted directories and every setting, only the name
+  and id change. The dialog lists exactly what will be copied.
+- Built-in standard **Session anchor boundary**, enabled by default for new workspaces: the anchor
+  only reads/writes non-code files, and documents produced in plugin sessions must land there.
+- Deleting a workspace now also retires its DSH workspace: its sessions are archived and the matching
+  DSH workspace entry is removed. Shared directories (duplicates) are skipped, and the entry is kept
+  when a session could not be archived.
+
+### Changed
+
+- Context budgets are chosen as `On demand / Resident` plus `Compact / Standard / Detailed` tiers
+  instead of raw token numbers; the numbers moved into an collapsible **Advanced** section.
+- Token counts read `N token` everywhere (no `t` shorthand). The standards card and the standards
+  dialog share one computation and show `injected / budget` or `full size · on demand`.
+
+### Fixed
+
+- The standards card showed `0 token` until `contextStats` finished loading; it is now derived
+  locally from the effective groups.
+- The standards dialog footer summed only the selected scope, showing `0 token` on directory tabs.
+- The budget tier dialog overflowed instead of wrapping long hint text.
+- Labels such as `Standards budget (0=on demand)` leaked the internal `0` convention.
+
 ## [0.8.5] - 2026-10-10
 
 ### Fixed — DSH 0.2.0-rc.2 compatibility (client half was broken)
