@@ -261,15 +261,17 @@ export class WorkspaceCombinerStore {
   }
 
   /**
-   * 复制工作空间：保留全部挂载目录与配置，只换名称和新 id。
+   * 复制工作空间：配置原样照搬，目录列表由调用方决定。
    *
-   * 刻意**不碰磁盘**——不新建、不复制任何目录。因此副本与原工作空间共享同一批
-   * 挂载目录（"只改名字，其余保持一致"），适合同一批代码开多个互不干扰的会话。
+   * 真正的「独立副本」需要一个新的**锚点目录**：共用一个锚点会让两边的快捷会话
+   * 落进同一个 DSH 工作区（DSH 按目录归属工作区），也会让文档写到同一处。
+   * 因此路由层会给副本新建 `<base>/<新名称>` 并只把代码项目目录沿用下来；本方法
+   * 负责按传入的目录列表落库。
    * @param sourceId - 被复制的工作空间 id。
    * @param name - 副本名称（调用方负责查重）。
    * @returns 新建的副本；副本会成为当前工作空间。
    */
-  async duplicateWorkspace(sourceId: string, name: string): Promise<Workspace> {
+  async duplicateWorkspace(sourceId: string, name: string, directories?: readonly WorkspaceRef[]): Promise<Workspace> {
     await this.ready
     const now = Date.now()
     let copy: Workspace | undefined
@@ -281,7 +283,8 @@ export class WorkspaceCombinerStore {
         id: randomUUID(),
         name,
         // 深拷贝目录：副本之后改 access / group / note 不能牵动原工作空间。
-        directories: normalizeDirectories(source.directories.map(d => ({ ...d }))),
+        // directories 由调用方给出时以它为准（复制会新建一个自己的锚点目录）。
+        directories: normalizeDirectories((directories ?? source.directories).map(d => ({ ...d }))),
         createdAt: now,
         updatedAt: now,
       }

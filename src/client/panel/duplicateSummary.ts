@@ -9,13 +9,18 @@
  */
 
 import type { ContextPreset, LoadMode, Workspace, WorkspaceMode } from '../../core/types.ts'
+import { parentDir } from './defaults.ts'
 
 /** 复制摘要：只给数字与枚举，具体文案由面板按当前语言渲染。 */
 export interface DuplicateSummary {
   /** 挂载目录数量。 */
   readonly directoryCount: number
-  /** 主目录路径（无目录时为空串）。 */
+  /** 原工作空间的主目录路径（无目录时为空串）。 */
   readonly primaryPath: string
+  /** 副本锚点将要创建在哪个父目录下（无主目录时为空串）。 */
+  readonly baseDir: string
+  /** 除主目录外、与原工作空间**共用**的挂载目录数量。 */
+  readonly sharedCount: number
   /** 只读目录数量。 */
   readonly readonlyCount: number
   /** 访问模式。 */
@@ -47,6 +52,8 @@ export function summarizeDuplicateSource(workspace: Workspace): DuplicateSummary
   return {
     directoryCount: directories.length,
     primaryPath: primary?.path ?? '',
+    baseDir: parentDir(primary?.path ?? ''),
+    sharedCount: Math.max(0, directories.length - 1),
     readonlyCount: directories.filter(d => d.access === 'readonly').length,
     mode: workspace.mode ?? 'anchor',
     loadMode: workspace.loadMode ?? 'summary',

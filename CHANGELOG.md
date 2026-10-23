@@ -8,6 +8,15 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+## [0.8.8] - 2026-10-23
+
+### Fixed
+
+- Duplicating a workspace used to share the source's primary directory (anchor), so quick sessions
+  started from the copy still landed in the source workspace's DSH workspace and documents were
+  written to the same place. The copy now gets its own anchor at `<parent>/<copy name>`; the other
+  mounted (code-project) directories stay shared, and the duplicate dialog previews the new path.
+
 ## [0.8.7] - 2026-10-17
 
 ### Fixed

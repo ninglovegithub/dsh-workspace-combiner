@@ -9,7 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { mkdir, stat } from 'node:fs/promises'
-import { isAbsolute, join, relative } from 'node:path'
+import { dirname, isAbsolute, join, relative } from 'node:path'
 import { API, DEFAULT_CODE_INDEX_BUDGET, DEFAULT_COMMANDS_BUDGET, DEFAULT_STANDARDS_BUDGET, DEFAULT_TOKEN_BUDGET, DEFAULT_WORKSPACE_NAME, MAX_JSON_BODY_BYTES } from './invariant.ts'
 import { scanDirectory } from './host/projectDetector.ts'
 import { FileIndexCache } from './host/fileIndex.ts'
@@ -29,6 +29,7 @@ import { resolveWorkspaceContext } from './core/contextPreset.ts'
 import { buildDiagnosticReport } from './host/diagnostics.ts'
 import { retireDshWorkspace, type DshRetireResult, type DshWorkspaceRegistry } from './host/dshWorkspaces.ts'
 import { pathKey } from './sandbox-sync.ts'
+import { sanitizeFolderName } from './core/folderName.ts'
 
 /** loopback 字面量 + 浏览器同源标记（dsh-ssh 配对路由栅栏）。 */
 function isLoopbackRequest(request: IncomingMessage): boolean {
@@ -94,20 +95,6 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 function isSameOrInside(parent: string, child: string): boolean {
   const rel = relative(parent, child)
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
-}
-
-/**
- * 生成可用的文件系统文件夹名（去路径分隔符 / Windows 非法字符 / 控制字符）。
- *
- * 必须显式拒绝 `.` / `..` / 纯点名称：它们能通过字符过滤，然后 `join(basePath, '..')`
- * 会让主目录变成 basePath 的**父目录**，并被当成可写根写进 prompt 与沙盒白名单。
- * Windows 另需拒绝设备保留名与结尾的点/空格。
- */
-function sanitizeFolderName(name: string): string {
-  const cleaned = name.replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, '').trim().replace(/[. ]+$/, '')
-  if (cleaned === '' || /^\.+$/.test(cleaned)) return DEFAULT_WORKSPACE_NAME
-  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(cleaned)) return DEFAULT_WORKSPACE_NAME
-  return cleaned.slice(0, 80)
 }
 
 /** token 用量路由所需的宿主侧依赖。 */
@@ -303,8 +290,21 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
             writeJson(res, 409, { error: 'workspace name already exists' })
             return
           }
-          // 复制只改名称与 id：不创建也不复制任何目录，挂载目录与原工作空间完全一致。
-          const workspace = await store.duplicateWorkspace(sourceId, name)
+          // 副本要有自己的锚点目录：否则两边的快捷会话会落进同一个 DSH 工作区
+          // （DSH 按目录归属工作区），文档也会写到同一处。代码项目目录保持不变。
+          const sourcePrimary = source.directories[0]?.path ?? ''
+          const folderName = sanitizeFolderName(name)
+          const directories: WorkspaceRef[] = source.directories.map(directory => ({ ...directory }))
+          if (sourcePrimary !== '') {
+            const targetPath = join(dirname(sourcePrimary), folderName)
+            await mkdir(targetPath, { recursive: true })
+            if (directories.length === 0) {
+              directories.push({ id: targetPath, name: folderName, path: targetPath, isPrimary: true, access: 'readwrite' })
+            } else {
+              directories[0] = { ...directories[0], id: targetPath, name: folderName, path: targetPath, isPrimary: true }
+            }
+          }
+          const workspace = await store.duplicateWorkspace(sourceId, name, directories)
           const sandboxSynced = await syncCurrent()
           writeJson(res, 201, { workspace, currentWorkspaceId: workspace.id, sandboxSynced })
         } catch (error) {

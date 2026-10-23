@@ -20,6 +20,8 @@ import { summarizeDuplicateSource } from '../src/client/panel/duplicateSummary.t
   } as never)
   assert.equal(summary.directoryCount, 1, '目录数量')
   assert.equal(summary.primaryPath, '/work/main', '只有一项时它就是主目录')
+  assert.equal(summary.baseDir, '/work', '锚点将建在主目录的父目录下')
+  assert.equal(summary.sharedCount, 0, '没有其它挂载目录')
   assert.equal(summary.readonlyCount, 0, '默认没有只读目录')
   assert.equal(summary.mode, 'anchor', 'mode 缺省 anchor')
   assert.equal(summary.loadMode, 'summary', 'loadMode 缺省 summary')
@@ -53,6 +55,8 @@ import { summarizeDuplicateSource } from '../src/client/panel/duplicateSummary.t
   } as never)
   assert.equal(summary.directoryCount, 3, '三个挂载目录')
   assert.equal(summary.primaryPath, '/work/svc', 'isPrimary 那一项才是主目录')
+  assert.equal(summary.baseDir, '/work', '父目录')
+  assert.equal(summary.sharedCount, 2, '除主目录外还有两个共用目录')
   assert.equal(summary.readonlyCount, 2, '两个只读目录')
   assert.equal(summary.mode, 'single', 'mode 原样带出')
   assert.equal(summary.loadMode, 'tree', 'loadMode 原样带出')
@@ -81,6 +85,8 @@ import { summarizeDuplicateSource } from '../src/client/panel/duplicateSummary.t
   const summary = summarizeDuplicateSource({ id: 'w4', name: '空', directories: [] } as never)
   assert.equal(summary.directoryCount, 0, '零目录')
   assert.equal(summary.primaryPath, '', '没有主目录时为空串')
+  assert.equal(summary.baseDir, '', '没有主目录时也就没有父目录')
+  assert.equal(summary.sharedCount, 0, '零目录')
 }
 
 console.log('duplicate summary smoke: 缺省回落 / 逐项计数 / isPrimary 优先 / 空目录 OK')

@@ -147,6 +147,23 @@ const file = join(dir, 'dsh-workspace-combiner.json')
   const persisted = await reopened.getState()
   assert.ok(persisted.workspaces.some(w => w.id === copy.id), 'the copy must be persisted to disk')
 
+  // 复制时可以传入新的目录列表（路由会为副本新建自己的锚点目录）：
+  // 共用的代码项目目录不变，主目录换成新路径。
+  const newPrimary = { id: '/work/copy', name: 'copy', path: '/work/copy', isPrimary: true, access: 'readwrite' as const }
+  const withAnchor = await store.duplicateWorkspace(source.id, '带新锚点的副本', [newPrimary, ...copy.directories.slice(1)])
+  assert.equal(withAnchor.directories[0].path, '/work/copy', '传入的新主目录生效')
+  assert.equal(withAnchor.directories[0].isPrimary, true, '新主目录标记为主目录')
+  assert.deepEqual(
+    withAnchor.directories.slice(1).map(d => d.path),
+    source.directories.slice(1).map(d => d.path),
+    '其余挂载目录与原工作空间共用（路径不变）',
+  )
+  assert.equal(
+    (await store.getState()).workspaces.find(w => w.id === source.id)?.directories[0]?.path,
+    '/work/main',
+    '传入新目录也不能改动源工作空间',
+  )
+
   // 源不存在时必须报错，而不是悄悄建一个空工作空间。
   let missingRejected = false
   await store.duplicateWorkspace('no-such-id', 'x').catch(() => { missingRejected = true })

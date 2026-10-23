@@ -11,6 +11,8 @@ import type { CodeIndexConfidence, CodeIndexEntry, DirectoryAccess, GitStatus, L
 import { useWorkspaceCombiner, DEFAULT_TOKEN_BUDGET } from './controller.ts'
 import { deriveDefaultBasePath } from './defaults.ts'
 import { summarizeDuplicateSource } from './duplicateSummary.ts'
+import { sanitizeFolderName } from '../../core/folderName.ts'
+import { joinPath } from './defaults.ts'
 import { tokenText } from './tokenFormat.ts'
 import { estimateTokens } from '../../core/fileTree.ts'
 import { renderStandards, renderStandardsText } from '../../prompt.ts'
@@ -178,8 +180,12 @@ function DuplicateWorkspaceModal({ ws, onConfirm, onClose }: {
   const loadLabel = summary.loadMode === 'tree' ? tt('loadModeTree')
     : summary.loadMode === 'full' ? tt('loadModeFull')
       : tt('loadModeSummary')
+  // 副本会新建自己的锚点目录：否则两边的快捷会话会落进同一个 DSH 工作区。
+  const anchorPath = summary.baseDir === '' ? '' : joinPath(summary.baseDir, sanitizeFolderName(name))
   const rows: string[] = [
-    tt('wsDuplicateRowDirs', { n: summary.directoryCount, primary: summary.primaryPath }),
+    ...(anchorPath === '' ? [tt('wsDuplicateRowDirs', { n: summary.directoryCount, primary: summary.primaryPath })]
+      : [tt('wsDuplicateRowAnchor', { path: anchorPath })]),
+    ...(summary.sharedCount > 0 ? [tt('wsDuplicateRowShared', { n: summary.sharedCount })] : []),
     ...(summary.readonlyCount > 0 ? [tt('wsDuplicateRowReadonly', { n: summary.readonlyCount })] : []),
     tt('wsDuplicateRowMode', { mode: modeLabel, load: loadLabel }),
     tt('wsDuplicateRowBudget', { preset: presetLabel, budget: summary.tokenBudget === undefined ? tt('wsDuplicateBudgetUnset') : String(summary.tokenBudget) }),
