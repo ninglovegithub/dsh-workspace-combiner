@@ -161,6 +161,8 @@ export interface WorkspaceCombinerState {
   setWorkspaceMode(mode: WorkspaceMode): void
   setLoadMode(loadMode: LoadMode): void
   contextStats: ContextStats | null
+  /** 宿主进程实际加载的插件版本（空串 = 未知）。 */
+  hostVersion: string
   /** 当前工作空间就绪度（纯客户端派生，不新增后端请求）。 */
   readiness: ReadinessReport
   refreshContextStats(): void
@@ -245,6 +247,8 @@ export function useWorkspaceCombiner(
   const [missingDirs, setMissingDirs] = useState<ReadonlySet<string>>(new Set())
   const [gitStatuses, setGitStatuses] = useState<Readonly<Record<string, GitStatus | null>>>({})
   const [contextStats, setContextStats] = useState<ContextStats | null>(null)
+  // 宿主半面加载的插件版本：与 package.json 不一致时说明需要重启进程。
+  const [hostVersion, setHostVersion] = useState('')
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewTrees, setPreviewTrees] = useState<readonly PreviewFileTree[]>([])
   const [codeEntries, setCodeEntries] = useState<readonly CodeIndexEntry[]>([])
@@ -365,6 +369,7 @@ export function useWorkspaceCombiner(
       .then(state => {
         setWorkspaces(state.workspaces)
         setCurrentWorkspaceId(state.currentWorkspaceId)
+        setHostVersion(state.version ?? '')
       })
       .catch(error => showToast(tt('loadFailed', { error: errText(error) }), 'error'))
   }, [showToast])
@@ -1210,6 +1215,7 @@ export function useWorkspaceCombiner(
   }, [dirs, workspaces, currentWorkspaceId, startSession, showToast, reloadWorkspaceSessions])
 
   return {
+    hostVersion,
     workspaces,
     currentWorkspaceId,
     currentWorkspace,

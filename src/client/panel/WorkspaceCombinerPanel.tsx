@@ -977,6 +977,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
       ) : null}
       {moreOpen ? (
         <MoreModal
+          version={state.hostVersion}
           onBudget={() => { setMoreOpen(false); setBudgetOpen(true) }}
           onDiagnostics={() => { setMoreOpen(false); setDiagnosticsOpen(true); state.refreshDiagnostics() }}
           onClose={() => setMoreOpen(false)}

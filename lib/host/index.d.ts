@@ -12,11 +12,6 @@ interface Config {
   /** 是否向模型注入多工作区 prompt 分节（默认 true）。 */
   announceToAgent?: boolean;
 }
-/**
- * 挂载存储、路由、prompt 分节、会话监听与沙盒联动。
- * @param ctx - 宿主插件上下文（webServer / systemPrompt）。
- * @param config - 已解析插件配置。
- */
 declare function apply(ctx: Context, config?: Config): void;
 //#endregion
 export { Config, apply, inject, name };

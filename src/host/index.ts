@@ -19,6 +19,8 @@
  * @module dsh-workspace-combiner
  */
 
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 // 类型仅导入：拉取 ctx.webServer / ctx.systemPrompt / session 事件的类型合并。
 import type {} from '@deepseek-ai/dsh-host-webserver'
@@ -112,8 +114,25 @@ interface PromptContext {
  * @param ctx - 宿主插件上下文（webServer / systemPrompt）。
  * @param config - 已解析插件配置。
  */
+/**
+ * 当前进程实际加载的插件版本。
+ *
+ * 宿主半面只在进程启动时读一次文件，所以它才是"到底跑的是哪个版本"的权威答案；
+ * 升级后没重启时，这里仍然是旧版本——面板会把它显示出来，避免靠猜。
+ */
+const PLUGIN_VERSION: string = (() => {
+  try {
+    const parsed = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as { version?: unknown }
+    return typeof parsed.version === 'string' ? parsed.version : 'unknown'
+  } catch {
+    return 'unknown'
+  }
+})()
+
 export function apply(ctx: Context, config: Config = {}): void {
   if (config.enabled === false) return
+  // 升级插件后必须重启进程才会生效；这行日志让人一眼看出当前跑的是哪个版本。
+  ctx.logger?.info(`[dsh-workspace-combiner] v${PLUGIN_VERSION} activated (host half loaded at process start)`)
 
   const store = new WorkspaceCombinerStore()
   // 会话 id -> 该会话创建时快照下来的当前工作空间目录。只有新建的顶层会话会写入。
@@ -402,6 +421,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   // 3) 路由族（client -> host：读写勾选与模板；勾选变化时联动沙盒）。
   ctx.effect(() => {
     const disposers = makeRoutes(ctx, store, fileIndexCache, codeIndexCache, summaryCache, standardsLibrary, {
+      pluginVersion: PLUGIN_VERSION,
       tokenUsage,
       // 用量按工作空间聚合：会话 -> 工作空间的绑定在 session/created 时确定。
       sessionsOfWorkspace: (workspaceId: string) =>

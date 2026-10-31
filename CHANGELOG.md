@@ -8,6 +8,14 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+## [0.8.10] - 2026-10-31
+
+### Added
+
+- The host half logs `dsh-workspace-combiner vX activated` at startup, and the **More** dialog shows
+  the version the host process actually loaded. Upgrading the plugin only takes effect after a full
+  restart, and this makes "did it reload?" verifiable instead of guesswork.
+
 ## [0.8.9] - 2026-10-31
 
 ### Fixed

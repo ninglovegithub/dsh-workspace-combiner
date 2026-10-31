@@ -66,6 +66,8 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs: number = 
 export interface AppState {
   currentWorkspaceId: string
   workspaces: Workspace[]
+  /** 宿主进程实际加载的插件版本（升级后未重启时仍是旧版本）。 */
+  version?: string
 }
 
 /** 工作空间读写的宿主 API。 */

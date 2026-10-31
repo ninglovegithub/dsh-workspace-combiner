@@ -99,6 +99,8 @@ function isSameOrInside(parent: string, child: string): boolean {
 
 /** token 用量路由所需的宿主侧依赖。 */
 export interface TokenUsageDeps {
+  /** 宿主进程实际加载的插件版本（用于界面显示"是否已重载"）。 */
+  pluginVersion?: string
   tokenUsage: TokenUsageTracker
   /** 某工作空间关联的会话 id 列表（会话 -> 工作空间绑定在 session/created 时确定）。 */
   sessionsOfWorkspace(workspaceId: string): readonly string[]
@@ -208,7 +210,11 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         if (!guard(req, res, 'GET')) return
         try {
           const state = await store.getState()
-          writeJson(res, 200, { currentWorkspaceId: state.currentWorkspaceId, workspaces: state.workspaces })
+          writeJson(res, 200, {
+            currentWorkspaceId: state.currentWorkspaceId,
+            workspaces: state.workspaces,
+            ...(usage.pluginVersion === undefined ? {} : { version: usage.pluginVersion }),
+          })
         } catch (error) {
           fail(res, error)
         }
