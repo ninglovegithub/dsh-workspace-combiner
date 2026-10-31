@@ -8,6 +8,13 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+## [0.8.11] - 2026-10-31
+
+### Fixed
+
+- The version string resolved `lib/package.json` instead of the package root, so both the activation
+  log and the More dialog reported "unknown". The path is now `../../package.json`.
+
 ## [0.8.10] - 2026-10-31
 
 ### Added

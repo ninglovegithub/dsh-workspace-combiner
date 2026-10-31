@@ -122,7 +122,7 @@ interface PromptContext {
  */
 const PLUGIN_VERSION: string = (() => {
   try {
-    const parsed = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as { version?: unknown }
+    const parsed = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')) as { version?: unknown }
     return typeof parsed.version === 'string' ? parsed.version : 'unknown'
   } catch {
     return 'unknown'
