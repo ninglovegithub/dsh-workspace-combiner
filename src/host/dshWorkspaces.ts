@@ -14,12 +14,30 @@
  * @module dsh-workspace-combiner/host/dshWorkspaces
  */
 
+/**
+ * 惰性读取 `workspaceRegistry`。
+ *
+ * 用 `ctx.get` 而不是注入：这个服务只用于「顺带清理/改名」，缺失时插件其余功能
+ * 必须照常工作，不能因为注入不到就整行不激活。
+ * @param ctx - 宿主上下文。
+ * @returns 服务实例；不可用时返回 undefined。
+ */
+export function readWorkspaceRegistry(ctx: { get(name: string): unknown }): DshWorkspaceRegistry | undefined {
+  try {
+    return ctx.get('workspaceRegistry') as DshWorkspaceRegistry | undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** DSH 工作区实体（只声明本模块用到的那部分）。 */
 export interface DshWorkspaceEntity {
   readonly id: string
   readonly path: string
   readonly title: string
   readonly sessionIds: readonly string[]
+  /** 改标题（DSH 侧左侧栏显示名）。 */
+  setTitle(title: string): Promise<unknown>
 }
 
 /** `workspaceRegistry` 服务（只声明本模块用到的方法）。 */
@@ -88,4 +106,36 @@ export async function retireDshWorkspace(
     removed = false
   }
   return { archived, failed, removed, path }
+}
+
+/**
+ * 把 DSH 侧对应工作区的**显示名**改成插件里的新名称。
+ *
+ * 插件内重名会自动追加 `(2)` 之类后缀，DSH 左栏必须跟着改，否则两边名字会对不上。
+ * 找不到对应工作区、或名字本来就一致时安静返回，不影响插件自身的重命名。
+ * @param registry - `workspaceRegistry` 服务；取不到时传 undefined。
+ * @param path - 该工作空间的主目录（锚点）路径。
+ * @param title - 新名称。
+ * @returns 是否已在 DSH 侧生效（无需改动也算成功）。
+ */
+export async function retitleDshWorkspace(
+  registry: DshWorkspaceRegistry | undefined,
+  path: string,
+  title: string,
+): Promise<boolean> {
+  if (registry === undefined || path === '' || title === '') return false
+  let entity: DshWorkspaceEntity | undefined
+  try {
+    entity = await registry.resolveByPath(path)
+  } catch {
+    return false
+  }
+  if (entity === undefined) return false
+  if (entity.title === title) return true
+  try {
+    await entity.setTitle(title)
+    return true
+  } catch {
+    return false
+  }
 }

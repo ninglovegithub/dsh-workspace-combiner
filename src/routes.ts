@@ -27,7 +27,7 @@ import { loadModeMaxDepth, type DiagnosticAction, type LoadMode, type TokenUsage
 import { parseSessionTask, type SessionTask } from './core/task.ts'
 import { resolveWorkspaceContext } from './core/contextPreset.ts'
 import { buildDiagnosticReport } from './host/diagnostics.ts'
-import { retireDshWorkspace, type DshRetireResult, type DshWorkspaceRegistry } from './host/dshWorkspaces.ts'
+import { readWorkspaceRegistry, retireDshWorkspace, retitleDshWorkspace, type DshRetireResult } from './host/dshWorkspaces.ts'
 import { pathKey } from './sandbox-sync.ts'
 import { sanitizeFolderName } from './core/folderName.ts'
 
@@ -124,15 +124,6 @@ export interface TokenUsageDeps {
  * @param store - 持久化存储。
  * @param usage - token 用量观测与工作空间会话映射。
  */
-/** 惰性读取 workspaceRegistry：服务缺失时返回 undefined，不影响插件自身功能。 */
-function dshWorkspaceRegistry(ctx: Context): DshWorkspaceRegistry | undefined {
-  try {
-    return ctx.get('workspaceRegistry') as DshWorkspaceRegistry | undefined
-  } catch {
-    return undefined
-  }
-}
-
 export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileIndexCache: FileIndexCache, codeIndexCache: CodeIndexCache, summaryCache: FeatureSummaryCache, standardsLibrary: StandardsLibraryStore, usage: TokenUsageDeps): WebRoute[] {
   const guard = (req: IncomingMessage, res: ServerResponse, method: string): boolean => {
     if (!isLoopbackRequest(req)) {
@@ -347,8 +338,15 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
         }
         try {
           if (!(await guardWorkspace(res, id))) return
+          const before = await store.getState()
+          const target = before.workspaces.find(w => w.id === id)
           await store.renameWorkspace(id, name)
-          writeJson(res, 200, { ok: true })
+
+          // 插件内重名会自动加 (2) 之类后缀：DSH 左栏的显示名必须跟着改，否则两边对不上。
+          // 只改「主目录（锚点）」对应的那个 DSH 工作区——别的目录共用与否与显示名无关。
+          const primary = target?.directories[0]?.path ?? ''
+          const dshRenamed = await retitleDshWorkspace(readWorkspaceRegistry(ctx), primary, name)
+          writeJson(res, 200, { ok: true, dshRenamed })
         } catch (error) {
           fail(res, error)
         }
@@ -375,7 +373,7 @@ export function makeRoutes(ctx: Context, store: WorkspaceCombinerStore, fileInde
 
           // DSH 侧清理：归档该工作区的会话并移除工作区条目。
           // 只处理「删除后已没有任何插件工作空间再用」的目录——复制出来的副本会共享目录。
-          const registry = dshWorkspaceRegistry(ctx)
+          const registry = readWorkspaceRegistry(ctx)
           const stillUsed = new Set(
             (await store.getState()).workspaces.flatMap(w => w.directories.map(d => pathKey(d.path))),
           )

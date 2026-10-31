@@ -8,6 +8,14 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-10-31
+
+### Fixed
+
+- Renaming a workspace (including the automatic `(2)` suffix when a name collides) now renames the
+  matching DSH workspace in the left sidebar. The title is also aligned when a session is created, so
+  a workspace renamed before its first session still shows the plugin's name.
+
 ## [0.8.8] - 2026-10-23
 
 ### Fixed

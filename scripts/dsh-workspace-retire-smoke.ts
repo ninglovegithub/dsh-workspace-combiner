@@ -9,7 +9,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { retireDshWorkspace, type DshWorkspaceEntity, type DshWorkspaceRegistry } from '../src/host/dshWorkspaces.ts'
+import { retireDshWorkspace, retitleDshWorkspace, type DshWorkspaceEntity, type DshWorkspaceRegistry } from '../src/host/dshWorkspaces.ts'
 
 /** 记录调用顺序的假注册表。 */
 function fakeRegistry(options: {
@@ -39,11 +39,16 @@ function fakeRegistry(options: {
   return { registry, calls }
 }
 
-const entity = (sessionIds: readonly string[]): DshWorkspaceEntity => ({
+const entity = (sessionIds: readonly string[], onTitle?: (title: string) => void, titleThrows = false): DshWorkspaceEntity => ({
   id: 'ws-dsh-1',
   path: '/work/main',
   title: 'main',
   sessionIds,
+  async setTitle(title: string) {
+    onTitle?.(title)
+    if (titleThrows) throw new Error('rename rejected')
+    return undefined
+  },
 })
 
 // ---- 1) 服务缺失：安静返回，不影响插件自身删除 ----
@@ -112,3 +117,35 @@ const entity = (sessionIds: readonly string[]): DshWorkspaceEntity => ({
 }
 
 console.log('dsh workspace retire smoke: archive-then-delete, failure keeps the entry, missing service is a no-op OK')
+
+// ------------------------------- 8) 重命名同步到 DSH 左栏
+{
+  // 8a. 服务缺失 / 参数为空：安静返回
+  assert.equal(await retitleDshWorkspace(undefined, '/work/main', '新名字'), false, '没有注册表时返回 false')
+  const { registry: empty } = fakeRegistry({ entity: undefined })
+  assert.equal(await retitleDshWorkspace(empty, '', '新名字'), false, '空路径不处理')
+  assert.equal(await retitleDshWorkspace(empty, '/work/main', ''), false, '空名称不处理')
+
+  // 8b. DSH 侧没有对应工作区
+  const none = fakeRegistry({ entity: undefined })
+  assert.equal(await retitleDshWorkspace(none.registry, '/work/main', '新名字'), false, '找不到工作区返回 false')
+
+  // 8c. 名字本来就一样：不调用 setTitle，但算成功
+  const titles: string[] = []
+  const same = fakeRegistry({ entity: entity([], t => titles.push(t)) })
+  assert.equal(await retitleDshWorkspace(same.registry, '/work/main', 'main'), true, '同名视为已同步')
+  assert.deepEqual(titles, [], '同名不应重复写')
+
+  // 8d. 正常改名：把新名称写进 DSH
+  const renamed: string[] = []
+  const ok = fakeRegistry({ entity: entity([], t => renamed.push(t)) })
+  assert.equal(await retitleDshWorkspace(ok.registry, '/work/main', '问卷采纳 (2)'), true, '改名成功')
+  assert.deepEqual(renamed, ['问卷采纳 (2)'], 'DSH 侧收到新的显示名（含重名后缀）')
+
+  // 8e. setTitle 失败 / 解析失败：返回 false，不抛
+  const failing = fakeRegistry({ entity: entity([], undefined, true) })
+  assert.equal(await retitleDshWorkspace(failing.registry, '/work/main', '新名字'), false, 'setTitle 失败返回 false')
+  const broken = fakeRegistry({ resolveThrows: true })
+  assert.equal(await retitleDshWorkspace(broken.registry, '/work/main', '新名字'), false, '解析失败返回 false')
+  console.log('dsh workspace retitle: same-name no-op, rename writes title, failures are soft OK')
+}

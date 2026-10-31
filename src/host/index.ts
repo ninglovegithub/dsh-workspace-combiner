@@ -43,6 +43,7 @@ import { buildTaskContextCapsule, type TaskContextCapsule } from '../core/taskCa
 import { getChangedFiles } from './gitStatus.ts'
 import { pathKey as sandboxPathKey, syncExtraRoots } from '../sandbox-sync.ts'
 import { setIoWarningSink } from './fileIndex.ts'
+import { readWorkspaceRegistry, retitleDshWorkspace } from './dshWorkspaces.ts'
 
 /** 稳定的 cordis 插件名（编排行 id）。 */
 export const name = PLUGIN_ID
@@ -283,6 +284,15 @@ export function apply(ctx: Context, config: Config = {}): void {
       sessionWorkspaceBySession.set(session.id, ws.id)
       // 新会话绑定的工作空间也要进白名单（会话绑定的可能不是当前工作空间）。
       void syncSandbox()
+      // DSH 侧工作区是按目录自动建的，标题默认取目录名；插件里的名称可能与目录不同
+      // （重命名过），这里顺手对齐一次，避免左栏显示名和插件面板对不上。
+      void retitleDshWorkspace(
+        readWorkspaceRegistry(ctx),
+        ws.directories[0]?.path ?? '',
+        ws.name,
+      ).catch((error: unknown) => {
+        ctx.logger?.warn('[dsh-workspace-combiner] 同步 DSH 工作区名称失败:', error)
+      })
       // 落盘失败（EACCES/ENOSPC）必须自己接住：dsh-session 只 catch 监听器自身
       // 返回的 promise，这里返回 undefined，裸 rejection 会按 Node 默认策略终止进程。
       void store.touchWorkspaceSession(ws.id).catch(error => {
