@@ -16,6 +16,7 @@ import { renderMultiWorkspacePrompt } from '../../prompt.ts'
 import { tt } from '../locales.ts'
 import { checkWorkspaceNameDuplicate, normalizeDirectoryPath, pathKey, sanitizeWorkspaceName } from './naming.ts'
 import { groupKindOf } from './groups.ts'
+import type { DirectoryListing } from './directoryListing.ts'
 import { contextPresetConfig, resolveWorkspaceContext } from '../../core/contextPreset.ts'
 
 /** token 预算默认上限（与宿主机注入 prompt 使用同一常量）。 */
@@ -163,6 +164,14 @@ export interface WorkspaceCombinerState {
   contextStats: ContextStats | null
   /** 宿主进程实际加载的插件版本（空串 = 未知）。 */
   hostVersion: string
+  /** 选目录（优先系统对话框；宿主只有 browse 能力时开内置浏览器）。 */
+  pickDirectory: () => Promise<string | null>
+  /** 列出一层目录（内置浏览器用）。 */
+  listDirectory: (path?: string) => Promise<DirectoryListing>
+  /** 内置目录浏览器是否打开。 */
+  directoryBrowserOpen: boolean
+  /** 关闭内置浏览器并回传选择结果（null = 取消）。 */
+  closeDirectoryBrowser: (path: string | null) => void
   /** 当前工作空间就绪度（纯客户端派生，不新增后端请求）。 */
   readiness: ReadinessReport
   refreshContextStats(): void
@@ -231,6 +240,7 @@ function errText(error: unknown): string {
 export function useWorkspaceCombiner(
   startSession: (mainDirPath: string, title?: string) => Promise<string>,
   pickDirectory: () => Promise<string | null>,
+  listDirectory: (path?: string) => Promise<DirectoryListing>,
   registerDshWorkspace: (path: string) => Promise<void>,
   sessionCount = 0,
 ): WorkspaceCombinerState {
@@ -241,6 +251,10 @@ export function useWorkspaceCombiner(
   const [currentWorkspaceId, setCurrentWorkspaceId] = useState('')
   const [toasts, setToasts] = useState<readonly Toast[]>([])
   const [manualPath, setManualPath] = useState('')
+  // 宿主挂的是 browse 能力时没有系统对话框：退回内置目录浏览器（list/crumbs 导航）。
+  const [browserOpen, setBrowserOpen] = useState(false)
+  const [browseCapable, setBrowseCapable] = useState(false)
+  const pendingPickRef = useRef<((path: string | null) => void) | null>(null)
   const [snapshotName, setSnapshotName] = useState('')
   const [search, setSearch] = useState('')
   const [selectedDirs, setSelectedDirs] = useState<ReadonlySet<string>>(new Set())
@@ -769,11 +783,39 @@ export function useWorkspaceCombiner(
       .catch(error => showToast(tt('dirCheckFailed', { error: errText(error) }), 'error'))
   }, [applyDirs, showToast])
 
+  // 探测一次 browse 能力：能 list 说明宿主可以走内置浏览器。
+  useEffect(() => {
+    let alive = true
+    void listDirectory()
+      .then(() => { if (alive) setBrowseCapable(true) })
+      .catch(() => { if (alive) setBrowseCapable(false) })
+    return () => { alive = false }
+  }, [listDirectory])
+
+  const closeDirectoryBrowser = useCallback((path: string | null): void => {
+    const resolve = pendingPickRef.current
+    pendingPickRef.current = null
+    setBrowserOpen(false)
+    resolve?.(path)
+  }, [])
+
+  /** 优先系统对话框；宿主只有 browse 能力时改开内置浏览器。 */
+  const pickDirectoryWithFallback = useCallback(async (): Promise<string | null> => {
+    try {
+      return await pickDirectory()
+    } catch (error) {
+      if (!browseCapable) throw error
+      console.warn('[dsh-workspace-combiner] 系统目录对话框不可用，改用内置目录浏览器', error)
+      setBrowserOpen(true)
+      return await new Promise<string | null>(resolve => { pendingPickRef.current = resolve })
+    }
+  }, [pickDirectory, browseCapable])
+
   const pickAndAddDirectory = useCallback((): void => {
-    void pickDirectory()
+    void pickDirectoryWithFallback()
       .then(path => { if (path !== null && path.trim() !== '') addDirectory(path) })
       .catch(error => showToast(tt('pickFailed', { error: errText(error) }), 'error'))
-  }, [pickDirectory, addDirectory, showToast])
+  }, [pickDirectoryWithFallback, addDirectory, showToast])
 
   const removeDirectory = useCallback((path: string): void => {
     applyDirs(dirsRef.current.filter(d => d.path !== path))
@@ -1216,6 +1258,10 @@ export function useWorkspaceCombiner(
 
   return {
     hostVersion,
+    pickDirectory: pickDirectoryWithFallback,
+    listDirectory,
+    directoryBrowserOpen: browserOpen,
+    closeDirectoryBrowser,
     workspaces,
     currentWorkspaceId,
     currentWorkspace,

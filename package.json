@@ -1,7 +1,7 @@
 {
   "name": "dsh-workspace-combiner",
   "description": "DSH 工作区组合器：管理主目录与多个代码项目，自动识别 Java/Vue/React/Python/Go 及 pnpm/Turbo/Nx/Maven/Gradle Monorepo，把项目和内部包绝对路径注入会话并联动沙盒白名单。",
-  "version": "0.8.11",
+  "version": "0.8.12",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "engines": {
@@ -56,6 +56,7 @@
     "smoke:code-index-java": "node --experimental-strip-types scripts/code-index-java-smoke.ts",
     "smoke:context-budget": "node --experimental-strip-types scripts/context-budget-smoke.ts",
     "smoke:diagnostics": "node --experimental-strip-types scripts/diagnostics-smoke.ts",
+    "smoke:directory-listing": "node --experimental-strip-types scripts/directory-listing-smoke.ts",
     "smoke:dsh-compat": "node --experimental-strip-types scripts/dsh-compat-smoke.ts",
     "smoke:dsh-workspace-retire": "node --experimental-strip-types scripts/dsh-workspace-retire-smoke.ts",
     "smoke:duplicate-summary": "node --experimental-strip-types scripts/duplicate-summary-smoke.ts",

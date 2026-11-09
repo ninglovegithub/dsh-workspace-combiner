@@ -660,12 +660,19 @@ const PANEL_CSS = String.raw`
 `
 
 /** 注入面板样式（每次移除旧标签再插入新标签，确保开发时新样式生效）。 */
+const BROWSER_CSS = `
+.wcb-browse-crumbs{display:flex;flex-wrap:wrap;gap:2px;align-items:center;margin-bottom:6px;max-height:56px;overflow-y:auto}
+.wcb-browse-list{max-height:260px;overflow-y:auto;border:1px solid var(--wcb-line);border-radius:6px;padding:2px}
+.wcb-browse-row{display:block;width:100%;text-align:left;padding:4px 8px;border:0;background:transparent;color:inherit;font:inherit;border-radius:4px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wcb-browse-row:hover{background:var(--wcb-line)}
+`
+
 export function injectPanelStyles(): void {
   if (typeof document === 'undefined') return
   const id = 'dsh-workspace-combiner/client.css'
   document.querySelectorAll(`style[data-plugin-css="${id}"]`).forEach(el => el.remove())
   const tag = document.createElement('style')
   tag.setAttribute('data-plugin-css', id)
-  tag.textContent = PANEL_CSS
+  tag.textContent = PANEL_CSS + BROWSER_CSS
   document.head.appendChild(tag)
 }

@@ -12,6 +12,8 @@
  * @module dsh-workspace-combiner/client/types
  */
 
+import type { DirectoryListing } from './panel/directoryListing.ts'
+
 /** sidebar.panellist 图标组件收到的 owner props。 */
 export interface PanelIconProps {
   size: number
@@ -24,8 +26,10 @@ export interface PanelIconProps {
 export interface WorkspaceCombinerPanelProps {
   /** 主目录 get-or-create 工作区后，永远新建并打开一个独立会话；可选设置会话标题。返回新会话 id。 */
   startSession: (mainDirPath: string, title?: string) => Promise<string>
-  /** 打开宿主原生目录选择器，返回绝对路径；取消返回 null。 */
+  /** 打开宿主原生目录选择器，返回绝对路径；取消返回 null。宿主没有 native 能力时抛错。 */
   pickDirectory: () => Promise<string | null>
+  /** 列出一层目录（内置目录浏览器用）；宿主没有 browse 能力时抛错。 */
+  listDirectory: (path?: string) => Promise<DirectoryListing>
   /** 把主项目目录注册为 DSH 左侧「工作区」列表项（get-or-create，触发左侧栏即时刷新）。 */
   registerDshWorkspace: (path: string) => Promise<void>
   /** 当前使用会话数（由 client 入口读取 sessions 快照后注入；缺省 0）。 */
@@ -135,6 +139,11 @@ export interface ClientRemote {
 /** 宿主目录选择器 Remote 命名空间。 */
 export interface DirectoryPickerService {
   pick(): Promise<RpcResult<string | null>>
+  /**
+   * 列出一层目录（browse 能力；native 宿主上会拒绝）。
+   * @param path - 要列的绝对路径；省略列 home。
+   */
+  list(path?: string): Promise<RpcResult<unknown>>
 }
 
 /** 统一 Remote 结果。 */

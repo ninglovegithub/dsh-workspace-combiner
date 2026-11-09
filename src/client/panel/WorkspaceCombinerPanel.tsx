@@ -23,6 +23,7 @@ import { ConfirmModal } from './ConfirmModal.tsx'
 import { Dialog } from './Dialog.tsx'
 import { BudgetLevelPicker } from './BudgetLevelPicker.tsx'
 import { NewWorkspaceWizard } from './NewWorkspaceWizard.tsx'
+import { DirectoryBrowser } from './DirectoryBrowser.tsx'
 import { StandardsModal } from './StandardsModal.tsx'
 import { AdvancedModal } from './AdvancedModal.tsx'
 import { PreviewModal } from './PreviewModal.tsx'
@@ -243,8 +244,8 @@ interface CmdItem {
 /** 面板 body。 */
 export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): ReactElement {
   useEffect(() => { injectPanelStyles() }, [])
-  const { startSession, pickDirectory, registerDshWorkspace } = props
-  const state = useWorkspaceCombiner(startSession, pickDirectory, registerDshWorkspace, props.sessionCount ?? 0)
+  const { startSession, pickDirectory, listDirectory, registerDshWorkspace } = props
+  const state = useWorkspaceCombiner(startSession, pickDirectory, listDirectory, registerDshWorkspace, props.sessionCount ?? 0)
 
   // 开发规范的 token 数：直接由生效分组本地计算，和「开发规范」弹窗用同一套函数，
   // 不再依赖异步的 contextStats（那会让卡片头在加载完成前显示 0 token）。
@@ -402,7 +403,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
         {wizardOpen ? (
           <NewWorkspaceWizard
             defaultBasePath={defaultBasePath}
-            pickDirectory={pickDirectory}
+            pickDirectory={state.pickDirectory}
             onClose={() => setWizardOpen(false)}
             onCreate={(name, basePath, directories, mode) => { state.createWorkspace(name, basePath, directories, mode); setWizardOpen(false) }}
           />
@@ -914,7 +915,7 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
       {wizardOpen ? (
         <NewWorkspaceWizard
           defaultBasePath={defaultBasePath}
-          pickDirectory={pickDirectory}
+          pickDirectory={state.pickDirectory}
           onClose={() => setWizardOpen(false)}
           onCreate={(name, basePath, directories, mode) => { state.createWorkspace(name, basePath, directories, mode); setWizardOpen(false) }}
         />
@@ -973,6 +974,12 @@ export function WorkspaceCombinerPanel(props: WorkspaceCombinerPanelProps): Reac
           onCommandsBudget={state.setCommandsBudget}
           onRefresh={() => { state.refreshContextStats(); state.refreshTokenUsage() }}
           onClose={() => setBudgetOpen(false)}
+        />
+      ) : null}
+      {state.directoryBrowserOpen ? (
+        <DirectoryBrowser
+          listDirectory={state.listDirectory}
+          onPick={path => state.closeDirectoryBrowser(path)}
         />
       ) : null}
       {moreOpen ? (

@@ -8,6 +8,20 @@ English · [中文](./CHANGELOG.zh.md)
 
 ## [Unreleased]
 
+## [0.8.12] - 2026-11-09
+
+### Added
+
+- A built-in directory browser. DSH exposes the folder picker as either a `native` capability (an OS
+  dialog) or a `browse` capability (directory listing RPCs); when only `browse` is mounted, `pick()`
+  is refused. "Choose folder" now falls back to the plugin's own browser (breadcrumbs, up, pick
+  current folder) instead of doing nothing.
+
+### Fixed
+
+- Folder picking no longer fails silently: the wizard shows the reason inline and logs it to the
+  console. A rejected picker previously left a blank `.catch` and looked like a dead button.
+
 ## [0.8.11] - 2026-10-31
 
 ### Fixed

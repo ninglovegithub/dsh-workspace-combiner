@@ -21,6 +21,7 @@
 import type { ClientCtx, WorkspaceNavigation } from './types.ts'
 import { en, setTranslate, tt, zh } from './locales.ts'
 import { WorkspaceCombinerIcon, WorkspaceCombinerPanel } from './panel/WorkspaceCombinerPanel.tsx'
+import { toListing, type DirectoryListing } from './panel/directoryListing.ts'
 import { PANEL_ID } from '../invariant.ts'
 
 /** 本插件拥有的 locale 命名空间。 */
@@ -36,8 +37,10 @@ const LOG = '[dsh-workspace-combiner]'
 export interface PanelActions {
   /** 主目录 get-or-create 工作区后新建独立会话；可选设置标题。返回新会话 id。 */
   startSession(mainDirPath: string, title?: string): Promise<string>
-  /** 打开宿主原生目录选择器；取消返回 null。 */
+  /** 打开宿主原生目录选择器；取消返回 null。宿主没有 native 能力时应抛错。 */
   pickDirectory(): Promise<string | null>
+  /** 列出一层目录（内置浏览器用）；宿主没有 browse 能力时会抛错。 */
+  listDirectory(path?: string): Promise<DirectoryListing>
   /** 把目录注册进 DSH 左侧「工作区」列表（get-or-create）。 */
   registerDshWorkspace(path: string): Promise<void>
   /** 当前会话总数（读取失败回退 0）。 */
@@ -144,10 +147,19 @@ export function createPanelActions(ctx: ClientCtx): PanelActions {
   }
 
   // 选择目录动作（ctx.remote.directoryPicker.pick）：宿主原生目录选择器。
+  // 注意：DSH 的目录选择器有两种能力（native 弹系统对话框 / browse 提供目录列表）。
+  // 当宿主挂的是 browse 时 pick() 会直接失败，此时由控制器退回内置浏览器。
   const pickDirectory = async (): Promise<string | null> => {
     const result = await ctx.remote.directoryPicker.pick()
     if (!result.ok) throw new Error(result.error.message)
     return result.value
+  }
+
+  /** 列出一层目录（browse 能力）：内置浏览器用它导航。 */
+  const listDirectory = async (path?: string): Promise<DirectoryListing> => {
+    const result = await ctx.remote.directoryPicker.list(path)
+    if (!result.ok) throw new Error(result.error.message)
+    return toListing(result.value)
   }
 
   // 把主项目目录注册为 DSH 左侧「工作区」列表项（get-or-create；官方 API，会刷新左侧栏）。
@@ -163,6 +175,7 @@ export function createPanelActions(ctx: ClientCtx): PanelActions {
     startSession,
     openSession: openInMainView,
     pickDirectory,
+    listDirectory,
     registerDshWorkspace,
     // 当前会话总数（会话占用回显；读取失败时回退 0）。
     sessionCount: (): number => {
@@ -232,6 +245,7 @@ export function apply(ctx: ClientCtx): void {
     () => WorkspaceCombinerPanel({
       startSession: actions.startSession,
       pickDirectory: actions.pickDirectory,
+      listDirectory: actions.listDirectory,
       registerDshWorkspace: actions.registerDshWorkspace,
       sessionCount: actions.sessionCount(),
       sessionTitle: actions.sessionTitle,

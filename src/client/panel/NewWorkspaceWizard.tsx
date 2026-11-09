@@ -34,6 +34,8 @@ export function NewWorkspaceWizard({ defaultBasePath = '', pickDirectory, onClos
   const [basePath, setBasePath] = useState(defaultBasePath)
   const [scanPath, setScanPath] = useState('')
   const [scanning, setScanning] = useState(false)
+  // 选目录失败曾用空 catch 吞掉：用户看到的就是"点了没反应"。这里把原因显示出来。
+  const [pickError, setPickError] = useState('')
   const [projects, setProjects] = useState<readonly DetectedProject[]>([])
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const [mode, setMode] = useState<WorkspaceMode>('anchor')
@@ -43,7 +45,10 @@ export function NewWorkspaceWizard({ defaultBasePath = '', pickDirectory, onClos
   const scanSeqRef = useRef(0)
   const [scanNote, setScanNote] = useState<{ added: number; dup: number } | null>(null)
 
+  const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+
   const pickBase = (): void => {
+    setPickError('')
     void pickDirectory()
       .then(path => {
         const trimmed = path?.trim() ?? ''
@@ -51,7 +56,10 @@ export function NewWorkspaceWizard({ defaultBasePath = '', pickDirectory, onClos
         setBasePath(trimmed)
         rememberBasePath(trimmed)
       })
-      .catch(() => {})
+      .catch((error: unknown) => {
+        console.error('[dsh-workspace-combiner] 选择文件夹失败', error)
+        setPickError(tt('pickFailed', { error: describeError(error) }))
+      })
   }
 
   const runScan = (path: string): void => {
@@ -75,12 +83,19 @@ export function NewWorkspaceWizard({ defaultBasePath = '', pickDirectory, onClos
         }
         setScanNote({ added: fresh.length, dup: list.length - fresh.length })
       })
-      .catch(() => { if (seq === scanSeqRef.current) setScanNote(null) })
+      .catch((error: unknown) => {
+        console.error('[dsh-workspace-combiner] 扫描项目失败', error)
+        if (seq === scanSeqRef.current) {
+          setScanNote(null)
+          setPickError(tt('scanFailed', { error: describeError(error) }))
+        }
+      })
       // 只有最新一次扫描才有权把按钮恢复可用，否则先完成的那个会提前解锁。
       .finally(() => { if (seq === scanSeqRef.current) setScanning(false) })
   }
 
   const pickScan = (): void => {
+    setPickError('')
     void pickDirectory()
       .then(path => {
         if (path !== null && path.trim() !== '') {
@@ -89,7 +104,10 @@ export function NewWorkspaceWizard({ defaultBasePath = '', pickDirectory, onClos
           runScan(trimmed)
         }
       })
-      .catch(() => {})
+      .catch((error: unknown) => {
+        console.error('[dsh-workspace-combiner] 选择文件夹失败', error)
+        setPickError(tt('pickFailed', { error: describeError(error) }))
+      })
   }
 
   const toggle = (root: string): void => {
@@ -155,6 +173,9 @@ export function NewWorkspaceWizard({ defaultBasePath = '', pickDirectory, onClos
             {basePath.trim() === '' ? null : (
               <div className="wcb-hint">{tt('wizardMainDirPreview', { path: joinPath(basePath, folderName) })}</div>
             )}
+            {pickError === '' ? null : (
+              <div className="wcb-hint wcb-hint-error" role="alert">{pickError}</div>
+            )}
             <div>
               <div className="wcb-label">{tt('wsModeLabel')}</div>
               <div className="wcb-tabs" role="tablist" aria-label={tt('wsModeLabel')}>
@@ -172,6 +193,9 @@ export function NewWorkspaceWizard({ defaultBasePath = '', pickDirectory, onClos
           <div className="wcb-wizard-body">
             <div className="wcb-add-row">
               <button type="button" className="wcb-btn" disabled={scanning} onClick={pickScan}>{projects.length > 0 ? tt('wizardPickMore') : tt('wizardPickFolder')}</button>
+                      {pickError === '' ? null : (
+                        <div className="wcb-hint wcb-hint-error" role="alert">{pickError}</div>
+                      )}
               <div className="wcb-pathbox">{scanPath === '' ? tt('wizardScanFolderEmpty') : scanPath}</div>
             </div>
             <div className="wcb-hint">{tt('wizardMultiHint')}</div>
